@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 import requests
 import yaml
+import skill_registry
 
 try:
     import fitz
@@ -67,8 +68,13 @@ CONFIG = load_yaml_config(CONFIG_PATH)
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 BASE_URL = nested_get(CONFIG, ["api", "base_url"], "https://openrouter.ai/api/v1")
+NATIVE_CONFIG_ENABLED = str(
+    nested_get(CONFIG, ["api", "enabled"], "true")
+).lower() in ("true", "1", "yes")
 # MYHARNESS_API_KEY wins over the config file so keys can stay out of YAML.
 API_KEY = os.environ.get("MYHARNESS_API_KEY", "").strip() or nested_get(CONFIG, ["api", "api_key"], "")
+NATIVE_ENABLED = NATIVE_CONFIG_ENABLED and bool(str(API_KEY or "").strip()) and str(API_KEY).strip() != "YOUR_API_KEY_HERE"
+NATIVE_API_TIMEOUT = config_int(CONFIG, ["api", "timeout_seconds"], 120)
 API_PROVIDER = nested_get(CONFIG, ["api", "provider"], None)
 # Token-level SSE streaming for assistant output (UIs that support deltas).
 # Providers that reject stream=True fall back to a plain request per call.
@@ -92,53 +98,29 @@ MAX_FILE_SIZE = config_int(CONFIG, ["limits", "max_file_size"], 8000000)
 LOG_DIR = str(nested_get(CONFIG, ["logging", "log_dir"], "") or "").strip()
 LOG_DIR = os.path.join(REPO_ROOT, "logs") if not LOG_DIR else os.path.abspath(os.path.join(REPO_ROOT, LOG_DIR))
 LOG_ENABLED = str(nested_get(CONFIG, ["logging", "enabled"], "true")).lower() in ("true", "1", "yes")
+LOG_LEVEL = str(nested_get(CONFIG, ["logging", "level"], "info") or "info").strip().lower()
+LOG_RETENTION_DAYS = config_int(CONFIG, ["logging", "retention_days"], 30)
+DATA_DIR = str(nested_get(CONFIG, ["storage", "data_dir"], "") or "").strip()
+DATA_DIR = os.path.join(REPO_ROOT, "data") if not DATA_DIR else os.path.abspath(os.path.join(REPO_ROOT, DATA_DIR))
 SESSION_ID = uuid.uuid4().hex[:12]
 
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-_PBS_CONFIG_PATH = os.path.join(_PROJECT_ROOT, "utils", "Qsub_Windows", "server_config.yaml")
-_PBS_SCRIPT_PATH = os.path.join(_PROJECT_ROOT, "utils", "Qsub_Windows", "WindowsPBS.py")
-_PBS_AVAILABLE = os.path.isfile(_PBS_SCRIPT_PATH)
 
-
-def _get_pbs_python_path() -> str:
-    if os.path.isfile(_PBS_CONFIG_PATH):
-        try:
-            with open(_PBS_CONFIG_PATH, "r", encoding="utf-8") as f:
-                pbs_cfg = yaml.safe_load(f) or {}
-            configured = str(pbs_cfg.get("python_path", "")).strip()
-            if configured:
-                return configured
-        except Exception:
-            pass
-    import platform
-    return "python" if platform.system() == "Windows" else "python3"
-
-
-PBS_PYTHON = _get_pbs_python_path() if _PBS_AVAILABLE else ""
-
-
-def build_pbs_prompt_fragment() -> str:
-    """Shared system-prompt fragment describing how to launch/manage simulations.
-
-    Kept in one place so the simulation-launch instructions stay consistent.
-    Returns an empty string when the PBS helper script is not present.
-    """
-    if not _PBS_AVAILABLE:
-        return ""
-    return (
-        "\n\nPBS JOB MANAGEMENT: You can manage PBS/HPC jobs on remote Linux servers via shell_run. "
-        f"Script: {_PBS_SCRIPT_PATH}\n"
-        f"Invoke as: {PBS_PYTHON} \"{_PBS_SCRIPT_PATH}\" <command> [options]\n"
-        "Commands:\n"
-        "  list [--status R|Q] [--owner NAME] [--sort FIELD]  — List jobs (JSON output)\n"
-        "  submit --path WINDIR [--script NAME]               — Submit a job (auto-converts Windows path to Linux)\n"
-        "  kill --job-id ID [--delete-dir]                    — Kill a job by ID\n"
-        "  log --job-id ID [--lines N]                        — Get last N lines of job log (default 50)\n"
-        "  report --path WINDIR                               — Generate a report via run_report_win.sh\n"
-        "When the user says 'run the job', 'execute the simulation', or similar, use the submit command. "
-        "If no path is given, use the last directory from a previous PBS operation in this session. "
-        "All output is JSON. The working_directory for shell_run should be the script's parent directory."
-    )
+def prune_old_logs(now: float | None = None) -> int:
+    """Delete expired regular log files under the configured log directory."""
+    if not LOG_ENABLED or LOG_RETENTION_DAYS <= 0 or not os.path.isdir(LOG_DIR):
+        return 0
+    cutoff = (time.time() if now is None else now) - LOG_RETENTION_DAYS * 86400
+    removed = 0
+    for root, _dirs, files in os.walk(LOG_DIR):
+        for filename in files:
+            path = os.path.join(root, filename)
+            try:
+                if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+                    os.remove(path)
+                    removed += 1
+            except OSError:
+                continue
+    return removed
 
 HEADERS = {
     "Authorization": f"Bearer {API_KEY}",
@@ -207,6 +189,7 @@ MAX_SEARCH_RESULTS = config_int(CONFIG, ["search", "max_results"], 100)
 # run.sh/run.cmd selected.
 PYTHON_INTERPRETER = str(nested_get(CONFIG, ["python", "interpreter"], "")).strip() or sys.executable
 MANAGED_TOOLS = str(nested_get(CONFIG, ["agent", "managed_tools"], "false")).lower() in ("true", "1", "yes")
+DEFAULT_PROVIDER = str(nested_get(CONFIG, ["agent", "default_provider"], "native") or "native").strip()
 RG_PATH = str(nested_get(CONFIG, ["search", "rg_path"], "")).strip()
 UI_USE_RICH = str(nested_get(CONFIG, ["ui", "rich"], "auto")).lower()
 _verbose_env = os.environ.get("MYHARNESS_VERBOSE_TOOLS", "").strip()
@@ -219,8 +202,7 @@ GIT_WRITES_ENABLED = str(
     nested_get(CONFIG, ["ui", "git_writes_enabled"], "false")
 ).lower() in ("true", "1", "yes")
 
-# Browser microphone transcription. Remote mode reuses the PBS server inventory
-# in utils/Qsub_Windows/server_config.yaml for host, username, and key discovery.
+# Browser microphone transcription.
 AUDIO_ENABLED = str(
     nested_get(CONFIG, ["audio", "enabled"], "false")
 ).lower() in ("true", "1", "yes")
@@ -230,12 +212,24 @@ AUDIO_TRANSCRIPTION_PROCESSOR = str(
 AUDIO_TRANSCRIPTION_SERVER = str(
     nested_get(CONFIG, ["audio", "transcription", "server"], "")
 ).strip()
+AUDIO_TRANSCRIPTION_USERNAME = str(
+    nested_get(CONFIG, ["audio", "transcription", "username"], "")
+).strip()
+AUDIO_TRANSCRIPTION_KEY_FILE = str(
+    nested_get(CONFIG, ["audio", "transcription", "key_file"], "")
+).strip()
 AUDIO_TRANSCRIPTION_APP_DIR = str(
     nested_get(CONFIG, ["audio", "transcription", "app_dir"], "/opt/apps/whisperAudio")
 ).strip()
 AUDIO_TRANSCRIPTION_MODEL = str(
     nested_get(CONFIG, ["audio", "transcription", "model"], "small")
 ).strip() or "small"
+AUDIO_TRANSCRIPTION_LANGUAGE = str(
+    nested_get(CONFIG, ["audio", "transcription", "language"], "")
+).strip()
+AUDIO_TRANSCRIPTION_DEVICE = str(
+    nested_get(CONFIG, ["audio", "transcription", "device"], "cpu")
+).strip().lower() or "cpu"
 AUDIO_TRANSCRIPTION_API_BASE_URL = str(
     nested_get(CONFIG, ["audio", "transcription", "api_base_url"], "") or ""
 ).strip()
@@ -253,8 +247,7 @@ CACHE_MAX_AGE = config_int(CONFIG, ["cache", "max_age_seconds"], 3600)
 
 CACHEABLE_TOOLS = frozenset({
     "file_read", "file_search", "file_list", "content_search",
-    "lsdyna_keyword_lookup", "lsdyna_format_card",
-    "lasso_lookup",
+    "skill_list", "skill_read",
 })
 
 TOOL_COMPRESS_THRESHOLD = config_int(CONFIG, ["memory", "tool_compress_threshold_chars"], 500)
@@ -483,292 +476,6 @@ def ensure_allowed_file(file_path: str) -> str:
     if not is_path_allowed(resolved):
         raise ValueError(f"Access denied. Path '{file_path}' is not in allowed paths.")
     return resolved
-
-
-# ---------------------------------------------------------------------------
-# LS-DYNA domain tools
-# ---------------------------------------------------------------------------
-
-_LSDYNA_KB = None
-_LSDYNA_KB_PATH = os.path.join(_PROJECT_ROOT, "utils", "lsdyna_keywords.json")
-
-
-def load_lsdyna_kb() -> dict:
-    global _LSDYNA_KB
-    if _LSDYNA_KB is None and os.path.isfile(_LSDYNA_KB_PATH):
-        with open(_LSDYNA_KB_PATH, "r", encoding="utf-8") as f:
-            _LSDYNA_KB = json.load(f)
-    return _LSDYNA_KB
-
-
-# Keys that lsdyna_format_card depends on — never dropped or truncated when slimming.
-_LSDYNA_STRUCTURAL_KEYS = ("keyword", "page_range", "cards")
-
-
-def _slim_lsdyna_entry(entry: dict, max_chars: int, alias_note: str | None = None) -> str:
-    """Serialize a keyword entry within ``max_chars`` without ever truncating the
-    card layout. The full card structure (variables/types/defaults/field_widths)
-    is preserved verbatim; only the prose ``variable_descriptions``/``remarks`` are
-    abbreviated or dropped, and a ``_note`` explains how to recover the full text."""
-    full_obj = entry if alias_note is None else {**entry, "_note": alias_note}
-    full = json.dumps(full_obj, indent=2, ensure_ascii=False)
-    if len(full) <= max_chars:
-        return full
-
-    structural = {k: entry[k] for k in _LSDYNA_STRUCTURAL_KEYS if k in entry}
-    keyword = entry.get("keyword", "this keyword")
-    had_remarks = bool(entry.get("remarks"))
-    vd = entry.get("variable_descriptions")
-
-    def assemble(descriptions, abbreviated):
-        obj = dict(structural)
-        flags = []
-        if abbreviated:
-            flags.append("variable_descriptions abbreviated")
-        elif descriptions is None and isinstance(vd, dict) and vd:
-            flags.append("variable_descriptions omitted")
-        if had_remarks:
-            flags.append("remarks omitted")
-        if descriptions:
-            obj["variable_descriptions"] = descriptions
-        note = (alias_note + " " if alias_note else "") + (
-            "Entry slimmed to fit the tool-output budget; all cards and field_widths above are "
-            "complete and exact"
-            + ((" (" + ", ".join(flags) + ")") if flags else "")
-            + f". Call lsdyna_keyword_lookup again with variable=\"<NAME>\" or card_index=<N> for the "
-            f"full untruncated detail of a specific field of {keyword}."
-        )
-        obj["_note"] = note
-        return json.dumps(obj, indent=2, ensure_ascii=False)
-
-    if isinstance(vd, dict) and vd:
-        for per in (260, 200, 150, 110, 80, 55, 35):
-            abbreviated = False
-            trimmed = {}
-            for name, text in vd.items():
-                collapsed = " ".join(str(text).split())
-                if len(collapsed) > per:
-                    collapsed = collapsed[:per].rstrip() + " …"
-                    abbreviated = True
-                trimmed[name] = collapsed
-            candidate = assemble(trimmed, abbreviated)
-            if len(candidate) <= max_chars:
-                return candidate
-    # Last resort: cards + note only (structural payload is always well under the cap).
-    return assemble(None, False)
-
-
-def _resolve_lsdyna_entry(kb: dict, key: str):
-    """Return (resolved_key, entry) handling direct hits and aliases, or (key, None)."""
-    if key in kb and key != "_aliases":
-        return key, kb[key]
-    aliases = kb.get("_aliases", {})
-    if key in aliases and aliases[key] in kb:
-        return aliases[key], kb[aliases[key]]
-    return key, None
-
-
-def _lsdyna_variable_detail(entry: dict, key: str, variable: str, alias_note: str | None) -> str:
-    var = str(variable).strip().upper()
-    occurrences = []
-    for idx, card in enumerate(entry.get("cards", [])):
-        names = [str(v).upper() for v in card.get("variables", [])]
-        if var not in names:
-            continue
-        j = names.index(var)
-
-        def at(field):
-            seq = card.get(field) or []
-            return seq[j] if j < len(seq) else None
-
-        occurrences.append({
-            "card_index": idx,
-            "card_name": card.get("card_name"),
-            "type": at("types"),
-            "default": at("defaults"),
-            "field_width": at("field_widths"),
-        })
-    vd = entry.get("variable_descriptions") or {}
-    description = next((v for k, v in vd.items() if str(k).upper() == var), None)
-    if not occurrences and description is None:
-        available = sorted({str(v) for c in entry.get("cards", []) for v in c.get("variables", [])})
-        return f"ERROR: Variable '{variable}' not found in {key}. Available variables: {', '.join(available)}"
-    result = {"keyword": key, "variable": var, "occurrences": occurrences, "description": description}
-    if alias_note:
-        result["_note"] = alias_note
-    return truncate_output(json.dumps(result, indent=2, ensure_ascii=False), spill=True)
-
-
-def _lsdyna_card_detail(entry: dict, key: str, card_index, alias_note: str | None) -> str:
-    try:
-        idx = int(card_index)
-    except (TypeError, ValueError):
-        return "ERROR: card_index must be an integer."
-    cards = entry.get("cards", [])
-    if not cards:
-        return f"ERROR: {key} has no cards."
-    if idx < 0 or idx >= len(cards):
-        return f"ERROR: Card index {idx} out of range (0-{len(cards) - 1}) for {key}."
-    card = cards[idx]
-    vd = entry.get("variable_descriptions") or {}
-    names = [str(v) for v in card.get("variables", [])]
-    lowered = {str(k).upper(): v for k, v in vd.items()}
-    descriptions = {n: lowered[n.upper()] for n in names if n.upper() in lowered}
-    result = {"keyword": key, "card_index": idx, "card": card, "variable_descriptions": descriptions}
-    if alias_note:
-        result["_note"] = alias_note
-    return truncate_output(json.dumps(result, indent=2, ensure_ascii=False), spill=True)
-
-
-def tool_lsdyna_keyword_lookup(keyword: str, variable: str | None = None, card_index=None) -> str:
-    kb = load_lsdyna_kb()
-    if kb is None:
-        return "ERROR: LS-DYNA knowledge base not found."
-
-    key = keyword.strip().upper()
-    if not key.startswith("*"):
-        key = "*" + key
-
-    resolved_key, entry = _resolve_lsdyna_entry(kb, key)
-    if entry is None:
-        candidates = [k for k in kb if k.startswith(key[:key.rfind("_") + 1]) and k != "_aliases"]
-        if candidates:
-            return f"Keyword '{key}' not found. Similar keywords:\n" + "\n".join(sorted(candidates)[:15])
-        return f"Keyword '{key}' not found in knowledge base."
-
-    alias_note = f"Resolved via alias: {key} -> {resolved_key}" if resolved_key != key else None
-
-    if variable is not None and str(variable).strip():
-        return _lsdyna_variable_detail(entry, resolved_key, variable, alias_note)
-    if card_index is not None:
-        return _lsdyna_card_detail(entry, resolved_key, card_index, alias_note)
-
-    return _slim_lsdyna_entry(entry, MAX_TOOL_OUTPUT, alias_note=alias_note)
-
-
-def tool_lsdyna_format_card(keyword: str, card_index: int, rows: list) -> str:
-    kb = load_lsdyna_kb()
-    if kb is None:
-        return "ERROR: LS-DYNA knowledge base not found."
-
-    key = keyword.strip().upper()
-    if not key.startswith("*"):
-        key = "*" + key
-
-    entry = kb.get(key)
-    if not entry:
-        aliases = kb.get("_aliases", {})
-        if key in aliases and aliases[key] in kb:
-            entry = kb[aliases[key]]
-    if not entry:
-        return f"ERROR: Keyword '{key}' not found."
-
-    cards = entry.get("cards", [])
-    if card_index < 0 or card_index >= len(cards):
-        return f"ERROR: Card index {card_index} out of range (0-{len(cards)-1})."
-
-    card = cards[card_index]
-    variables = card.get("variables", [])
-    field_widths = card.get("field_widths", [])
-
-    if not field_widths:
-        field_widths = [10] * len(variables)
-
-    prefix = "$#"
-    comment = prefix
-    for i, (var, fw) in enumerate(zip(variables, field_widths)):
-        w = fw - len(prefix) if i == 0 else fw
-        comment += var.rjust(w)
-
-    lines = [comment]
-    for row in rows:
-        line = ""
-        for i, fw in enumerate(field_widths):
-            val = row[i].strip() if i < len(row) else "0"
-            line += val.rjust(fw)
-        lines.append(line)
-
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Lasso post-processing domain tools
-# ---------------------------------------------------------------------------
-
-_LASSO_KB = None
-_LASSO_KB_PATH = os.path.join(_PROJECT_ROOT, "utils", "lasso_postprocessing.json")
-
-
-def load_lasso_kb() -> dict:
-    global _LASSO_KB
-    if _LASSO_KB is None and os.path.isfile(_LASSO_KB_PATH):
-        with open(_LASSO_KB_PATH, "r", encoding="utf-8") as f:
-            _LASSO_KB = json.load(f)
-    return _LASSO_KB
-
-
-def tool_lasso_lookup(query: str) -> str:
-    kb = load_lasso_kb()
-    if kb is None:
-        return "ERROR: Lasso post-processing knowledge base not found."
-
-    q = query.strip()
-    q_lower = q.lower()
-
-    classes = kb.get("classes", {})
-    if q in classes:
-        return json.dumps(classes[q], indent=2, ensure_ascii=False)
-    for cls_name, cls_data in classes.items():
-        if cls_name.lower() == q_lower:
-            return json.dumps(cls_data, indent=2, ensure_ascii=False)
-
-    arr_ref = kb.get("array_reference", {})
-    for section_name, section in arr_ref.items():
-        if isinstance(section, dict) and q_lower in (k.lower() for k in section):
-            matched = {k: v for k, v in section.items() if k.lower() == q_lower}
-            matched["_section"] = section_name
-            return json.dumps(matched, indent=2, ensure_ascii=False)
-
-    if q_lower in ("routing", "decision", "intent", "file_routing", "decision_guide"):
-        result = {}
-        if "file_routing" in kb:
-            result["file_routing"] = kb["file_routing"]
-        if "decision_guide" in kb:
-            result["decision_guide"] = kb["decision_guide"]
-        return json.dumps(result, indent=2, ensure_ascii=False)
-
-    if q_lower in ("protocol", "workflow", "self_check", "agent_protocol"):
-        return json.dumps(kb.get("agent_protocol", {}), indent=2, ensure_ascii=False)
-
-    if q_lower in ("arrays", "array_reference", "shapes"):
-        return json.dumps(arr_ref, indent=2, ensure_ascii=False)
-
-    hits = {}
-    for section_name, section in arr_ref.items():
-        if isinstance(section, dict):
-            for key, val in section.items():
-                if q_lower in key.lower():
-                    hits[key] = val
-    if hits:
-        hits["_note"] = f"Matched {len(hits)} array(s) for '{q}'"
-        return json.dumps(hits, indent=2, ensure_ascii=False)
-
-    for cls_name, cls_data in classes.items():
-        methods = cls_data.get("methods", {})
-        if q_lower in (m.lower() for m in methods):
-            for m_name, m_data in methods.items():
-                if m_name.lower() == q_lower:
-                    return json.dumps(
-                        {**m_data, "_class": cls_name, "_method": m_name},
-                        indent=2, ensure_ascii=False,
-                    )
-
-    return (
-        f"No exact match for '{q}'. Available lookups:\n"
-        f"  Classes: {', '.join(classes.keys())}\n"
-        f"  Sections: routing, decision, protocol, arrays\n"
-        f"  Or search by partial array name (e.g. 'shell_stress', 'displacement')."
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -2266,19 +1973,12 @@ _REQUIRED_ARGS = {
     "image_read": ["file_path"],
     "web_request": ["url"],
     "gather_context": ["jobs"],
-    "lsdyna_keyword_lookup": ["keyword"],
-    "lsdyna_format_card": ["keyword", "card_index", "rows"],
-    "lasso_lookup": ["query"],
+    "skill_list": [],
+    "skill_read": ["name"],
     "file_write": ["file_path", "content"],
     "file_replace": ["file_path", "old_text", "new_text"],
     "apply_patch": ["patch_text"],
     "shell_run": ["command", "working_directory"],
-}
-
-_DOMAIN_TOOL_NAMES = {
-    "lsdyna_keyword_lookup",
-    "lsdyna_format_card",
-    "lasso_lookup",
 }
 
 
@@ -2320,28 +2020,21 @@ def _execute_read_only_tool_uncached(name: str, arguments: dict) -> str:
         return tool_web_request(arguments["url"], arguments.get("method", "GET"))
     if name == "gather_context":
         return tool_gather_context(arguments["jobs"], arguments.get("budget"))
-    if name == "lsdyna_keyword_lookup":
-        return tool_lsdyna_keyword_lookup(
-            arguments["keyword"],
-            arguments.get("variable"),
-            arguments.get("card_index"),
-        )
-    if name == "lsdyna_format_card":
-        return tool_lsdyna_format_card(arguments["keyword"], arguments["card_index"], arguments["rows"])
-    if name == "lasso_lookup":
-        return tool_lasso_lookup(arguments["query"])
+    if name == "skill_list":
+        return skill_registry.catalog_text()
+    if name == "skill_read":
+        try:
+            return skill_registry.read_skill(arguments["name"])
+        except (OSError, UnicodeError, ValueError) as exc:
+            return f"ERROR: {exc}"
     return f"ERROR: Unknown tool '{name}'"
 
 
 def execute_read_only_tool(name: str, arguments: dict) -> str:
     cached = None if name == "image_read" else _cache_get(name, arguments)
     if cached is not None:
-        return truncate_output(cached) if name in _DOMAIN_TOOL_NAMES else cached
+        return cached
     result = _execute_read_only_tool_uncached(name, arguments)
-    if name in _DOMAIN_TOOL_NAMES:
-        # Domain knowledge stays in the local JSON stores. Bound the structured
-        # observation before caching it or returning it across any model bridge.
-        result = truncate_output(result, spill=True)
     if name != "image_read" and not result.startswith("ERROR:"):
         _cache_put(name, arguments, result)
     return result

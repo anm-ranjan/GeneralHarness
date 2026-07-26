@@ -28,6 +28,13 @@ npx .            # interactive setup wizard
 Sessions remember their provider, and `/model native|codex|claude` switches an
 existing session over, carrying the completed context across.
 
+**Reusable Harness skills**
+
+- Skills live at `skills/<name>/SKILL.md` and are shared by all providers.
+- `/skills` lists the installed collection and `/skills <name>` displays the
+  complete instructions. The Native agent also has `skill_list` and
+  `skill_read` tools for progressive disclosure.
+
 **Persistent workspace**
 
 - **Projects** map to real directories on disk (inside your allowed paths),
@@ -59,7 +66,8 @@ existing session over, carrying the completed context across.
 
 - **Web UI** — React 19 + Vite + Tailwind CSS v4, fully themeable at runtime.
 - **Desktop** — Electron shell around the same app, which additionally unlocks
-  in-app file editing.
+  in-app file editing. Setup builds NSIS on Windows, DMG on macOS, and
+  AppImage packages on Linux; cross-OS builds should run on their target OS.
 - **Rust TUI** — `tui-rs/`, a ratatui client that speaks only the public REST and
   WebSocket API, so it can attach to a backend on another machine.
 - **CLI** — `./run.sh --cli`, standalone or attached to a running backend with
@@ -85,13 +93,15 @@ npm install && npm run setup
 The interactive installer asks for everything it needs and does the rest:
 
 1. A display name, and generates ASCII art for the splash screen.
-2. Whether to enable the Codex and Claude providers, probing for each CLI and
-   offering to `npm install -g` the missing ones.
-3. The native provider's base URL, API key, and default model.
-4. Whether to enable voice dictation, and which of the three STT backends.
-5. Which frontends to set up — it installs dependencies and builds the frontend.
-6. Bind address, port, allowed workspace directories, approval mode, and the
-   verbose-tools and git-writes toggles.
+2. Whether to enable Codex and Claude. It installs missing CLIs, runs their
+   subscription login flows, and enables them only after authentication passes.
+3. Native base URL, model, timeout, and iteration limit. Native is enabled only
+   when `MYHARNESS_API_KEY` is already exported; the key is never written.
+4. Voice dictation backend, model, language, device, timeout, upload limit, and
+   either direct SSH or API configuration.
+5. Browser UI, an installable Electron package for the current OS, and the Rust TUI.
+6. Trusted-LAN bind address, port, allowed workspaces, approvals, data directory,
+   logging policy, verbose tools, and Git writes.
 
 It then creates `./.venv`, installs `requirements.txt` into it, and writes
 `backend/agent/agent_config.yaml`. Re-running it is safe: it offers to back the
@@ -118,7 +128,8 @@ python3 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements.txt
 
 cp backend/agent/agent_config.example.yaml backend/agent/agent_config.yaml
-# edit it: api.api_key, models.*, permissions.allowed_paths
+# edit it: models.*, permissions.allowed_paths, provider settings
+export MYHARNESS_API_KEY="..."       # only when using Native
 
 (cd frontend && npm ci --legacy-peer-deps && npm run build)
 (cd electron && npm ci)      # only for the desktop shell
@@ -143,7 +154,7 @@ change needs a restart.
 
 | Section | Purpose |
 |---------|---------|
-| `api` | `base_url` and `api_key` for the native provider, plus `streaming` and an optional OpenRouter `provider` allowlist. |
+| `api` | Native enablement, `base_url`, timeout, streaming, and an optional OpenRouter `provider` allowlist. |
 | `models` | Model ids for `default`, `read`, `write`, and `summary` roles. |
 | `permissions` | `approval_mode` and `allowed_paths` — the directories the agent may touch. |
 | `server` | `host` and `port` for the FastAPI backend. |
@@ -152,9 +163,10 @@ change needs a restart.
 | `search` | Result cap and an optional explicit `rg` path. |
 | `gather` | Worker count for batched `gather_context` calls. |
 | `python` | Interpreter the agent should prefer for `shell_run` python calls. |
-| `agent` | `max_iterations`, `tool_call_checkpoint`. |
+| `agent` | Default provider, `max_iterations`, and `tool_call_checkpoint`. |
 | `shell` | `default_timeout` for shell commands. |
-| `logging` | `enabled`, and `log_dir` (empty means `<repo>/logs`). |
+| `logging` | Enablement, level, directory, and retention period. |
+| `storage` | Persistent data directory (empty means `<repo>/data`). |
 | `ui` | `app_name`, `splash_ascii`, `rich`, `verbose_tools`, `git_writes_enabled`. |
 | `audio` | Voice dictation: `enabled` and the `transcription` block below. |
 | `codex_app_server` | Codex provider: `enabled`, `binary`, sandbox and approval policy, timeout, model, reasoning effort. |
@@ -163,12 +175,12 @@ change needs a restart.
 
 ### Providers
 
-The native provider needs `api.base_url` and `api.api_key`. The CLI providers
+The native provider needs `api.base_url` and `MYHARNESS_API_KEY`. The CLI providers
 need no key at all when the CLI is already logged in:
 
 ```bash
 npm install -g @openai/codex && codex login
-npm install -g @anthropic-ai/claude-code && claude   # complete the login once
+npm install -g @anthropic-ai/claude-code && claude auth login
 ```
 
 Then set `codex_app_server.enabled: true` and/or `claude_agent.enabled: true`.
@@ -183,16 +195,13 @@ audio:
   transcription:
     processor: api          # local | remote | api
     api_base_url: "https://api.openai.com/v1"
-    api_key: ""             # or export MYHARNESS_STT_API_KEY
     model: whisper-1
 ```
 
 - `local` — needs `faster-whisper` in the backend's environment; `model` is a
   size (`tiny`, `base`, `small`, `medium`, `large-v3`).
-- `remote` — uploads over SSH to a host listed in
-  `utils/Qsub_Windows/server_config.yaml` (copy it from the shipped
-  `server_config.yaml.template`) and runs faster-whisper there on GPU. Set
-  `server` and `app_dir`.
+- `remote` — uploads over SSH to the configured `server`, using `username` and
+  `key_file` when supplied, and runs faster-whisper from `app_dir`.
 - `api` — POSTs multipart `file` + `model` to
   `{api_base_url}/audio/transcriptions` with a bearer token; `model` is the
   remote model id.
@@ -201,8 +210,8 @@ audio:
 
 | Variable | Overrides |
 |----------|-----------|
-| `MYHARNESS_API_KEY` | `api.api_key` (highest precedence) |
-| `MYHARNESS_STT_API_KEY` | `audio.transcription.api_key` (highest precedence) |
+| `MYHARNESS_API_KEY` | Native-provider secret; required for Native availability |
+| `MYHARNESS_STT_API_KEY` | API transcription secret |
 | `MYHARNESS_WEB_HOST`, `MYHARNESS_WEB_PORT` | `server.host`, `server.port` |
 | `MYHARNESS_APPROVAL_MODE` | `permissions.approval_mode` |
 | `MYHARNESS_VERBOSE_TOOLS` | `ui.verbose_tools` |
@@ -211,18 +220,17 @@ audio:
 | `MYHARNESS_WEB_DATA_DIR`, `MYHARNESS_WEB_STATIC_DIR` | `data/` and `frontend/dist` locations |
 | `MYHARNESS_ELECTRON_LOG` | Electron log path |
 
-Keeping the two API keys in the environment rather than the YAML file is the
-recommended production setup.
+The setup wizard never stores either API key in YAML.
 
 ## Security
 
-MyHarness is designed to run on your own machine, for you.
+MyHarness is designed for a trusted local network.
 
 - **The API has no authentication.** Anyone who can reach the port can read and
   write every directory in `permissions.allowed_paths` and run shell commands
-  through the agent. The default bind address is therefore `127.0.0.1`. Setting
-  `server.host: 0.0.0.0` exposes all of that to your whole network — only do it
-  behind a trusted reverse proxy that adds authentication, or a firewall.
+  through the agent. The installer defaults to `0.0.0.0` only after you confirm
+  that the machine is on a trusted LAN. Firewall the configured port from
+  untrusted networks; use `127.0.0.1` for machine-local access.
 - **Approval modes** decide what the agent can do unprompted:
   - `always_ask` — confirm before file writes, patches, and shell commands. Default.
   - `shell_only` — confirm before shell commands only.

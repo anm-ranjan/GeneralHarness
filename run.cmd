@@ -1,5 +1,5 @@
 @echo off
-REM Launch the MyHarness
+REM Launch the configured Harness
 REM
 REM Usage:
 REM   run.cmd               Start the Electron desktop shell
@@ -92,7 +92,7 @@ echo Starting backend...
 cd /d "%SCRIPT_DIR%backend"
 REM Launch with the absolute script path so :cleanup can kill only this repo's
 REM backend rather than every python process running some web_app.py.
-start "MyHarness Backend" /b "%PYTHON%" -u "%SCRIPT_DIR%backend\web_app.py" > "%LOGFILE%" 2>&1
+start "Harness Backend" /b "%PYTHON%" -u "%SCRIPT_DIR%backend\web_app.py" > "%LOGFILE%" 2>&1
 
 REM Wait for backend to be ready (up to 30 seconds)
 echo Waiting for backend on port %PORT%...
@@ -113,7 +113,7 @@ echo Backend ready.
 
 echo Starting Vite dev server...
 cd /d "%SCRIPT_DIR%frontend"
-start "MyHarness Vite" /b npx vite --host 2>&1
+start "Harness Vite" /b npx vite --host 2>&1
 
 echo.
 echo   Backend:  http://127.0.0.1:%PORT%

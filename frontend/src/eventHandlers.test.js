@@ -206,7 +206,7 @@ test('effectiveWorkspaceRoot keeps project root as default for sessions without 
 test('workspaceDisplayName shows only the bound directory name', () => {
   assert.equal(workspaceDisplayName('/workspace/analysis'), 'analysis')
   assert.equal(workspaceDisplayName('/workspace/analysis/'), 'analysis')
-  assert.equal(workspaceDisplayName('Y:\\Shoulder_simulation\\Run_01'), 'Run_01')
+  assert.equal(workspaceDisplayName('Y:\\Example_project\\Run_01'), 'Run_01')
   assert.equal(workspaceDisplayName('ProjectName'), 'ProjectName')
 })
 

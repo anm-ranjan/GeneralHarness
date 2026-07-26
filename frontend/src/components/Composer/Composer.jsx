@@ -89,14 +89,29 @@ export default function Composer() {
       })
       return
     }
-    if (state.currentProvider === 'codex-app-server' && !state.codexAppServerEnabled) {
+    const currentUnavailable =
+      (state.currentProvider === 'native' && !state.nativeEnabled)
+      || (state.currentProvider === 'codex-app-server' && !state.codexAppServerEnabled)
+      || (state.currentProvider === 'claude-agent' && !state.claudeAgentEnabled)
+    if (currentUnavailable) {
+      const fallback = state.nativeEnabled
+        ? { command: 'native', label: 'Native' }
+        : state.codexAppServerEnabled
+          ? { command: 'codex', label: 'Codex' }
+          : state.claudeAgentEnabled
+            ? { command: 'claude', label: 'Claude' }
+            : null
+      if (!fallback) {
+        dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: 'No authenticated provider is available. Re-run setup or configure a provider.' } })
+        return
+      }
       dispatch({
         type: 'OPEN_CONFIRM',
         payload: {
-          title: 'Switch to Native?',
-          message: 'Codex App Server is unavailable. Your current message will stay in the composer; send it again after migration completes.',
+          title: `Switch to ${fallback.label}?`,
+          message: 'The current provider is unavailable. Your message will stay in the composer; send it again after migration completes.',
           confirmLabel: 'Switch',
-          onConfirm: () => sendSilentCommand(state.currentSessionId, '/model native'),
+          onConfirm: () => sendSilentCommand(state.currentSessionId, `/model ${fallback.command}`),
         },
       })
       return

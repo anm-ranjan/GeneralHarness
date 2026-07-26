@@ -10,16 +10,10 @@ import shlex
 import time
 import uuid
 from dataclasses import dataclass
-from getpass import getuser
 from pathlib import Path
 
 import requests
-import yaml
 from fastapi import HTTPException
-
-
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_PBS_CONFIG_PATH = _PROJECT_ROOT / "utils" / "Qsub_Windows" / "server_config.yaml"
 
 _AUDIO_MIME_EXT = {
     "audio/webm": ".webm",
@@ -46,6 +40,10 @@ class AudioConfig:
     max_upload_mb: int
     api_base_url: str = ""
     api_key: str = ""
+    username: str = ""
+    key_file: str = ""
+    language: str = ""
+    device: str = "cpu"
 
 
 def config_from_utils(utils_module) -> AudioConfig:
@@ -59,6 +57,10 @@ def config_from_utils(utils_module) -> AudioConfig:
         max_upload_mb=int(getattr(utils_module, "AUDIO_MAX_UPLOAD_MB", 500) or 500),
         api_base_url=str(getattr(utils_module, "AUDIO_TRANSCRIPTION_API_BASE_URL", "") or ""),
         api_key=str(getattr(utils_module, "AUDIO_TRANSCRIPTION_API_KEY", "") or ""),
+        username=str(getattr(utils_module, "AUDIO_TRANSCRIPTION_USERNAME", "") or ""),
+        key_file=str(getattr(utils_module, "AUDIO_TRANSCRIPTION_KEY_FILE", "") or ""),
+        language=str(getattr(utils_module, "AUDIO_TRANSCRIPTION_LANGUAGE", "") or ""),
+        device=str(getattr(utils_module, "AUDIO_TRANSCRIPTION_DEVICE", "cpu") or "cpu").lower(),
     )
 
 
@@ -68,6 +70,8 @@ def public_config(config: AudioConfig) -> dict:
         "processor": config.processor,
         "server": config.server,
         "model": config.model,
+        "language": config.language,
+        "device": config.device,
         "max_upload_mb": config.max_upload_mb,
     }
 
@@ -160,14 +164,28 @@ def _transcribe_local(input_path: Path, config: AudioConfig) -> dict:
     except ImportError as exc:
         raise HTTPException(status_code=503, detail=f"faster-whisper is not installed on the backend: {exc}")
 
-    key = (config.model, "cpu", "int8")
+    device = config.device if config.device in {"cpu", "cuda", "auto"} else "cpu"
+    if device == "auto":
+        device = "cuda"
+    compute_type = "float16" if device == "cuda" else "int8"
+    key = (config.model, device, compute_type)
     model = _MODEL_CACHE.get(key)
     if model is None:
-        model = WhisperModel(config.model, device="cpu", compute_type="int8")
+        try:
+            model = WhisperModel(config.model, device=device, compute_type=compute_type)
+        except Exception:
+            if config.device != "auto":
+                raise
+            device, compute_type = "cpu", "int8"
+            key = (config.model, device, compute_type)
+            model = _MODEL_CACHE.get(key) or WhisperModel(config.model, device=device, compute_type=compute_type)
         _MODEL_CACHE[key] = model
 
     try:
-        segments, info = model.transcribe(str(input_path), beam_size=5)
+        kwargs = {"beam_size": 5}
+        if config.language:
+            kwargs["language"] = config.language
+        segments, info = model.transcribe(str(input_path), **kwargs)
         text = " ".join(segment.text.strip() for segment in segments if segment.text.strip()).strip()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Local transcription failed: {exc}")
@@ -200,11 +218,14 @@ def _transcribe_api(input_path: Path, name: str, mime: str, config: AudioConfig)
     filename = name or input_path.name
     try:
         with input_path.open("rb") as audio_file:
+            form = {"model": config.model}
+            if config.language:
+                form["language"] = config.language
             response = requests.post(
                 url,
                 headers={"Authorization": f"Bearer {config.api_key}"},
                 files={"file": (filename, audio_file, mime or "application/octet-stream")},
-                data={"model": config.model},
+                data=form,
                 timeout=max(1, min(config.timeout_seconds, 24 * 60 * 60)),
             )
     except requests.RequestException as exc:
@@ -237,34 +258,11 @@ def _transcribe_api(input_path: Path, name: str, mime: str, config: AudioConfig)
     }
 
 
-def _load_pbs_config() -> dict:
-    if not _PBS_CONFIG_PATH.is_file():
-        raise HTTPException(status_code=500, detail=f"Server config not found: {_PBS_CONFIG_PATH}")
-    try:
-        return yaml.safe_load(_PBS_CONFIG_PATH.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError as exc:
-        raise HTTPException(status_code=500, detail=f"Could not parse server config: {exc}")
-
-
-def _resolve_server(server_ref: str, config: dict) -> dict:
-    servers = config.get("servers") or []
-    if not servers:
-        raise HTTPException(status_code=500, detail="No servers configured in PBS server config")
-    if not server_ref:
-        selected = servers[0]
-    else:
-        selected = next(
-            (
-                server for server in servers
-                if server_ref in {str(server.get("name", "")), str(server.get("hostname", ""))}
-            ),
-            None,
-        )
-    if not selected:
-        raise HTTPException(status_code=400, detail=f"Audio server not found in PBS server config: {server_ref}")
-
-    ssh_cfg = config.get("ssh") or {}
-    key_file = str(ssh_cfg.get("key_file") or "").strip()
+def _resolve_server(config: AudioConfig) -> dict:
+    hostname = config.server.strip()
+    if not hostname:
+        raise HTTPException(status_code=500, detail="audio.transcription.server is required for remote transcription")
+    key_file = config.key_file.strip()
     if key_file and os.path.exists(os.path.expanduser(key_file)):
         key_file = os.path.expanduser(key_file)
     else:
@@ -272,11 +270,11 @@ def _resolve_server(server_ref: str, config: dict) -> dict:
         key_file = default_key if os.path.exists(default_key) else ""
 
     return {
-        "hostname": selected["hostname"],
-        "name": selected.get("name") or selected["hostname"],
-        "username": getuser(),
+        "hostname": hostname,
+        "name": hostname,
+        "username": config.username or None,
         "key_file": key_file,
-        "timeout": int(ssh_cfg.get("connection_timeout", 10) or 10),
+        "timeout": min(max(1, config.timeout_seconds), 60),
     }
 
 
@@ -303,7 +301,7 @@ def _transcribe_remote(input_path: Path, session_id: str, voice_turn_id: str, co
     except ImportError as exc:
         raise HTTPException(status_code=503, detail=f"paramiko is required for remote audio transcription: {exc}")
 
-    server = _resolve_server(config.server, _load_pbs_config())
+    server = _resolve_server(config)
     paths = _remote_paths(config.app_dir, session_id, voice_turn_id, input_path)
     python_path = posixpath.join(config.app_dir.rstrip("/"), ".venv", "bin", "python")
     script = _remote_transcribe_script()
@@ -313,9 +311,10 @@ def _transcribe_remote(input_path: Path, session_id: str, voice_turn_id: str, co
     try:
         connect_kwargs = {
             "hostname": server["hostname"],
-            "username": server["username"],
             "timeout": server["timeout"],
         }
+        if server["username"]:
+            connect_kwargs["username"] = server["username"]
         if server["key_file"]:
             connect_kwargs["key_filename"] = server["key_file"]
         ssh.connect(**connect_kwargs)
@@ -338,7 +337,11 @@ def _transcribe_remote(input_path: Path, session_id: str, voice_turn_id: str, co
             shlex.quote(paths["output"]),
             "--model",
             shlex.quote(config.model),
+            "--device",
+            shlex.quote(config.device),
         ])
+        if config.language:
+            command += f" --language {shlex.quote(config.language)}"
         _remote_exec(ssh, command, timeout=max(1, min(config.timeout_seconds, 24 * 60 * 60)))
 
         sftp = ssh.open_sftp()
@@ -389,11 +392,23 @@ def main():
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--model", required=True)
+    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--language", default="")
     args = parser.parse_args()
 
     try:
-        model = WhisperModel(args.model, device="cuda", compute_type="float16")
-        segments, info = model.transcribe(args.input, beam_size=5)
+        device = "cuda" if args.device == "auto" else args.device
+        compute_type = "float16" if device == "cuda" else "int8"
+        try:
+            model = WhisperModel(args.model, device=device, compute_type=compute_type)
+        except Exception:
+            if args.device != "auto":
+                raise
+            model = WhisperModel(args.model, device="cpu", compute_type="int8")
+        kwargs = {"beam_size": 5}
+        if args.language:
+            kwargs["language"] = args.language
+        segments, info = model.transcribe(args.input, **kwargs)
         text = " ".join(segment.text.strip() for segment in segments if segment.text.strip()).strip()
         payload = {
             "text": text,

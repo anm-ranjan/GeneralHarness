@@ -29,7 +29,7 @@ export default function ComposerToolbar({ className = '' }) {
   // Only offer providers the backend can actually accept right now, so the
   // cycle never lands on a switch /model would reject.
   const providerCycle = [
-    { id: 'native', command: 'native' },
+    ...(state.nativeEnabled ? [{ id: 'native', command: 'native' }] : []),
     ...(state.codexAppServerEnabled ? [{ id: 'codex-app-server', command: 'codex' }] : []),
     ...(state.claudeAgentEnabled ? [{ id: 'claude-agent', command: 'claude' }] : []),
   ]

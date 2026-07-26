@@ -1,4 +1,4 @@
-export const SLASH_CMDS = ['/verbose', '/approve', '/clear', '/chdir', '/model', '/maxiters', '/thinking', '/reconnect']
+export const SLASH_CMDS = ['/verbose', '/approve', '/clear', '/chdir', '/model', '/maxiters', '/thinking', '/skills', '/reconnect']
 
 // Reserved project id that holds general (project-less) chat sessions.
 export const CHATS_PROJECT_ID = '__chats__'
@@ -15,6 +15,8 @@ export const SUGGESTED_SLASH_COMMANDS = [
   '/chdir --reset',
   '/maxiters 20',
   '/thinking medium',
+  '/skills',
+  '/skills frontend-design',
   '/reconnect',
 ]
 
@@ -44,9 +46,8 @@ export const TOOL_ICONS = {
   content_search: '🔍',
   shell_run: '⚡',
   web_request: '↗',
-  lsdyna_keyword_lookup: '▦',
-  lsdyna_format_card: '▤',
-  lasso_lookup: '⌁',
+  skill_list: '🧰',
+  skill_read: '📘',
   read_file: '📄',
   write_file: '✏️',
   edit_file: '✏️',

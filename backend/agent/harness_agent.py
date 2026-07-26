@@ -316,7 +316,7 @@ def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int):
             f"{utils.BASE_URL}/chat/completions",
             headers=utils.HEADERS,
             json=stream_payload,
-            timeout=120,
+            timeout=utils.NATIVE_API_TIMEOUT,
             stream=True,
         )
     except requests.exceptions.Timeout:
@@ -409,7 +409,12 @@ def call_api(messages: list, tools: list = None, model: str = None, ui=None, can
 
     t0 = time.monotonic()
     try:
-        response = requests.post(f"{utils.BASE_URL}/chat/completions", headers=utils.HEADERS, json=payload, timeout=120)
+        response = requests.post(
+            f"{utils.BASE_URL}/chat/completions",
+            headers=utils.HEADERS,
+            json=payload,
+            timeout=utils.NATIVE_API_TIMEOUT,
+        )
     except requests.exceptions.Timeout:
         _last_api_failure = "timeout"
         msg = f"API request timed out after 120s (payload {payload_size // 1024}KB). Try again."
@@ -784,38 +789,6 @@ def _gather_context_fragment() -> str:
     )
 
 
-def _build_lsdyna_system_fragment() -> str:
-    return (
-        "IMPORTANT: Before writing or editing any LS-DYNA keyword file (.k, .key, .dyn), "
-        "ALWAYS call lsdyna_keyword_lookup first to get the correct card format, variable names, "
-        "types, and defaults. Never guess LS-DYNA keyword syntax from memory. "
-        "The lookup returns field_widths for each card (e.g. [10,10,10,...] or [8,16,16,16,8,8]). "
-        "After looking up the keyword, ALWAYS use lsdyna_format_card to produce correctly spaced "
-        "card lines. Pass the keyword, card index (0-based), and a list of rows (each row is a list "
-        "of string values). The tool returns ready-to-use text with the $# header and data lines. "
-        "Never try to manually space LS-DYNA card fields — always use lsdyna_format_card. "
-        "For large keywords the lookup keeps the full card layout but abbreviates the prose "
-        "descriptions; if you need a variable's full description, call lsdyna_keyword_lookup again "
-        "with variable=\"<NAME>\" (or card_index=<N>). "
-    )
-
-
-def _build_lasso_system_fragment() -> str:
-    return (
-        "POST-PROCESSING: Before writing code that opens d3plot or binout files, "
-        "ALWAYS call lasso_lookup first. Use lasso_lookup('routing') to pick the right class "
-        "(D3plot vs Binout vs D3plotHeader), then lasso_lookup('<ClassName>') for the exact API. "
-        "For array shapes and axis semantics, call lasso_lookup with the array name "
-        "(e.g. 'element_shell_stress'). Always verify .shape at runtime before indexing — "
-        "never hardcode axis positions. Reduce layer/integration-point axes explicitly before plotting. "
-        "Use ArrayType.* constants, not raw strings. "
-    )
-
-
-def _build_pbs_system_fragment() -> str:
-    return utils.build_pbs_prompt_fragment()
-
-
 def _workspace_fragment(workspace_root: str | None = None) -> str:
     if not workspace_root:
         return ""
@@ -841,7 +814,7 @@ def _web_output_fragment() -> str:
 def _build_managed_system_content(workspace_root: str | None = None) -> str:
     return (
         "You are a pragmatic coding agent with access to file listing, filename search, content search, file read, web request, "
-        "file write, exact replacement, patch, shell, and LS-DYNA keyword lookup tools. Inspect before editing. Prefer "
+        "file write, exact replacement, patch, shell, and reusable Harness skills. Inspect before editing. Prefer "
         "minimal changes. Use file_list to inspect project shape, content_search to find text or symbols, "
         "file_replace for small precise edits, apply_patch for multi-file edits, "
         "and shell_run to verify with tests or scripts. Never run destructive commands. "
@@ -855,8 +828,7 @@ def _build_managed_system_content(workspace_root: str | None = None) -> str:
         "file_read for reading, content_search for searching, file_list for listing. "
         "shell_run is ONLY for running scripts, tests, builds, and commands that have no tool equivalent. "
         + _gather_context_fragment()
-        + _build_lsdyna_system_fragment()
-        + _build_lasso_system_fragment()
+        + utils.skill_registry.prompt_fragment()
         + f"You can only access these directories: {', '.join(utils.ALLOWED_PATHS)}. "
         + _workspace_fragment(workspace_root)
         + _web_output_fragment()
@@ -866,14 +838,13 @@ def _build_managed_system_content(workspace_root: str | None = None) -> str:
         + "directory. If the file is over 5KB, NEVER read it in full. Use file_read with "
         + "read_mode='search', 'head', 'range', or 'tail' instead. For cross-file searches, "
         + "use content_search to find the file and line, then file_read with 'range' for context."
-        + _build_pbs_system_fragment()
     )
 
 
 def _build_native_system_content(workspace_root: str | None = None) -> str:
     return (
         "You are a pragmatic coding agent. You have shell_run, file_write, file_replace, "
-        "apply_patch, and LS-DYNA domain tools available. "
+        "apply_patch, and reusable Harness skills available. "
         f"OS: {_platform_info()}. "
         "PREFERRED: ALWAYS use shell_run for reading, searching, and listing files — its output "
         "stays compact in history. "
@@ -890,8 +861,7 @@ def _build_native_system_content(workspace_root: str | None = None) -> str:
         "CRITICAL: NEVER guess or fabricate file names, directory contents, or file contents. "
         "Always inspect before editing. "
         + _gather_context_fragment()
-        + _build_lsdyna_system_fragment()
-        + _build_lasso_system_fragment()
+        + utils.skill_registry.prompt_fragment()
         + f"You can only access these directories: {', '.join(utils.ALLOWED_PATHS)}. "
         + _workspace_fragment(workspace_root)
         + _web_output_fragment()
@@ -904,15 +874,14 @@ def _build_native_system_content(workspace_root: str | None = None) -> str:
         "lines. Only use file_write for small new files that do not already exist. "
         "After completing the task, respond immediately — do not add extra verification "
         "iterations unless the user asked for verification."
-        + _build_pbs_system_fragment()
     )
 
 
 def _build_chat_system_content(workspace_root: str | None = None) -> str:
     """Lightweight prompt for general-purpose chats.
 
-    Deliberately free of the coding-agent domain bindings (LS-DYNA/LASSO/PBS,
-    gather-context, allowed-path recitations, the strict inspect-before-edit
+    Deliberately free of the coding-agent workflow bindings (gather-context,
+    allowed-path recitations, the strict inspect-before-edit
     file-tooling contract). Tools remain available if a chat genuinely needs
     them, and file work stays inside the chat's own scratch workspace.
     """
@@ -1000,7 +969,7 @@ def execute_tool(name: str, arguments: dict, ui=None) -> str:
     err = utils._check_required_args(name, arguments)
     if err:
         return err
-    if name in {"file_search", "file_list", "content_search", "file_read", "image_read", "web_request", "gather_context", "lsdyna_keyword_lookup", "lsdyna_format_card", "lasso_lookup"}:
+    if name in {"file_search", "file_list", "content_search", "file_read", "image_read", "web_request", "gather_context", "skill_list", "skill_read"}:
         return utils.execute_read_only_tool(name, arguments)
     if not request_approval(name, arguments, ui=ui):
         return "ERROR: Tool call denied by user."
@@ -1215,11 +1184,10 @@ def _tool_status_line(func_name: str, func_args: dict) -> str:
         return f"Run: {cmd}"
     if func_name == "web_request":
         return f"Fetch {func_args.get('url', '')}"
-    if func_name.startswith("lsdyna_"):
-        kw = func_args.get("keyword", "")
-        return f"{func_name.replace('_', ' ').title()} {kw}"
-    if func_name == "lasso_lookup":
-        return f"Lasso Lookup: {func_args.get('query', '')}"
+    if func_name == "skill_list":
+        return "Skills: list installed skills"
+    if func_name == "skill_read":
+        return f"Skill: {func_args.get('name', '')}"
     return func_name
 
 
@@ -1623,7 +1591,7 @@ def _run_cli(cli_args):
     ui = CliUI()
     setup_input()
 
-    ui_rule("MyHarness Agent")
+    ui_rule(f"{utils.APP_NAME} Agent")
     if CONSOLE is not None and Table is not None:
         table = Table(show_header=False, box=None)
         table.add_column("Setting", style="cyan")
@@ -1677,6 +1645,18 @@ def _run_cli(cli_args):
         if user_input.strip().lower() == "/clear":
             messages = build_initial_messages()
             ui.show_status("Context cleared.", style="green")
+            continue
+        if user_input.strip().lower() == "/skills" or user_input.strip().lower().startswith("/skills "):
+            skill_name = user_input.strip()[len("/skills"):].strip()
+            try:
+                output = (
+                    utils.skill_registry.read_skill(skill_name)
+                    if skill_name and skill_name.lower() != "list"
+                    else utils.skill_registry.catalog_text()
+                )
+            except (OSError, UnicodeError, ValueError) as exc:
+                output = f"ERROR: {exc}"
+            ui.show_status(output)
             continue
 
         messages = run_agent(user_input, messages, ui=ui)

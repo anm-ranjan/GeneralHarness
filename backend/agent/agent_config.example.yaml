@@ -1,6 +1,10 @@
 api:
+  # Native is selectable only when enabled and MYHARNESS_API_KEY is present.
+  enabled: true
   base_url: https://openrouter.ai/api/v1
-  api_key: YOUR_API_KEY_HERE
+  # Kept for backward compatibility; fresh installs use MYHARNESS_API_KEY.
+  api_key: ""
+  timeout_seconds: 120
   streaming: true          # stream assistant tokens live in the web UI
   # OpenRouter only: one provider slug or an ordered list. Requests are limited
   # to these providers and try list entries in order. Ignored for other hosts.
@@ -48,6 +52,8 @@ python:
   interpreter: ""
 
 agent:
+  # Preferred provider for new sessions. If unavailable, the UI asks for one.
+  default_provider: native
   max_iterations: 20
   tool_call_checkpoint: 20
 
@@ -55,16 +61,22 @@ shell:
   default_timeout: 120
 
 server:
-  # Bind address for the FastAPI backend. 127.0.0.1 keeps it on this machine;
-  # 0.0.0.0 exposes an UNAUTHENTICATED agent API to your whole network.
+  # Bind address for the FastAPI backend. 0.0.0.0 makes it available on the LAN.
+  # The API has no built-in authentication, so use only on a trusted LAN.
   # MYHARNESS_WEB_HOST / MYHARNESS_WEB_PORT override these.
   host: 127.0.0.1
   port: 8420
 
 logging:
   enabled: true
+  level: info
+  retention_days: 30
   # Empty means "<repo>/logs". Relative paths resolve against the repo root.
   log_dir: ""
+
+storage:
+  # Empty means "<repo>/data". MYHARNESS_WEB_DATA_DIR overrides this.
+  data_dir: ""
 
 ui:
   rich: auto
@@ -82,22 +94,28 @@ audio:
   enabled: false
   transcription:
     # local:  run faster-whisper on the FastAPI backend machine.
-    # remote: upload browser audio to a server from utils/Qsub_Windows/server_config.yaml.
+    # remote: upload browser audio directly to an SSH host configured below.
     # api:    POST the audio to an OpenAI-compatible /audio/transcriptions endpoint.
     processor: local
-    # Remote mode only. Blank uses the first server; otherwise match a name or hostname.
+    # Remote mode only.
     server: ""
+    username: ""
+    key_file: ""
     # Remote mode uses {app_dir}/.venv/bin/python and stores requests under
     # {app_dir}/myharness/{session_id}/{voice_turn_id}/.
     app_dir: /opt/apps/whisperAudio
     # api mode only. Root of an OpenAI-compatible API, e.g. https://api.openai.com/v1
     # ("/audio/transcriptions" is appended).
     api_base_url: ""
-    # api mode only. The MYHARNESS_STT_API_KEY environment variable overrides this.
+    # Kept for backward compatibility; fresh installs use MYHARNESS_STT_API_KEY.
     api_key: ""
     # local/remote: a faster-whisper size (tiny/base/small/medium/large-v3).
     # api: the remote model id, e.g. whisper-1.
     model: small
+    # Blank enables automatic language detection.
+    language: ""
+    # local/remote only: cpu | cuda | auto.
+    device: cpu
     timeout_seconds: 1800
     max_upload_mb: 500
 

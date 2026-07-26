@@ -57,7 +57,7 @@ def _resolve_path(p: str) -> str:
 
 _DATA_DIR = os.environ.get(
     "MYHARNESS_WEB_DATA_DIR",
-    str(Path(__file__).resolve().parent.parent / "data"),
+    utils.DATA_DIR,
 )
 
 _STATIC_DIR = os.environ.get(
@@ -171,12 +171,17 @@ def _claude_agent_available() -> bool:
     return utils.CLAUDE_AGENT_ENABLED and shutil.which(utils.CLAUDE_AGENT_BINARY) is not None
 
 
+def _native_available() -> bool:
+    return utils.NATIVE_ENABLED
+
+
 # ── app ────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     global _store
     _store = SessionStore(_DATA_DIR)
+    utils.prune_old_logs()
     _store.reset_running_sessions()
     _SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
     utils.register_allowed_path(str(_SCRIPTS_DIR))
@@ -374,7 +379,8 @@ def main():
     print(f"Agent source: {_AGENT_DIR}")
     print(f"Data dir: {_DATA_DIR}")
     print(f"Static dir: {_STATIC_DIR}")
-    config = uvicorn.Config(app, host=host, port=port)
+    log_level = utils.LOG_LEVEL if utils.LOG_LEVEL in {"critical", "error", "warning", "info", "debug", "trace"} else "info"
+    config = uvicorn.Config(app, host=host, port=port, log_level=log_level)
     _uvicorn_server = uvicorn.Server(config)
     _uvicorn_server.run()
 

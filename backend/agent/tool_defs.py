@@ -194,110 +194,38 @@ READ_ONLY_TOOLS = [
             },
         },
     },
-]
-
-DOMAIN_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "lsdyna_keyword_lookup",
-            "description": (
-                "Look up an LS-DYNA keyword definition from the keyword manual knowledge base. "
-                "Returns card layout (variable names, types, defaults, field widths), variable "
-                "descriptions, and remarks. Always call this BEFORE writing or editing LS-DYNA "
-                "keyword files to ensure correct card format. Large keyword definitions are "
-                "returned with the full card layout intact but abbreviated descriptions; pass "
-                "'variable' or 'card_index' to retrieve the full untruncated detail for one field "
-                "or one card."
-            ),
+            "name": "skill_list",
+            "description": "List the reusable skills installed in the Harness skills collection.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "keyword": {
-                        "type": "string",
-                        "description": "Keyword name, e.g. *SECTION_SHELL or *CONTROL_IMPLICIT_GENERAL.",
-                    },
-                    "variable": {
-                        "type": "string",
-                        "description": "Optional. Return full type/default/field-width and untruncated description for this one variable (e.g. ELFORM).",
-                    },
-                    "card_index": {
-                        "type": "integer",
-                        "description": "Optional. Return the full untruncated detail for just this 0-based card.",
-                    },
-                },
-                "required": ["keyword"],
+                "properties": {},
             },
         },
     },
     {
         "type": "function",
         "function": {
-            "name": "lsdyna_format_card",
+            "name": "skill_read",
             "description": (
-                "Format LS-DYNA card data lines with correct field widths. "
-                "Returns ready-to-use text including the $# comment header and data lines. "
-                "Call lsdyna_keyword_lookup first to get the card layout, then call this "
-                "to produce correctly spaced output."
+                "Read the complete SKILL.md instructions for one installed Harness skill. "
+                "Call skill_list first when you do not know the exact skill name."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "keyword": {
+                    "name": {
                         "type": "string",
-                        "description": "Keyword name, e.g. *DEFINE_CURVE.",
-                    },
-                    "card_index": {
-                        "type": "integer",
-                        "description": "0-based index of the card to format.",
-                    },
-                    "rows": {
-                        "type": "array",
-                        "description": (
-                            "List of rows, each row is a list of values (strings or numbers). "
-                            "For single-row cards, pass one row. For repeating cards (e.g. curve data), "
-                            "pass multiple rows."
-                        ),
-                        "items": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
+                        "description": "Skill directory name, as returned by skill_list.",
                     },
                 },
-                "required": ["keyword", "card_index", "rows"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "lasso_lookup",
-            "description": (
-                "Look up lasso-python post-processing reference for reading LS-Dyna "
-                "binary output (d3plot, binout). Returns class APIs, array shapes and "
-                "axis semantics, file routing, or agent workflow protocol. "
-                "Always call this BEFORE writing code that opens d3plot/binout files."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": (
-                            "What to look up. Examples: 'D3plot' (class API), "
-                            "'Binout' (class API), 'element_shell_stress' (array shape), "
-                            "'shell_stress' (partial match), 'routing' (file routing guide), "
-                            "'protocol' (agent workflow), 'arrays' (all array shapes)."
-                        ),
-                    },
-                },
-                "required": ["query"],
+                "required": ["name"],
             },
         },
     },
 ]
-
-READ_ONLY_TOOLS = READ_ONLY_TOOLS + DOMAIN_TOOLS
 
 WRITE_TOOLS = [
     {

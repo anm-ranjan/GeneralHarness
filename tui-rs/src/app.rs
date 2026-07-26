@@ -617,7 +617,10 @@ impl App {
     }
 
     pub fn available_providers(&self) -> Vec<Provider> {
-        let mut providers = vec![Provider::Native];
+        let mut providers = Vec::new();
+        if self.health.native_enabled {
+            providers.push(Provider::Native);
+        }
         if self.health.codex_app_server_enabled {
             providers.push(Provider::Codex);
         }
@@ -1440,7 +1443,10 @@ mod tests {
     fn provider_choices_follow_backend_health() {
         let mut app = App::new(
             "http://localhost".to_owned(),
-            Health::default(),
+            Health {
+                native_enabled: true,
+                ..Health::default()
+            },
             SessionTree::default(),
             None,
         );
@@ -1792,6 +1798,7 @@ mod tests {
             state: FormState::default(),
         }));
         app.update_health(Health {
+            native_enabled: true,
             codex_app_server_enabled: true,
             ..Health::default()
         });

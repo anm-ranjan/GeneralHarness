@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useAppDispatch } from '../../context/AppContext'
+import { useApp } from '../../context/AppContext'
 import InlineEdit from './InlineEdit'
 import TaskRow from './TaskRow'
 
@@ -9,7 +9,7 @@ export default function ProjectNode({
   onCreateTask, onRenameTask, onDeleteTask,
   onCreateSession, onImportSession, onRenameSession, onMoveSession, onDeleteSession,
 }) {
-  const dispatch = useAppDispatch()
+  const { state, dispatch } = useApp()
   const [editing, setEditing] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
   const tasks = project.tasks || []
@@ -68,7 +68,7 @@ export default function ProjectNode({
               type: 'OPEN_CONFIRM',
               payload: {
                 title: 'Delete project?',
-                message: 'This removes the project from MyHarness and deletes its sessions, events, and attachments.',
+                message: `This removes the project from ${state.appName} and deletes its sessions, events, and attachments.`,
                 detail: project.name,
                 confirmLabel: 'Delete',
                 tone: 'danger',

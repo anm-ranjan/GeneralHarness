@@ -8,7 +8,10 @@
   "scripts": {
     "start": "electron .",
     "start:dev": "MYHARNESS_ELECTRON_DEV=1 electron .",
-    "dist:win": "electron-builder --win"
+    "dist": "electron-builder --config electron-builder.config.cjs",
+    "dist:win": "electron-builder --config electron-builder.config.cjs --win",
+    "dist:mac": "electron-builder --config electron-builder.config.cjs --mac",
+    "dist:linux": "electron-builder --config electron-builder.config.cjs --linux"
   },
   "dependencies": {},
   "devDependencies": {
@@ -20,17 +23,49 @@
     "productName": "MyHarness",
     "files": [
       "main.js",
-      "app-preload.js",
-      "../backend/**",
-      "../frontend/dist/**",
-      "../utils/**",
-      "../run.sh"
+      "app-preload.js"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!agent/agent_config.yaml.bak",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/.tool_cache/**"
+        ]
+      },
+      {
+        "from": "../frontend/dist",
+        "to": "frontend/dist"
+      },
+      {
+        "from": "../skills",
+        "to": "skills"
+      },
+      {
+        "from": "../requirements.txt",
+        "to": "requirements.txt"
+      },
+      {
+        "from": "../.venv",
+        "to": ".venv"
+      }
     ],
     "directories": {
       "output": "dist"
     },
     "win": {
       "target": "nsis"
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Development"
     }
   }
 }

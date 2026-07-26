@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import utils
+import skill_registry
 
 
 CLAUDE_PROVIDER_ID = "claude-agent"
@@ -36,6 +37,16 @@ def _canonical_allowed_roots(allowed_roots: list[str]) -> list[str]:
     return list(dict.fromkeys(roots))
 
 
+def _path_is_within(path: Path, roots: list[str]) -> bool:
+    for root in roots:
+        try:
+            path.relative_to(Path(root))
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 def _allowed_paths_block() -> str:
     roots = _canonical_allowed_roots(utils.ALLOWED_PATHS)
     if not roots:
@@ -49,6 +60,7 @@ def build_system_prompt_append(meta) -> str:
 Answer clearly and directly; most questions need no tool at all.
 
 {_allowed_paths_block()}
+{skill_registry.prompt_fragment()}
 
 Rules:
 - Read, write, modify, list, and search only inside the allowed filesystem roots above.
@@ -58,6 +70,7 @@ Rules:
 Context: project={meta.project_id}, task={meta.task_id}
 
 {_allowed_paths_block()}
+{skill_registry.prompt_fragment()}
 
 Rules:
 - Read, write, modify, list, and search only inside the allowed filesystem roots above.
@@ -154,7 +167,7 @@ class ClaudeAgentProvider:
         if not workspace_path.is_dir():
             ui.show_error(f"Workspace is not a directory: {workspace_path}")
             return
-        if self.allowed_roots and not utils.is_path_allowed(str(workspace_path)):
+        if self.allowed_roots and not _path_is_within(workspace_path, self.allowed_roots):
             ui.show_error(f"Workspace {workspace_path} is not within allowed paths.")
             return
 

@@ -33,6 +33,8 @@ def health():
         "verbose": utils.UI_VERBOSE_TOOLS,
         "app_name": utils.APP_NAME,
         "splash_ascii": utils.SPLASH_ASCII,
+        "native_enabled": web_app._native_available(),
+        "default_provider": utils.DEFAULT_PROVIDER,
         "codex_enabled": web_app._codex_app_server_available(),
         "codex_app_server_enabled": web_app._codex_app_server_available(),
         "claude_agent_enabled": web_app._claude_agent_available(),

@@ -462,7 +462,7 @@ def _require_git_writes() -> None:
     if not utils.GIT_WRITES_ENABLED:
         raise HTTPException(
             status_code=403,
-            detail="Git write operations are disabled. Enable ui.git_writes_enabled to commit from MyHarness.",
+            detail=f"Git write operations are disabled. Enable ui.git_writes_enabled to commit from {utils.APP_NAME}.",
         )
 
 

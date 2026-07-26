@@ -35,17 +35,22 @@ export default function Sidebar() {
   }, [dispatch, state.projects])
 
   const createSession = useCallback(async (projectId, taskId, provider) => {
-    if (!provider && (state.codexAppServerEnabled || state.claudeAgentEnabled)) {
+    const providers = [
+      state.nativeEnabled && 'native',
+      state.codexAppServerEnabled && 'codex-app-server',
+      state.claudeAgentEnabled && 'claude-agent',
+    ].filter(Boolean)
+    if (!provider && providers.length !== 1) {
       dispatch({ type: 'OPEN_PROVIDER_PICKER', payload: { projectId, taskId } })
       return
     }
     try {
-      const meta = await tree.createSession(projectId, taskId, '', provider || 'native')
+      const meta = await tree.createSession(projectId, taskId, '', provider || providers[0])
       await selectSession(meta.id)
     } catch (err) {
       console.error('Failed to create session:', err)
     }
-  }, [tree, selectSession, state.codexAppServerEnabled, state.claudeAgentEnabled, dispatch])
+  }, [tree, selectSession, state.nativeEnabled, state.codexAppServerEnabled, state.claudeAgentEnabled, dispatch])
 
   const deleteSession = useCallback(async (sessionId, projectId, taskId) => {
     try {

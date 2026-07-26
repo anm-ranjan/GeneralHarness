@@ -308,9 +308,10 @@ class RemoteCliApp:
 
     def _prompt(self) -> str:
         label = self.session_id or "no-session"
-        return f"myharness:{label}> "
+        return f"harness:{label}> "
 
     def _print_banner(self, health: dict) -> None:
+        print(health.get("app_name") or "MyHarness")
         print(f"Backend: {self.client.backend_url}")
         print(
             "Model: "
@@ -541,6 +542,7 @@ Commands:
   /session create <project_id> <task_id> [--provider native|codex|claude] [--title "..."]
   /session use <session_id>
   /clear
+  /skills [name]
   /chdir [directory|--reset]
   /cancel
   /exit

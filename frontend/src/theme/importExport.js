@@ -125,7 +125,7 @@ export function importPalette(text) {
 
   const palette = fromBase16(raw) || fromVsCode(raw) || fromMyHarness(raw)
   if (!palette) {
-    return { error: 'Unrecognised theme. Expected a base16 scheme, a VS Code theme, or a MyHarness palette.' }
+    return { error: 'Unrecognised theme. Expected a base16 scheme, a VS Code theme, or a Harness palette.' }
   }
   // Strip the `undefined`s so the stored palette stays small and derivable.
   return { palette: JSON.parse(JSON.stringify(palette)) }

@@ -201,8 +201,9 @@ const MINIMAL = {
 test('everything-enabled run emits exactly the answered values', () => {
   const out = buildConfig(EVERYTHING, TEMPLATE);
 
+  assert.equal(readKey(out, 'api.enabled'), true);
   assert.equal(readKey(out, 'api.base_url'), 'https://openrouter.ai/api/v1');
-  assert.equal(readKey(out, 'api.api_key'), 'sk-or-secret#with"quotes');
+  assert.equal(readKey(out, 'api.api_key'), '');
   for (const role of ['default', 'read', 'write', 'summary']) {
     assert.equal(readKey(out, `models.${role}`), 'openai/gpt-5.2', role);
   }
@@ -226,7 +227,7 @@ test('everything-enabled run emits exactly the answered values', () => {
   assert.equal(readKey(out, 'audio.enabled'), true);
   assert.equal(readKey(out, 'audio.transcription.processor'), 'api');
   assert.equal(readKey(out, 'audio.transcription.api_base_url'), 'https://api.openai.com/v1');
-  assert.equal(readKey(out, 'audio.transcription.api_key'), 'sk-stt-key');
+  assert.equal(readKey(out, 'audio.transcription.api_key'), '');
   assert.equal(readKey(out, 'audio.transcription.model'), 'whisper-1');
 
   assert.equal(readKey(out, 'codex_app_server.enabled'), true);
@@ -240,6 +241,7 @@ test('everything-enabled run emits exactly the answered values', () => {
 test('minimal run emits exactly the answered values', () => {
   const out = buildConfig(MINIMAL, TEMPLATE);
 
+  assert.equal(readKey(out, 'api.enabled'), false);
   assert.equal(readKey(out, 'api.api_key'), '');
   assert.equal(readKey(out, 'models.default'), 'qwen/qwen3-coder-next');
   assert.equal(readKey(out, 'permissions.approval_mode'), 'always_ask');

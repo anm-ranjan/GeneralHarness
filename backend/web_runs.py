@@ -9,6 +9,7 @@ import time
 
 import utils
 import harness_agent as agent
+import skill_registry
 from codex_app_server_provider import CodexAppServerProvider
 from claude_agent_provider import CLAUDE_PROVIDER_ID, ClaudeAgentProvider
 from web_models import EventType
@@ -62,6 +63,8 @@ def _message_block_detail(meta, text: str, workspace_root: str, image_count: int
         return "Codex App Server is unavailable. Run /model native to migrate this session before sending messages."
     if meta.provider == CLAUDE_PROVIDER_ID and not web_app._claude_agent_available():
         return "The Claude provider is unavailable. Run /model native to migrate this session before sending messages."
+    if meta.provider == "native" and not web_app._native_available():
+        return "The Native provider is unavailable because MYHARNESS_API_KEY is not set. Run /model codex or /model claude."
     if meta.provider == "codex-app-server":
         external_refs = web_helpers._codex_external_path_refs(text, workspace_root)
         if external_refs:
@@ -258,6 +261,7 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
                     max_turns=utils.CLAUDE_AGENT_MAX_TURNS,
                     allowed_roots=utils.ALLOWED_PATHS,
                     approval_mode=run_settings["approval_mode"],
+                    cli_path=utils.CLAUDE_AGENT_BINARY,
                 )
                 prompt = web_helpers._codex_prompt_with_attachments(text, saved_attachments, workspace_root)
                 _aio.run(provider.run(
@@ -357,6 +361,28 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
 
     if lowered == "/chdir" or (lowered.startswith("/chdir") and len(lowered) > 6 and lowered[6].isspace()):
         await _handle_chdir_command(session_id, command, workspace_root)
+        _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
+        return True
+
+    if lowered == "/skills" or (lowered.startswith("/skills") and len(lowered) > 7 and lowered[7].isspace()):
+        skill_name = command[len("/skills"):].strip()
+        if not skill_name or skill_name.lower() == "list":
+            _emit_session_event(
+                session_id,
+                EventType.STATUS,
+                {"text": "Installed Harness skills:\n" + skill_registry.catalog_text()},
+            )
+        else:
+            try:
+                content = skill_registry.read_skill(skill_name)
+            except (OSError, UnicodeError, ValueError) as exc:
+                _emit_session_event(session_id, EventType.ERROR, {"text": str(exc)})
+            else:
+                _emit_session_event(
+                    session_id,
+                    EventType.STATUS,
+                    {"text": f"Skill: {skill_name}\n\n{content}"},
+                )
         _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
         return True
 
@@ -504,6 +530,15 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
                 session_id,
                 EventType.ERROR,
                 {"text": f"Unknown provider '{target_raw}'. Choose: native, codex, claude"},
+            )
+            _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
+            return True
+
+        if target == "native" and not web_app._native_available():
+            _emit_session_event(
+                session_id,
+                EventType.ERROR,
+                {"text": "The Native provider is disabled or MYHARNESS_API_KEY is not set."},
             )
             _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
             return True

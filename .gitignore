@@ -1,7 +1,6 @@
 # Secrets & config (agent_config.example.yaml is the committed template)
 backend/agent/agent_config.yaml
 backend/agent/agent_config.yaml.bak
-utils/Qsub_Windows/server_config.yaml
 *.env
 .env*
 

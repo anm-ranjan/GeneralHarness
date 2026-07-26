@@ -14,4 +14,4 @@ prompt_toolkit>=3.0.0
 
 # TUI (optional, needed for --tui)
 textual>=0.79
-claude-agent-sdk
+claude-agent-sdk>=0.2.128,<0.3

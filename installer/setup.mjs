@@ -290,14 +290,18 @@ async function text(message, initial = '') {
   return String(value ?? '').trim();
 }
 
-async function secret(message) {
-  const { value } = await ask({ type: 'password', name: 'value', message });
-  return String(value ?? '').trim();
-}
-
 async function select(message, choices, initial = 0) {
   const { value } = await ask({ type: 'select', name: 'value', message, choices, initial });
   return value;
+}
+
+async function integer(message, initial, min = 0, max = Number.MAX_SAFE_INTEGER) {
+  for (;;) {
+    const raw = await text(message, String(initial));
+    const value = Number.parseInt(raw, 10);
+    if (Number.isInteger(value) && value >= min && value <= max) return value;
+    warn(`Enter an integer between ${min} and ${max}.`);
+  }
 }
 
 // ── steps ────────────────────────────────────────────────────────────
@@ -345,52 +349,100 @@ async function stepAppName() {
   return { appName, splashAscii: accept ? art : '' };
 }
 
+function cliAuthenticated(spec) {
+  const result = probe(spec.binary, spec.authStatusArgs);
+  if (!result.ok) return false;
+  if (spec.authJson) {
+    try {
+      const parsed = JSON.parse(result.out);
+      return parsed.loggedIn === true || parsed.authenticated === true;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
 async function stepCliProvider(spec) {
   heading(spec.title);
   const found = probe(spec.binary, ['--version']);
   if (found.ok) {
     ok(`${spec.binary} found${found.out ? ` (${found.out.split('\n')[0]})` : ''}.`);
-    const enable = await confirm(`Enable the ${spec.label} provider?`, true);
-    if (enable) notes.push(spec.loginNote);
-    return enable;
-  }
-
-  info(`${spec.binary} was not found on PATH.`);
-  const want = await confirm(`Do you want to use the ${spec.label} provider?`, false);
-  if (!want) return false;
-
-  const install = await confirm(`Install it now with "npm install -g ${spec.pkg}"?`, true);
-  if (install) {
-    if (run('npm', ['install', '-g', spec.pkg], { env: npmEnv() })) {
-      ok(`${spec.pkg} installed.`);
-    } else {
-      fail(`Installing ${spec.pkg} failed. Install it manually, then re-run setup.`);
-      warn(`The ${spec.label} provider stays enabled in the config, but will not run until the CLI exists.`);
-    }
   } else {
-    warn(`Install it yourself with: npm install -g ${spec.pkg}`);
+    info(`${spec.binary} was not found on PATH.`);
+    const want = await confirm(`Do you want to use the ${spec.label} provider?`, false);
+    if (!want) return { enabled: false, binary: spec.binary, model: '', timeout: 1800 };
+
+    const install = await confirm(`Install it now with "npm install -g ${spec.pkg}"?`, true);
+    if (!install || !run('npm', ['install', '-g', spec.pkg], { env: npmEnv() })) {
+      fail(`Installing ${spec.pkg} failed or was skipped. The ${spec.label} provider remains disabled.`);
+      return { enabled: false, binary: spec.binary, model: '', timeout: 1800 };
+    }
+    ok(`${spec.pkg} installed.`);
   }
-  notes.push(spec.loginNote);
-  return true;
+
+  if (!cliAuthenticated(spec)) {
+    warn(`${spec.label} is installed but not authenticated.`);
+    if (await confirm(`Authenticate ${spec.label} now?`, true)) {
+      run(spec.binary, spec.authLoginArgs);
+    }
+  }
+  if (!cliAuthenticated(spec)) {
+    fail(`${spec.label} authentication could not be verified. The provider remains disabled.`);
+    notes.push(`${spec.label}: authenticate with "${spec.binary} ${spec.authLoginArgs.join(' ')}", then re-run setup. ${spec.docs}`);
+    return { enabled: false, binary: spec.binary, model: '', timeout: 1800 };
+  }
+
+  ok(`${spec.label} authentication verified.`);
+  const enable = await confirm(`Enable the ${spec.label} provider?`, true);
+  if (!enable) return { enabled: false, binary: spec.binary, model: '', timeout: 1800 };
+  const model = await text(`${spec.label} model override (blank uses CLI default)`, '');
+  const timeout = await integer(`${spec.label} run timeout in seconds`, 1800, 30, 86400);
+  const settings = { enabled: true, binary: spec.binary, model, timeout };
+  if (spec.label === 'Codex') {
+    settings.reasoning = await select('Codex reasoning effort', [
+      { title: 'low', value: 'low' },
+      { title: 'medium', value: 'medium' },
+      { title: 'high', value: 'high' },
+    ]);
+  } else {
+    settings.maxTurns = await integer('Claude maximum turns (0 means SDK default)', 0, 0, 10000);
+    settings.permissionMode = await select('Claude permission mode', [
+      { title: 'derive from Harness approval mode', value: '' },
+      { title: 'default', value: 'default' },
+      { title: 'acceptEdits', value: 'acceptEdits' },
+      { title: 'plan', value: 'plan' },
+    ]);
+  }
+  return settings;
 }
 
 async function stepNativeProvider() {
   heading('Native provider (OpenAI-compatible API)');
-  info('Used when neither CLI provider handles a run. Leave the key blank to skip.');
-  const baseUrl = (await text('API base URL', 'https://openrouter.ai/api/v1')) || 'https://openrouter.ai/api/v1';
-  const apiKey = await secret('API key (stored in agent_config.yaml; MYHARNESS_API_KEY overrides it)');
-  const model = (await text('Default model id', 'openai/gpt-5.2')) || 'openai/gpt-5.2';
-  if (!apiKey) {
-    warn('No API key entered. Export MYHARNESS_API_KEY before launching, or rely on a CLI provider.');
+  const enabled = Boolean((process.env.MYHARNESS_API_KEY || '').trim());
+  info('Native is enabled only when MYHARNESS_API_KEY is exported; secrets are never written to YAML.');
+  if (!enabled) {
+    warn('MYHARNESS_API_KEY is not set. Native will be skipped for this installation.');
+    notes.push('To enable Native later, export MYHARNESS_API_KEY and set api.enabled: true.');
+  } else {
+    ok('MYHARNESS_API_KEY is set in this environment.');
   }
-  return { baseUrl, apiKey, model };
+  const baseUrl = (await text('API base URL', 'https://openrouter.ai/api/v1')) || 'https://openrouter.ai/api/v1';
+  const model = (await text('Default model id', 'openai/gpt-5.2')) || 'openai/gpt-5.2';
+  const timeout = await integer('Native API timeout in seconds', 120, 10, 86400);
+  const maxIterations = await integer('Native maximum agent iterations', 20, 1, 10000);
+  return { enabled, baseUrl, apiKey: '', model, timeout, maxIterations };
 }
 
 async function stepAudio(pythonInfo) {
   heading('Voice dictation (speech to text)');
   const enabled = await confirm('Enable voice dictation in the web UI?', false);
   if (!enabled) {
-    return { enabled: false, processor: 'local', server: '', appDir: '/opt/apps/whisperAudio', apiBaseUrl: '', apiKey: '', model: 'small' };
+    return {
+      enabled: false, processor: 'local', server: '', username: '', keyFile: '',
+      appDir: '/opt/apps/whisperAudio', apiBaseUrl: '', apiKey: '', model: 'small',
+      language: '', device: 'cpu', timeout: 1800, maxUploadMb: 500,
+    };
   }
 
   const processor = await select('Which transcription backend?', [
@@ -403,14 +455,25 @@ async function stepAudio(pythonInfo) {
     enabled: true,
     processor,
     server: '',
+    username: '',
+    keyFile: '',
     appDir: '/opt/apps/whisperAudio',
     apiBaseUrl: '',
     apiKey: '',
     model: 'small',
+    language: '',
+    device: 'cpu',
+    timeout: 1800,
+    maxUploadMb: 500,
   };
 
   if (processor === 'local') {
     audio.model = (await text('faster-whisper model size (tiny/base/small/medium/large-v3)', 'small')) || 'small';
+    audio.device = await select('Transcription device', [
+      { title: 'cpu', value: 'cpu' },
+      { title: 'auto (try CUDA, then CPU)', value: 'auto' },
+      { title: 'cuda', value: 'cuda' },
+    ]);
     if (await confirm('Install faster-whisper into ./.venv now?', true)) {
       if (pythonInfo && pythonInfo.pip) {
         if (run(pythonInfo.pip[0], [...pythonInfo.pip.slice(1), 'install', 'faster-whisper'])) {
@@ -423,26 +486,43 @@ async function stepAudio(pythonInfo) {
       }
     }
   } else if (processor === 'remote') {
-    audio.server = await text('SSH host or server name (blank uses the first configured server)', '');
+    audio.server = await text('SSH host name or IP address', '');
+    audio.username = await text('SSH username (blank uses the SSH default)', '');
+    audio.keyFile = await text('SSH private key path (blank uses ~/.ssh/id_rsa)', '');
     audio.appDir = (await text('Remote app directory (must contain .venv/bin/python)', '/opt/apps/whisperAudio')) || '/opt/apps/whisperAudio';
     audio.model = (await text('faster-whisper model size on the remote host', 'small')) || 'small';
-    notes.push('Remote dictation: list the host in utils/Qsub_Windows/server_config.yaml (copy the .template file) and make sure key-based SSH works.');
+    audio.device = await select('Remote transcription device', [
+      { title: 'cuda', value: 'cuda' },
+      { title: 'cpu', value: 'cpu' },
+      { title: 'auto', value: 'auto' },
+    ]);
+    notes.push('Remote dictation requires key-based SSH and faster-whisper in the remote app virtual environment.');
   } else {
     audio.apiBaseUrl = (await text('STT API base URL', 'https://api.openai.com/v1')) || 'https://api.openai.com/v1';
-    audio.apiKey = await secret('STT API key (MYHARNESS_STT_API_KEY overrides it)');
     audio.model = (await text('STT model id', 'whisper-1')) || 'whisper-1';
-    if (!audio.apiKey) {
-      warn('No STT key entered. Export MYHARNESS_STT_API_KEY before launching.');
+    if (!(process.env.MYHARNESS_STT_API_KEY || '').trim()) {
+      warn('MYHARNESS_STT_API_KEY is not set. API dictation will remain unavailable until it is exported.');
+      notes.push('Export MYHARNESS_STT_API_KEY before using API voice dictation.');
+    } else {
+      ok('MYHARNESS_STT_API_KEY is set in this environment.');
     }
   }
+  audio.language = await text('Language code (blank enables automatic detection)', '');
+  audio.timeout = await integer('STT timeout in seconds', 1800, 10, 86400);
+  audio.maxUploadMb = await integer('Maximum voice upload size in MB', 500, 1, 4096);
   return audio;
 }
 
 async function stepFrontends() {
   heading('Frontends');
   const browser = await confirm('Set up the browser UI (build frontend/)?', true);
-  const desktop = await confirm('Set up the Electron desktop shell?', false);
+  const desktop = await confirm('Build an installable desktop package for this OS?', false);
+  const tui = await confirm('Build the Rust terminal UI?', true);
+  return { browser, desktop, tui };
+}
 
+function installFrontends({ browser, desktop, tui }, appName) {
+  heading('Building clients');
   if (browser || desktop) {
     info('Installing frontend dependencies...');
     if (npmInstallIn(path.join(REPO_ROOT, 'frontend'), ['--legacy-peer-deps'])) {
@@ -462,26 +542,46 @@ async function stepFrontends() {
     info('Installing Electron dependencies...');
     if (npmInstallIn(path.join(REPO_ROOT, 'electron'))) {
       ok('Electron dependencies installed.');
+      const target = IS_WINDOWS ? 'dist:win' : process.platform === 'darwin' ? 'dist:mac' : 'dist:linux';
+      if (run('npm', ['run', target], {
+        cwd: path.join(REPO_ROOT, 'electron'),
+        env: { ...npmEnv(), MYHARNESS_PRODUCT_NAME: appName },
+      })) {
+        ok(`Desktop package built in electron/dist for ${process.platform}.`);
+      } else {
+        fail(`Desktop package build failed. Run "npm run ${target}" in electron/ for details.`);
+      }
     } else {
       fail('Installing Electron dependencies failed. Run "npm ci" in electron/.');
     }
   }
 
-  return { browser, desktop };
+  if (tui) {
+    if (probe('cargo', ['--version']).ok) {
+      if (run('cargo', ['build', '--release', '--manifest-path', path.join(REPO_ROOT, 'tui-rs', 'Cargo.toml')])) {
+        ok('Rust TUI built in tui-rs/target/release.');
+      } else {
+        fail('Rust TUI build failed.');
+      }
+    } else {
+      fail('Rust was not found. Install it from https://rustup.rs and re-run setup.');
+    }
+  }
+
 }
 
 async function stepServerAndPermissions() {
   heading('Server and permissions');
 
-  const host = (await text('Backend bind address', '127.0.0.1')) || '127.0.0.1';
+  const host = (await text('Backend bind address for trusted LAN access', '0.0.0.0')) || '0.0.0.0';
   if (host === '0.0.0.0' || host === '::') {
     warn('The agent API has NO authentication. Binding ' + host + ' lets anyone on your');
     warn('network read and write your allowed workspaces and run shell commands.');
-    if (!(await confirm(`Really bind ${host}?`, false))) {
+    if (!(await confirm(`Confirm that ${host} is reachable only from a trusted LAN?`, false))) {
       info('Falling back to 127.0.0.1.');
       return stepServerAndPermissions();
     }
-    notes.push(`The backend binds ${host}. Put it behind a trusted proxy or a firewall.`);
+    notes.push(`The backend binds ${host} without application authentication. Keep it on a trusted LAN and firewall the port.`);
   }
 
   let port = 8420;
@@ -528,8 +628,27 @@ async function stepServerAndPermissions() {
 
   const verboseTools = await confirm('Show full tool input/output in the UI (verbose tools)?', false);
   const gitWrites = await confirm('Allow the Workspace Git panel to stage and commit?', false);
+  const dataDir = (await text('Persistent data directory', path.join(REPO_ROOT, 'data'))) || path.join(REPO_ROOT, 'data');
+  const loggingEnabled = await confirm('Enable application logging?', true);
+  const logDir = loggingEnabled
+    ? (await text('Log directory', path.join(REPO_ROOT, 'logs'))) || path.join(REPO_ROOT, 'logs')
+    : '';
+  const logLevel = loggingEnabled
+    ? await select('Log level', [
+      { title: 'info', value: 'info' },
+      { title: 'warning', value: 'warning' },
+      { title: 'debug', value: 'debug' },
+      { title: 'error', value: 'error' },
+    ])
+    : 'info';
+  const logRetentionDays = loggingEnabled
+    ? await integer('Log retention in days (0 keeps logs indefinitely)', 30, 0, 3650)
+    : 0;
 
-  return { host, port, allowedPaths, approvalMode, verboseTools, gitWrites };
+  return {
+    host, port, allowedPaths, approvalMode, verboseTools, gitWrites,
+    dataDir, loggingEnabled, logDir, logLevel, logRetentionDays,
+  };
 }
 
 function findPython() {
@@ -580,9 +699,13 @@ async function stepPythonEnv() {
 /** Apply the answers to the template text and return the finished YAML. */
 function buildConfig(answers, templateText) {
   const editor = new ConfigEditor(templateText);
+  const codex = typeof answers.codex === 'boolean' ? { enabled: answers.codex } : answers.codex;
+  const claude = typeof answers.claude === 'boolean' ? { enabled: answers.claude } : answers.claude;
 
+  editor.set(['api', 'enabled'], answers.native.enabled ?? Boolean(answers.native.apiKey));
   editor.set(['api', 'base_url'], answers.native.baseUrl);
-  editor.set(['api', 'api_key'], answers.native.apiKey);
+  editor.set(['api', 'api_key'], '');
+  editor.set(['api', 'timeout_seconds'], answers.native.timeout ?? 120);
   for (const role of ['default', 'read', 'write', 'summary']) {
     editor.set(['models', role], answers.native.model);
   }
@@ -592,6 +715,13 @@ function buildConfig(answers, templateText) {
 
   editor.set(['server', 'host'], answers.server.host);
   editor.set(['server', 'port'], answers.server.port);
+  editor.set(['agent', 'default_provider'], 'native');
+  editor.set(['agent', 'max_iterations'], answers.native.maxIterations ?? 20);
+  editor.set(['storage', 'data_dir'], answers.server.dataDir || '');
+  editor.set(['logging', 'enabled'], answers.server.loggingEnabled ?? true);
+  editor.set(['logging', 'log_dir'], answers.server.logDir || '');
+  editor.set(['logging', 'level'], answers.server.logLevel || 'info');
+  editor.set(['logging', 'retention_days'], answers.server.logRetentionDays ?? 30);
 
   editor.set(['ui', 'app_name'], answers.app.appName);
   editor.setBlockText(['ui', 'splash_ascii'], answers.app.splashAscii);
@@ -601,13 +731,28 @@ function buildConfig(answers, templateText) {
   editor.set(['audio', 'enabled'], answers.audio.enabled);
   editor.set(['audio', 'transcription', 'processor'], answers.audio.processor);
   editor.set(['audio', 'transcription', 'server'], answers.audio.server);
+  editor.set(['audio', 'transcription', 'username'], answers.audio.username || '');
+  editor.set(['audio', 'transcription', 'key_file'], answers.audio.keyFile || '');
   editor.set(['audio', 'transcription', 'app_dir'], answers.audio.appDir);
   editor.set(['audio', 'transcription', 'api_base_url'], answers.audio.apiBaseUrl);
-  editor.set(['audio', 'transcription', 'api_key'], answers.audio.apiKey);
+  editor.set(['audio', 'transcription', 'api_key'], '');
   editor.set(['audio', 'transcription', 'model'], answers.audio.model);
+  editor.set(['audio', 'transcription', 'language'], answers.audio.language || '');
+  editor.set(['audio', 'transcription', 'device'], answers.audio.device || 'cpu');
+  editor.set(['audio', 'transcription', 'timeout_seconds'], answers.audio.timeout ?? 1800);
+  editor.set(['audio', 'transcription', 'max_upload_mb'], answers.audio.maxUploadMb ?? 500);
 
-  editor.set(['codex_app_server', 'enabled'], answers.codex);
-  editor.set(['claude_agent', 'enabled'], answers.claude);
+  editor.set(['codex_app_server', 'enabled'], Boolean(codex.enabled));
+  editor.set(['codex_app_server', 'binary'], codex.binary || 'codex');
+  editor.set(['codex_app_server', 'model'], codex.model || null);
+  editor.set(['codex_app_server', 'timeout_seconds'], codex.timeout ?? 1800);
+  editor.set(['codex_app_server', 'reasoning_effort'], codex.reasoning || 'low');
+  editor.set(['claude_agent', 'enabled'], Boolean(claude.enabled));
+  editor.set(['claude_agent', 'binary'], claude.binary || 'claude');
+  editor.set(['claude_agent', 'model'], claude.model || null);
+  editor.set(['claude_agent', 'timeout_seconds'], claude.timeout ?? 1800);
+  editor.set(['claude_agent', 'max_turns'], claude.maxTurns ?? 0);
+  editor.set(['claude_agent', 'permission_mode'], claude.permissionMode || '');
 
   editor.set(['desktop', 'enabled'], answers.frontends.desktop);
   editor.set(['desktop', 'backend_url'], `http://${answers.server.host === '0.0.0.0' ? '127.0.0.1' : answers.server.host}:${answers.server.port}`);
@@ -636,14 +781,15 @@ function summary(answers) {
     console.log('     ./run.sh --dev        backend + Vite dev server (hot reload)');
   }
   if (answers.frontends.desktop) {
-    console.log('     ./run.sh --electron   Electron desktop shell');
+    console.log('     electron/dist/        installable desktop package for this OS');
+    console.log('     ./run.sh --electron   unpackaged Electron desktop shell');
   }
-  console.log('     ./run.sh --tui        Rust TUI');
+  if (answers.frontends.tui) console.log('     ./run.sh --tui        Rust TUI');
   console.log('     ./run.sh --cli        terminal CLI');
   console.log('');
   console.log(`   ${bold('Config')}   ${TARGET_CONFIG}`);
   console.log(`   ${bold('Python')}   ./.venv (run.sh and Electron pick this up automatically)`);
-  console.log(`   ${bold('Secrets')}  MYHARNESS_API_KEY and MYHARNESS_STT_API_KEY override the keys in the config.`);
+  console.log(`   ${bold('Secrets')}  API keys are not written to YAML; export MYHARNESS_API_KEY and MYHARNESS_STT_API_KEY.`);
 
   if (notes.length) {
     console.log('');
@@ -676,7 +822,10 @@ async function main() {
     label: 'Codex',
     binary: 'codex',
     pkg: '@openai/codex',
-    loginNote: 'Run "codex login" once to authenticate the Codex CLI with your subscription.',
+    authStatusArgs: ['login', 'status'],
+    authLoginArgs: ['login'],
+    authJson: false,
+    docs: 'https://learn.chatgpt.com/docs/codex/cli',
   });
 
   const claude = await stepCliProvider({
@@ -684,17 +833,24 @@ async function main() {
     label: 'Claude',
     binary: 'claude',
     pkg: '@anthropic-ai/claude-code',
-    loginNote: 'Run "claude" once and complete the login to authenticate with your subscription.',
+    authStatusArgs: ['auth', 'status', '--json'],
+    authLoginArgs: ['auth', 'login'],
+    authJson: true,
+    docs: 'https://code.claude.com/docs/en/authentication',
   });
 
   const native = await stepNativeProvider();
+  if (!native.enabled && !codex.enabled && !claude.enabled) {
+    warn('No authenticated provider is enabled. Setup will finish, but agent sessions cannot run until one is configured.');
+  }
   const pythonInfo = await stepPythonEnv();
   const audio = await stepAudio(pythonInfo);
   const frontends = await stepFrontends();
   const server = await stepServerAndPermissions();
 
   const answers = { app, codex, claude, native, audio, frontends, server };
-  writeConfig(answers);
+  if (!writeConfig(answers)) return;
+  installFrontends(frontends, app.appName);
   summary(answers);
 }
 

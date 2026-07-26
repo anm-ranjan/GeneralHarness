@@ -41,7 +41,7 @@ four clients (React web UI, Electron shell, Rust TUI, CLI).
 - `audio_transcription.py` — speech to text. `config_from_utils()` builds an
   `AudioConfig` from the `utils` module constants; `transcribe_audio()`
   dispatches to `_transcribe_local` (faster-whisper), `_transcribe_remote`
-  (paramiko + SSH), or `_transcribe_api` (OpenAI-compatible endpoint). Errors
+  (direct paramiko + SSH config), or `_transcribe_api` (OpenAI-compatible endpoint). Errors
   are raised as `HTTPException` with a specific status code.
 - `git_status.py` — workspace source-control helpers.
 - `web_helpers.py`, `web_models.py`, `web_desktop.py` — shared helpers, Pydantic
@@ -56,6 +56,8 @@ four clients (React web UI, Electron shell, Rust TUI, CLI).
   module-level constant. Also owns path permissions (`ALLOWED_PATHS`,
   `register_allowed_path`), file/search/shell tools, caching, and
   `validate_startup_config()` / `print_startup_warnings()`.
+- `skill_registry.py` — discovers `skills/<name>/SKILL.md`, returns the skills
+  catalog, and safely reads one skill for the Native tools and `/skills`.
 - `tool_defs.py` — tool JSON schemas.
 - `codex_app_server_provider.py` — spawns the `codex` CLI and speaks its
   app-server protocol.
@@ -72,7 +74,7 @@ Three provider ids appear in `SessionMeta.provider`:
 
 | id | Module | Auth |
 |----|--------|------|
-| `native` | `harness_agent.py` | `api.api_key` / `MYHARNESS_API_KEY` |
+| `native` | `harness_agent.py` | `MYHARNESS_API_KEY` |
 | `codex-app-server` | `codex_app_server_provider.py` | `codex login` (subscription) |
 | `claude-agent` | `claude_agent_provider.py` | `claude` login (subscription) or `ANTHROPIC_API_KEY` |
 
@@ -135,7 +137,8 @@ data/
 ### Installer (`installer/setup.mjs`)
 
 ESM, run via `npm run setup` or `npx .`. It asks its questions, installs
-dependencies, creates `./.venv`, and writes `agent_config.yaml` by string-editing
+  dependencies, creates `./.venv`, writes `agent_config.yaml` by string-editing,
+  builds the selected clients, and can package Electron for the current OS
 `agent_config.example.yaml` so every comment survives. `ConfigEditor`, `findKey`,
 and `dedent` are exported for testing; `main()` only runs when the file is
 executed directly. When you add a config key, the installer only needs a change
@@ -187,6 +190,9 @@ if the user should be asked about it.
 - Secrets support environment overrides that win over the file:
   `MYHARNESS_API_KEY` for `api.api_key`, `MYHARNESS_STT_API_KEY` for
   `audio.transcription.api_key`.
+- Repository skills live under `skills/<name>/SKILL.md`. Keep them
+  provider-independent; the Native provider reads them through skill tools and
+  Codex/Claude receive the same catalog in their appended instructions.
 - Defaults must be safe: loopback bind, `always_ask` approvals, git writes off,
   empty `allowed_paths` in the example.
 - Tests patch `utils.ALLOWED_PATHS` per test, so an empty `allowed_paths` in the
@@ -205,7 +211,7 @@ if the user should be asked about it.
 - Keep `run.sh` and `run.cmd` behaviorally aligned where both platforms support
   the feature.
 - Do not commit secrets or runtime state. Gitignored: `agent_config.yaml`(+`.bak`),
-  `utils/Qsub_Windows/server_config.yaml`, `.env*`, `data/`, `logs/`, `*.log`,
+  `.env*`, `data/`, `logs/`, `*.log`,
   `CLAUDE.md`, Python caches, `.venv/`, root and per-package `node_modules/`,
   `frontend/dist/`, `electron/dist/`, `tui-rs/target/`. The root
   `package-lock.json` **is** committed.

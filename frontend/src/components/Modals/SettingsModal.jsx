@@ -35,7 +35,7 @@ const FILTERS = [
 ]
 
 export default function SettingsModal() {
-  const { dispatch } = useApp()
+  const { state, dispatch } = useApp()
   const originalSpec = useRef(loadSpec())
   const [spec, setSpec] = useState(originalSpec.current)
   const [customPalettes, setCustomPalettes] = useState(loadCustomPalettes)
@@ -310,7 +310,7 @@ export default function SettingsModal() {
           {importOpen && (
             <div className="border-t border-line pt-3 space-y-2">
               <p className="text-[12px] text-muted">
-                Paste a base16 scheme, a VS Code theme, or a MyHarness theme JSON.
+                Paste a base16 scheme, a VS Code theme, or a {state.appName} theme JSON.
               </p>
               <textarea
                 value={importText}

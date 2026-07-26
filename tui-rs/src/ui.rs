@@ -102,8 +102,13 @@ fn draw_queue_pane(frame: &mut Frame, app: &App, selected: usize) {
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
+    let app_name = if app.health.app_name.is_empty() {
+        "MyHarness"
+    } else {
+        app.health.app_name.as_str()
+    };
     let line = Line::from(vec![
-        Span::styled("MyHarness", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(app_name.to_owned(), Style::default().add_modifier(Modifier::BOLD)),
         Span::raw(format!(" · {}  ", app.backend_url)),
         Span::raw(format!(
             "approval: {}",
@@ -632,10 +637,10 @@ fn draw_modal(frame: &mut Frame, modal: &Modal) {
         Modal::Delete(form) => {
             let detail = match &form.target {
                 DeleteTarget::Project { session_count, .. } => format!(
-                    "Removes the project and {session_count} session(s) from MyHarness; workspace files stay untouched."
+                    "Removes the project and {session_count} session(s) from the Harness; workspace files stay untouched."
                 ),
                 DeleteTarget::Task { session_count, .. } => {
-                    format!("Removes the task and {session_count} session(s) from MyHarness.")
+                    format!("Removes the task and {session_count} session(s) from the Harness.")
                 }
                 DeleteTarget::Session { .. } => {
                     "Removes the transcript, events, attachments, and session data.".to_owned()
@@ -758,6 +763,9 @@ fn command_help_lines() -> Vec<Line<'static>> {
         Line::default(),
         Line::styled("/thinking [low|medium|high]", command),
         Line::raw("Show or set the session reasoning effort."),
+        Line::default(),
+        Line::styled("/skills [name]", command),
+        Line::raw("List installed Harness skills or display one skill's complete instructions."),
         Line::default(),
         Line::styled("/model [native|codex|claude]", command),
         Line::styled("  Codex aliases: app-server | codex-app-server", option),
@@ -963,6 +971,7 @@ mod tests {
             "/verbose",
             "/maxiters [positive integer]",
             "/thinking [low|medium|high]",
+            "/skills [name]",
             "/model [native|codex|claude]",
         ] {
             assert!(rendered.contains(command), "missing {command}");

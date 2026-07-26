@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 import utils
+import skill_registry
 
 
 class AppServerProtocolError(RuntimeError):
@@ -166,7 +167,7 @@ class CodexAppServerClient:
         await self.transport.request(
             "initialize",
             {
-                "clientInfo": {"name": "myharness", "title": "MyHarness", "version": "0.1.0"},
+                "clientInfo": {"name": "myharness", "title": utils.APP_NAME, "version": "0.1.0"},
                 "capabilities": {"experimentalApi": experimental_api},
             },
             timeout=60,
@@ -309,6 +310,7 @@ def build_developer_instructions() -> str:
 - Treat paths outside those roots as unavailable. Ask the user to add the path to permissions.allowed_paths if needed.
 
 {_allowed_paths_block()}
+{skill_registry.prompt_fragment()}
 """
 
 

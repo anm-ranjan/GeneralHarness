@@ -14,6 +14,8 @@ export const initialState = {
 
   codexAppServerEnabled: false,
   claudeAgentEnabled: false,
+  nativeEnabled: false,
+  defaultProvider: 'native',
   appName: 'MyHarness',
   splashAscii: '',
   model: '',
@@ -148,6 +150,8 @@ export function reducer(state, action) {
         serverOnline: true,
         codexAppServerEnabled: !!(action.payload.codex_app_server_enabled ?? action.payload.codex_enabled),
         claudeAgentEnabled: !!action.payload.claude_agent_enabled,
+        nativeEnabled: !!action.payload.native_enabled,
+        defaultProvider: action.payload.default_provider || 'native',
         appName: action.payload.app_name || 'MyHarness',
         splashAscii: action.payload.splash_ascii || '',
         model: action.payload.model || '',

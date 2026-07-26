@@ -454,7 +454,7 @@ class InfoPanel(Static):
 class IpaAgentApp(App):
     """Textual TUI for the MyHarness coding agent."""
 
-    TITLE = "MyHarness Agent"
+    TITLE = f"{utils.APP_NAME} Agent"
     COMMANDS = App.COMMANDS | {HelpProvider}
     BINDINGS = [
         ("ctrl+q", "quit", "Quit"),
@@ -656,6 +656,19 @@ class IpaAgentApp(App):
             return
         if user_text.strip().lower() == "/verbose":
             self._toggle_verbose()
+            return
+        if user_text.strip().lower() == "/skills" or user_text.strip().lower().startswith("/skills "):
+            skill_name = user_text.strip()[len("/skills"):].strip()
+            try:
+                output = (
+                    utils.skill_registry.read_skill(skill_name)
+                    if skill_name and skill_name.lower() != "list"
+                    else utils.skill_registry.catalog_text()
+                )
+            except (OSError, UnicodeError, ValueError) as exc:
+                output = f"ERROR: {exc}"
+            self.query_one("#chat-panel", VerticalScroll).mount(TMarkdown(output, classes="assistant-msg"))
+            self._update_status("Skills")
             return
         if user_text.strip().lower().startswith("/cd"):
             self._handle_cd_command(user_text.strip())

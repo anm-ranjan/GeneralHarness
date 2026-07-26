@@ -8,7 +8,7 @@ const util = require("util");
 
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8420";
 
-const repoRoot = path.resolve(__dirname, "..");
+const repoRoot = app.isPackaged ? process.resourcesPath : path.resolve(__dirname, "..");
 const backendScript = path.join(repoRoot, "backend", "web_app.py");
 const appPreload = path.join(__dirname, "app-preload.js");
 const configPath = path.join(repoRoot, "backend", "agent", "agent_config.yaml");
@@ -22,6 +22,7 @@ let backendStartupError = null;
 let backendMode = "unknown";
 let activeBackendUrl = DEFAULT_BACKEND_URL;
 let isQuitting = false;
+let displayName = process.env.MYHARNESS_PRODUCT_NAME || "MyHarness";
 const TRAY_ICON_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAKklEQVR4AWP4//8/AyUYTFhYGJqYmP4TjBqMGoQajBqMGoQajBoAAHkCErL0fR93AAAAAElFTkSuQmCC";
 
 function logLine(level, args) {
@@ -234,10 +235,10 @@ async function resolveBackend() {
   console.log(`Resolving backend at ${activeBackendUrl}`);
   if (config.prefer_existing_backend !== false) {
     try {
-      await checkBackend(activeBackendUrl);
+      const health = await checkBackend(activeBackendUrl);
       backendMode = "configured";
       console.log(`Using configured backend at ${activeBackendUrl}`);
-      return;
+      return health;
     } catch {
       // Fall through to local sidecar when configured to do so.
     }
@@ -246,9 +247,15 @@ async function resolveBackend() {
     throw new Error(`Configured backend is unavailable: ${activeBackendUrl}`);
   }
   spawnLocalBackend(activeBackendUrl);
-  await waitForBackend(activeBackendUrl);
+  const health = await waitForBackend(activeBackendUrl);
   backendMode = "local";
   console.log(`Using local backend sidecar at ${activeBackendUrl}`);
+  return health;
+}
+
+function applyBranding(health) {
+  displayName = String(health?.app_name || displayName).trim() || "MyHarness";
+  app.setName(displayName);
 }
 
 function isAllowedMainUrl(targetUrl) {
@@ -363,7 +370,7 @@ function createMainWindow() {
       height: 920,
       minWidth: 1100,
       minHeight: 720,
-      title: "MyHarness",
+      title: displayName,
       webPreferences: {
         preload: appPreload,
         contextIsolation: true,
@@ -448,9 +455,9 @@ function buildTray() {
   if (appTray) return;
   const image = nativeImage.createFromDataURL(TRAY_ICON_DATA_URL);
   appTray = new Tray(image);
-  appTray.setToolTip("MyHarness");
+  appTray.setToolTip(displayName);
   appTray.setContextMenu(Menu.buildFromTemplate([
-    { label: "Show App", click: () => showMainWindow() },
+    { label: `Show ${displayName}`, click: () => showMainWindow() },
     { type: "separator" },
     { label: "Quit", click: () => quitApp() },
   ]));
@@ -525,15 +532,16 @@ app.whenReady()
   .then(async () => {
     wireAppSafetyHandlers();
     wireIpc();
+    const health = await resolveBackend();
+    applyBranding(health);
     buildAppMenu();
     buildTray();
-    await resolveBackend();
     createMainWindow();
   })
   .catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Electron startup failed: ${message}`);
-    dialog.showErrorBox("Startup failed", message);
+    dialog.showErrorBox(`${displayName} startup failed`, message);
     app.quit();
   });
 
