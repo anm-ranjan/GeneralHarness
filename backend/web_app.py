@@ -343,14 +343,32 @@ from web_routes.workspace import (  # noqa: F401
 
 # ── entry point ───────────────────────────────────────────────────
 
+def resolve_bind_address(env: dict[str, str] | None = None) -> tuple[str, int]:
+    """Resolve the uvicorn bind address.
+
+    Precedence: environment variable > server.* in agent_config.yaml > the
+    loopback default. A blank or unparseable value at any level falls through
+    to the next one, so a stray empty env var can never bind the process to
+    something unintended.
+    """
+    env = os.environ if env is None else env
+    host = (env.get("MYHARNESS_WEB_HOST") or "").strip() or utils.SERVER_HOST or "127.0.0.1"
+    raw_port = (env.get("MYHARNESS_WEB_PORT") or "").strip()
+    for candidate in (raw_port, utils.SERVER_PORT, 8420):
+        try:
+            port = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= port <= 65535:
+            break
+    else:
+        port = 8420
+    return host, port
+
+
 def main():
     global _uvicorn_server
-    # Precedence: environment variable > server.* in agent_config.yaml > default.
-    host = os.environ.get("MYHARNESS_WEB_HOST", "").strip() or utils.SERVER_HOST or "127.0.0.1"
-    try:
-        port = int(os.environ.get("MYHARNESS_WEB_PORT", "").strip() or utils.SERVER_PORT or 8420)
-    except ValueError:
-        port = 8420
+    host, port = resolve_bind_address()
     print(f"Starting {utils.APP_NAME} on http://{host}:{port}")
     utils.print_startup_warnings(host, port)
     print(f"Agent source: {_AGENT_DIR}")

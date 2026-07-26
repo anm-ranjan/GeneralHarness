@@ -177,6 +177,155 @@ class AudioTranscriptionTests(unittest.TestCase):
                 self.assertEqual(missing.exception.status_code, 500)
                 post.assert_not_called()
 
+    def test_api_result_shape_matches_the_local_processor(self):
+        """The composer consumes one dict shape regardless of processor."""
+        wav = base64.b64encode(b"RIFF----WAVEfmt ").decode("ascii")
+        payload = f"data:audio/wav;base64,{wav}"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            api_response = SimpleNamespace(
+                status_code=200,
+                text='{"text": "hello"}',
+                json=lambda: {"text": "hello", "language": "en", "language_probability": 0.98, "duration": 2.0},
+            )
+            with patch.object(audio_transcription.requests, "post", return_value=api_response):
+                api_result = audio_transcription.transcribe_audio(
+                    data_dir=str(Path(tmp) / "data"),
+                    session_id="ses_shape",
+                    audio_data=payload,
+                    mime="audio/wav",
+                    name="clip.wav",
+                    config=self._api_config(),
+                )
+
+            local_config = audio_transcription.AudioConfig(
+                enabled=True, processor="local", server="", app_dir="/opt/apps/whisperAudio",
+                model="small", timeout_seconds=1800, max_upload_mb=500,
+            )
+            local_payload = {"text": "hello", "language": "en", "language_probability": 0.98, "duration": 2.0}
+            with patch.object(audio_transcription, "_transcribe_local", return_value=local_payload):
+                local_result = audio_transcription.transcribe_audio(
+                    data_dir=str(Path(tmp) / "data"),
+                    session_id="ses_shape",
+                    audio_data=payload,
+                    mime="audio/wav",
+                    name="clip.wav",
+                    config=local_config,
+                )
+
+        self.assertEqual(sorted(api_result), sorted(local_result))
+        self.assertEqual(
+            sorted(api_result),
+            sorted([
+                "text", "language", "language_probability", "duration",
+                "processor", "model", "session_id", "voice_turn_id", "filename",
+            ]),
+        )
+        for key in ("text", "language", "language_probability", "duration", "session_id", "filename"):
+            self.assertEqual(api_result[key], local_result[key], key)
+        self.assertEqual(api_result["processor"], "api")
+        self.assertEqual(local_result["processor"], "local")
+        self.assertTrue(api_result["voice_turn_id"].startswith("voice_"))
+
+    def test_api_processor_writes_the_recording_and_closes_the_handle(self):
+        wav = base64.b64encode(b"RIFF----WAVEfmt ").decode("ascii")
+        captured = {}
+
+        def fake_post(url, **kwargs):
+            captured["handle"] = kwargs["files"]["file"][1]
+            captured["body"] = captured["handle"].read()
+            captured["mime"] = kwargs["files"]["file"][2]
+            captured["timeout"] = kwargs["timeout"]
+            return SimpleNamespace(status_code=200, text="", json=lambda: {"text": "ok"})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = str(Path(tmp) / "data")
+            with patch.object(audio_transcription.requests, "post", side_effect=fake_post):
+                result = audio_transcription.transcribe_audio(
+                    data_dir=data_dir,
+                    session_id="ses_file",
+                    audio_data=f"data:audio/wav;base64,{wav}",
+                    mime="audio/wav",
+                    name="clip.wav",
+                    config=self._api_config(),
+                )
+
+            # The uploaded bytes are the decoded recording, sent with its real mime.
+            self.assertEqual(captured["body"], b"RIFF----WAVEfmt ")
+            self.assertEqual(captured["mime"], "audio/wav")
+            self.assertEqual(captured["timeout"], 1800)
+            # No dangling file handle once transcribe_audio returns.
+            self.assertTrue(captured["handle"].closed)
+
+            saved = audio_transcription.local_audio_path(
+                data_dir, "ses_file", result["voice_turn_id"], "audio/wav"
+            )
+            self.assertTrue(saved.is_file())
+            self.assertEqual(saved.read_bytes(), b"RIFF----WAVEfmt ")
+
+    def test_api_processor_clamps_absurd_timeouts(self):
+        captured = {}
+
+        def fake_post(url, **kwargs):
+            captured["timeout"] = kwargs["timeout"]
+            return SimpleNamespace(status_code=200, text="", json=lambda: {"text": "ok"})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(audio_transcription.requests, "post", side_effect=fake_post):
+                audio_transcription.transcribe_audio(
+                    data_dir=str(Path(tmp) / "data"),
+                    session_id="ses_timeout",
+                    audio_data="data:audio/webm;base64,YQ==",
+                    mime="audio/webm",
+                    config=self._api_config(timeout_seconds=10**9),
+                )
+        self.assertEqual(captured["timeout"], 24 * 60 * 60)
+
+    def test_api_processor_maps_transport_and_payload_failures(self):
+        cases = [
+            (audio_transcription.requests.RequestException("boom"), 502, "request failed"),
+            (None, 502, "invalid JSON"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            # Transport failure.
+            with patch.object(audio_transcription.requests, "post", side_effect=cases[0][0]):
+                with self.assertRaises(HTTPException) as transport:
+                    audio_transcription.transcribe_audio(
+                        data_dir=str(Path(tmp) / "data"), session_id="s",
+                        audio_data="data:audio/webm;base64,YQ==", mime="audio/webm",
+                        config=self._api_config(),
+                    )
+            self.assertEqual(transport.exception.status_code, 502)
+
+            # Non-JSON body.
+            def bad_json():
+                raise ValueError("not json")
+
+            with patch.object(
+                audio_transcription.requests, "post",
+                return_value=SimpleNamespace(status_code=200, text="<html>", json=bad_json),
+            ):
+                with self.assertRaises(HTTPException) as invalid:
+                    audio_transcription.transcribe_audio(
+                        data_dir=str(Path(tmp) / "data"), session_id="s",
+                        audio_data="data:audio/webm;base64,YQ==", mime="audio/webm",
+                        config=self._api_config(),
+                    )
+            self.assertEqual(invalid.exception.status_code, 502)
+
+            # Empty transcript.
+            with patch.object(
+                audio_transcription.requests, "post",
+                return_value=SimpleNamespace(status_code=200, text="", json=lambda: {"text": "   "}),
+            ):
+                with self.assertRaises(HTTPException) as empty:
+                    audio_transcription.transcribe_audio(
+                        data_dir=str(Path(tmp) / "data"), session_id="s",
+                        audio_data="data:audio/webm;base64,YQ==", mime="audio/webm",
+                        config=self._api_config(),
+                    )
+            self.assertEqual(empty.exception.status_code, 422)
+
     def test_config_from_utils_reads_api_keys(self):
         stub = SimpleNamespace(
             AUDIO_ENABLED=True,

@@ -19,8 +19,22 @@ import { existsSync, copyFileSync, readFileSync, writeFileSync, statSync } from 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import figlet from 'figlet';
-import prompts from 'prompts';
+// Loaded dynamically so a fresh clone that has not run `npm install` gets a
+// one-line instruction instead of a raw ERR_MODULE_NOT_FOUND stack trace.
+// `npx .` installs these for us; `npm run setup` expects them to be present.
+let figlet;
+let prompts;
+try {
+  ({ default: figlet } = await import('figlet'));
+  ({ default: prompts } = await import('prompts'));
+} catch (error) {
+  if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+  console.error('\nThe setup wizard needs its dependencies installed first.\n');
+  console.error('  npm install && npm run setup');
+  console.error('\nOr let npm handle it for you:\n');
+  console.error('  npx .\n');
+  process.exit(1);
+}
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const AGENT_DIR = path.join(REPO_ROOT, 'backend', 'agent');
@@ -288,10 +302,10 @@ async function select(message, choices, initial = 0) {
 
 // ── steps ────────────────────────────────────────────────────────────
 
-async function stepExistingConfig() {
-  if (!existsSync(TARGET_CONFIG)) return true;
+async function stepExistingConfig(target = TARGET_CONFIG) {
+  if (!existsSync(target)) return true;
   heading('Existing configuration');
-  info(`${TARGET_CONFIG} already exists.`);
+  info(`${target} already exists.`);
   const overwrite = await confirm('Overwrite it with the answers from this run?', false);
   if (!overwrite) {
     console.log('');
@@ -299,8 +313,8 @@ async function stepExistingConfig() {
     return false;
   }
   if (await confirm('Back it up to agent_config.yaml.bak first?', true)) {
-    copyFileSync(TARGET_CONFIG, `${TARGET_CONFIG}.bak`);
-    ok(`Backed up to ${TARGET_CONFIG}.bak`);
+    copyFileSync(target, `${target}.bak`);
+    ok(`Backed up to ${target}.bak`);
   }
   return true;
 }
@@ -563,14 +577,9 @@ async function stepPythonEnv() {
   return { venvDir, venvPython, pip };
 }
 
-function writeConfig(answers) {
-  heading('Writing configuration');
-  if (!existsSync(EXAMPLE_CONFIG)) {
-    fail(`Template not found: ${EXAMPLE_CONFIG}`);
-    return false;
-  }
-
-  const editor = new ConfigEditor(readFileSync(EXAMPLE_CONFIG, 'utf8'));
+/** Apply the answers to the template text and return the finished YAML. */
+function buildConfig(answers, templateText) {
+  const editor = new ConfigEditor(templateText);
 
   editor.set(['api', 'base_url'], answers.native.baseUrl);
   editor.set(['api', 'api_key'], answers.native.apiKey);
@@ -603,8 +612,17 @@ function writeConfig(answers) {
   editor.set(['desktop', 'enabled'], answers.frontends.desktop);
   editor.set(['desktop', 'backend_url'], `http://${answers.server.host === '0.0.0.0' ? '127.0.0.1' : answers.server.host}:${answers.server.port}`);
 
-  writeFileSync(TARGET_CONFIG, editor.toString(), 'utf8');
-  ok(`Wrote ${TARGET_CONFIG}`);
+  return editor.toString();
+}
+
+function writeConfig(answers, { example = EXAMPLE_CONFIG, target = TARGET_CONFIG } = {}) {
+  heading('Writing configuration');
+  if (!existsSync(example)) {
+    fail(`Template not found: ${example}`);
+    return false;
+  }
+  writeFileSync(target, buildConfig(answers, readFileSync(example, 'utf8')), 'utf8');
+  ok(`Wrote ${target}`);
   return true;
 }
 
@@ -692,4 +710,14 @@ if (invokedDirectly) {
   });
 }
 
-export { ConfigEditor, findKey, dedent };
+export {
+  ConfigEditor,
+  buildConfig,
+  writeConfig,
+  stepExistingConfig,
+  findKey,
+  dedent,
+  yamlScalar,
+  EXAMPLE_CONFIG,
+  TARGET_CONFIG,
+};

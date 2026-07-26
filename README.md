@@ -9,7 +9,7 @@ The same backend drives four clients: a React web UI, an Electron desktop shell,
 a Rust terminal UI, and a plain CLI.
 
 ```
-npx .            # or: npm run setup
+npx .            # interactive setup wizard
 ./run.sh         # http://127.0.0.1:8420
 ```
 
@@ -77,7 +77,9 @@ existing session over, carrying the completed context across.
 From the repository root:
 
 ```bash
-npm run setup      # equivalently: npx .
+npx .                             # installs the wizard's deps, then runs it
+# or, if you prefer to install them yourself:
+npm install && npm run setup
 ```
 
 The interactive installer asks for everything it needs and does the rest:
@@ -187,8 +189,10 @@ audio:
 
 - `local` — needs `faster-whisper` in the backend's environment; `model` is a
   size (`tiny`, `base`, `small`, `medium`, `large-v3`).
-- `remote` — uploads to a host listed in `utils/Qsub_Windows/server_config.yaml`
-  over SSH and runs faster-whisper there on GPU. Set `server` and `app_dir`.
+- `remote` — uploads over SSH to a host listed in
+  `utils/Qsub_Windows/server_config.yaml` (copy it from the shipped
+  `server_config.yaml.template`) and runs faster-whisper there on GPU. Set
+  `server` and `app_dir`.
 - `api` — POSTs multipart `file` + `model` to
   `{api_base_url}/audio/transcriptions` with a bearer token; `model` is the
   remote model id.
@@ -245,6 +249,9 @@ missing or empty allowed paths, `auto_approve`, and a `0.0.0.0` bind.
 # Frontend tests and production build
 (cd frontend && npm test)
 (cd frontend && npm run build)
+
+# Setup wizard (config writer, overwrite/backup paths)
+node --test installer/setup.test.mjs
 
 # Rust TUI
 cargo test --manifest-path tui-rs/Cargo.toml

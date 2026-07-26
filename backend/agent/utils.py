@@ -338,7 +338,12 @@ def validate_startup_config(host: str = "", port: int = 0) -> list:
                 "backend/agent/agent_config.yaml or export MYHARNESS_API_KEY."
             )
 
-    configured_paths = normalize_allowed_paths(nested_get(CONFIG, ["permissions", "allowed_paths"], []))
+    # Validate the list the agent actually enforces, not the raw file: an
+    # embedder (or register_allowed_path) can widen it after import, and
+    # warning about paths that are not in effect would be misleading.
+    configured_paths = ALLOWED_PATHS or normalize_allowed_paths(
+        nested_get(CONFIG, ["permissions", "allowed_paths"], [])
+    )
     if not configured_paths:
         warnings.append(
             "permissions.allowed_paths is empty, so the agent falls back to the current "
