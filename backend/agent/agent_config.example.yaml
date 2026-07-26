@@ -1,0 +1,140 @@
+api:
+  base_url: https://openrouter.ai/api/v1
+  api_key: YOUR_API_KEY_HERE
+  streaming: true          # stream assistant tokens live in the web UI
+  # OpenRouter only: one provider slug or an ordered list. Requests are limited
+  # to these providers and try list entries in order. Ignored for other hosts.
+  # provider: together
+  # provider: [together, deepinfra, fireworks]
+
+models:
+  default: qwen/qwen3-coder-next
+  read:    qwen/qwen3-coder-next
+  write:   qwen/qwen3-coder-next
+  summary: qwen/qwen3-coder-next
+
+permissions:
+  # always_ask: ask before file_write, file_replace, apply_patch, and shell_run
+  # shell_only: ask only before shell_run
+  # auto_approve: do not ask before risky tools
+  approval_mode: always_ask
+  # Absolute directories the agent may read and write. The setup installer fills
+  # this in; an empty list falls back to the current working directory.
+  allowed_paths: []
+
+memory:
+  context_limit_tokens: 200000
+  compact_threshold_tokens: 50000
+  keep_recent_messages: 8
+  tool_compress_threshold_chars: 500
+
+limits:
+  max_file_size: 8000000
+  max_tool_output: 10000
+
+search:
+  max_results: 100
+  rg_path: ""
+
+gather:
+  # Max concurrent workers for one gather_context tool call. Clamped to 1..32.
+  # The effective count is also bounded by the number of jobs in the batch.
+  max_workers: 8
+
+python:
+  # Absolute Python interpreter recommended for shell_run python calls.
+  # Leave empty to use the interpreter running the backend.
+  # Windows example: C:\Users\you\IPA\.venv\Scripts\python.exe
+  interpreter: ""
+
+agent:
+  max_iterations: 20
+  tool_call_checkpoint: 20
+
+shell:
+  default_timeout: 120
+
+server:
+  # Bind address for the FastAPI backend. 127.0.0.1 keeps it on this machine;
+  # 0.0.0.0 exposes an UNAUTHENTICATED agent API to your whole network.
+  # MYHARNESS_WEB_HOST / MYHARNESS_WEB_PORT override these.
+  host: 127.0.0.1
+  port: 8420
+
+logging:
+  enabled: true
+  # Empty means "<repo>/logs". Relative paths resolve against the repo root.
+  log_dir: ""
+
+ui:
+  rich: auto
+  verbose_tools: true
+  # Display name for the app (window titles, splash screen, sidebar).
+  app_name: "MyHarness"
+  # Optional multi-line ASCII-art logo for the splash screen. The setup
+  # installer generates one from the app name; leave empty for plain text.
+  splash_ascii: ""
+  # When true, the Workspace "Git" panel may stage and commit in the workspace repo.
+  # Read-only status/diff is always available; writes stay disabled by default.
+  git_writes_enabled: false
+
+audio:
+  enabled: false
+  transcription:
+    # local:  run faster-whisper on the FastAPI backend machine.
+    # remote: upload browser audio to a server from utils/Qsub_Windows/server_config.yaml.
+    # api:    POST the audio to an OpenAI-compatible /audio/transcriptions endpoint.
+    processor: local
+    # Remote mode only. Blank uses the first server; otherwise match a name or hostname.
+    server: ""
+    # Remote mode uses {app_dir}/.venv/bin/python and stores requests under
+    # {app_dir}/myharness/{session_id}/{voice_turn_id}/.
+    app_dir: /opt/apps/whisperAudio
+    # api mode only. Root of an OpenAI-compatible API, e.g. https://api.openai.com/v1
+    # ("/audio/transcriptions" is appended).
+    api_base_url: ""
+    # api mode only. The MYHARNESS_STT_API_KEY environment variable overrides this.
+    api_key: ""
+    # local/remote: a faster-whisper size (tiny/base/small/medium/large-v3).
+    # api: the remote model id, e.g. whisper-1.
+    model: small
+    timeout_seconds: 1800
+    max_upload_mb: 500
+
+codex_app_server:
+  enabled: false
+  binary: codex
+  listen: stdio://
+  sandbox: workspace-write
+  approval_policy: on-request
+  timeout_seconds: 1800
+  model: null
+  reasoning_effort: low
+  experimental_api: false
+
+claude_agent:
+  # Claude provider via the Claude Agent SDK (runs the local `claude` CLI).
+  # Authentication uses your Claude Code login (subscription) or ANTHROPIC_API_KEY.
+  enabled: false
+  # Binary checked for availability (must be on PATH).
+  binary: claude
+  # Model override; null uses your Claude Code default.
+  model: null
+  # Permission mode override: default | acceptEdits | bypassPermissions | plan.
+  # Empty derives it from the harness approval mode.
+  permission_mode: ""
+  timeout_seconds: 1800
+  # 0 uses the SDK default (unlimited turns within a run).
+  max_turns: 0
+
+desktop:
+  enabled: true
+  backend_url: "http://127.0.0.1:8420"
+  prefer_existing_backend: true
+  start_local_backend_fallback: true
+  electron_only: false
+  allowed_frontend_origins: []
+  # Disable Chromium hardware acceleration on Windows (workaround for locked-down
+  # clients that crash on GPU process launch). Set to false to re-enable the GPU
+  # and test rendering/startup performance.
+  disable_gpu: true

@@ -1,0 +1,46 @@
+# Secrets & config (agent_config.example.yaml is the committed template)
+backend/agent/agent_config.yaml
+backend/agent/agent_config.yaml.bak
+utils/Qsub_Windows/server_config.yaml
+*.env
+.env*
+
+# Runtime data
+data/
+testing/
+plan/
+Sessions/
+Instantiate.md
+logs/
+*.log
+
+# Claude
+CLAUDE.md
+
+# Python
+__pycache__/
+.tool_cache/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Installer (package-lock.json at the root IS committed)
+/node_modules/
+
+# Frontend build
+frontend/node_modules/
+frontend/dist/
+frontend/index.vanilla.html.bak
+electron/node_modules/
+electron/dist/
+tui-rs/target/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp

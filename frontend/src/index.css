@@ -1,0 +1,432 @@
+@import "tailwindcss";
+
+/* These are the defaults (the "Jarvis" palette). The theme engine in
+   src/theme/ overrides the same custom properties as inline styles on :root,
+   which is why every value here must stay a plain token reference downstream —
+   no literal colors outside this block. */
+@theme {
+  --color-bg: #101214;
+  --color-panel: rgba(22, 24, 27, 0.82);
+  --color-surface: rgba(31, 35, 40, 0.72);
+  --color-surface-raised: rgba(42, 47, 54, 0.82);
+  --color-surface-hover: rgba(39, 44, 51, 0.60);
+  --color-line: rgba(226, 232, 240, 0.13);
+  --color-line-hover: rgba(245, 158, 11, 0.34);
+  --color-text-default: #d9dee7;
+  --color-text-bright: #f8fafc;
+  --color-muted: #9aa4b2;
+  --color-faint: #687282;
+  --color-accent: #f59e0b;
+  --color-accent-2: #475569;
+  --color-accent-3: #64748b;
+  --color-accent-soft: rgba(245, 158, 11, 0.12);
+  --color-accent-glow: rgba(245, 158, 11, 0.10);
+  --color-ok: #22c55e;
+  --color-ok-soft: rgba(34, 197, 94, 0.14);
+  --color-warn: #fbbf24;
+  --color-warn-soft: rgba(251, 191, 36, 0.12);
+  --color-danger: #ef4444;
+  --color-danger-soft: rgba(239, 68, 68, 0.12);
+  --color-info: #60a5fa;
+  --color-info-soft: rgba(96, 165, 250, 0.10);
+
+  --font-sans: "DM Sans", system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", "Cascadia Code", "Liberation Mono", Menlo, monospace;
+
+  --radius-lg: 20px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+}
+
+/* Non-utility tokens: these back hand-written rules below rather than Tailwind
+   classes, so they live outside @theme. The engine sets them too. */
+:root {
+  --color-code-bg: rgba(0, 0, 0, 0.35);
+  --color-code-head-bg: rgba(0, 0, 0, 0.45);
+  --color-overlay: rgba(0, 0, 0, 0.55);
+  --color-scanline: rgba(255, 255, 255, 0.035);
+  --color-syntax-keyword: #c792ea;
+  --color-syntax-string: #9ece6a;
+  --color-syntax-number: #ff9e64;
+  --color-syntax-comment: var(--color-faint);
+  --glass-blur: 28px;
+  --glass-saturate: 1.35;
+}
+
+/* ── Base ─────────────────────────────────────── */
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--color-bg);
+  color: var(--color-text-default);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+/* ── Scrollbar ────────────────────────────────── */
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-faint); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-muted); }
+
+/* ── Glass panels ─────────────────────────────── */
+
+@layer components {
+  .glass-panel {
+    background: var(--color-panel);
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  }
+
+  .glass-surface {
+    background: var(--color-surface);
+    backdrop-filter: blur(calc(var(--glass-blur) * 0.64)) saturate(var(--glass-saturate));
+    -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.64)) saturate(var(--glass-saturate));
+  }
+
+  /* Opaque counterpart to .glass-surface: composites the translucent surface
+     tint over the solid background, so it still reads as raised but nothing
+     shows through. Use for dense, read-heavy panels like the settings modal. */
+  .solid-surface {
+    background-color: var(--color-bg);
+    background-image: linear-gradient(var(--color-surface), var(--color-surface));
+  }
+
+  .glass-overlay {
+    background: var(--color-overlay);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+
+  .splash-console {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .splash-console::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      linear-gradient(180deg, var(--color-scanline), transparent 28%),
+      repeating-linear-gradient(0deg, var(--color-scanline) 0 1px, transparent 1px 9px);
+    opacity: 0.45;
+  }
+
+  .splash-console > * {
+    position: relative;
+  }
+}
+
+/* ── Animations ───────────────────────────────── */
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@keyframes dot-bounce {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-color: var(--color-accent); }
+  50% { border-color: transparent; }
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes shimmer {
+  from { background-position: 200% center; }
+  to { background-position: -200% center; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes rec-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-danger) 45%, transparent); }
+  70% { box-shadow: 0 0 0 8px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+@keyframes caret-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@layer components {
+  .animate-pulse-slow {
+    animation: pulse-slow 2s ease-in-out infinite;
+  }
+
+  .animate-pulse-fast {
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+
+  .animate-dot-bounce {
+    animation: dot-bounce 1.4s ease-in-out infinite;
+  }
+
+  .animate-pulse-border {
+    animation: pulse-border 2s ease-in-out infinite;
+  }
+
+  .animate-fade-up {
+    animation: fade-up 0.25s ease-out both;
+  }
+
+  .animate-scale-in {
+    animation: scale-in 0.2s ease-out both;
+  }
+
+  .animate-rec-ring {
+    animation: rec-ring 1.6s ease-out infinite;
+  }
+
+  .text-shimmer {
+    background: linear-gradient(
+      90deg,
+      var(--color-faint) 25%,
+      var(--color-text-bright) 50%,
+      var(--color-faint) 75%
+    );
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: shimmer 2.2s linear infinite;
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 13px;
+    height: 13px;
+    border: 2px solid var(--color-line);
+    border-top-color: var(--color-accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+
+  /* Blinking caret appended to a live-streaming assistant bubble */
+  .stream-caret::after {
+    content: '▍';
+    display: inline-block;
+    margin-left: 2px;
+    color: var(--color-accent);
+    animation: caret-blink 1s steps(1) infinite;
+  }
+
+  /* Height-agnostic expand/collapse for collapsible panels */
+  .collapse-grid {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.25s ease;
+  }
+  .collapse-grid.open {
+    grid-template-rows: 1fr;
+  }
+  .collapse-grid > * {
+    overflow: hidden;
+    min-height: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up,
+  .animate-scale-in,
+  .animate-rec-ring,
+  .stream-caret::after,
+  .text-shimmer {
+    animation: none;
+  }
+  .text-shimmer {
+    color: var(--color-muted);
+    background: none;
+  }
+  .collapse-grid {
+    transition: none;
+  }
+}
+
+/* ── Markdown rendered content ────────────────── */
+
+@layer components {
+  .markdown-body h1, .markdown-body h2, .markdown-body h3 {
+    color: var(--color-text-bright);
+    font-weight: 600;
+    margin: 1em 0 0.4em;
+  }
+  .markdown-body h1 { font-size: 1.3em; }
+  .markdown-body h2 { font-size: 1.15em; }
+  .markdown-body h3 { font-size: 1.05em; }
+  .markdown-body p { margin: 0.5em 0; overflow-wrap: anywhere; }
+  .markdown-body ul, .markdown-body ol { margin: 0.4em 0; padding-left: 1.6em; }
+  .markdown-body li { margin: 0.2em 0; }
+  .markdown-body pre {
+    background: var(--color-code-bg);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-sm);
+    padding: 0.7em 1em;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.5;
+    margin: 0.6em 0;
+  }
+  .markdown-body code {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    background: var(--color-code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+  }
+  .markdown-body pre code {
+    background: none;
+    padding: 0;
+  }
+  .markdown-body a {
+    color: var(--color-accent);
+    text-decoration: none;
+  }
+  .markdown-body a:hover { text-decoration: underline; }
+  .markdown-body img {
+    max-width: 100%;
+    border-radius: var(--radius-sm);
+    margin: 0.5em 0;
+  }
+  .markdown-body table {
+    border-collapse: collapse;
+    margin: 0.6em 0;
+    font-size: 13px;
+    min-width: 100%;
+  }
+  .markdown-body th, .markdown-body td {
+    border: 1px solid var(--color-line);
+    padding: 0.35em 0.7em;
+    text-align: left;
+  }
+  .markdown-body th {
+    background: var(--color-code-bg);
+    color: var(--color-text-bright);
+    font-weight: 600;
+  }
+  .markdown-body strong { color: var(--color-text-bright); font-weight: 600; }
+  .markdown-body del { color: var(--color-faint); }
+  .markdown-body hr {
+    border: none;
+    border-top: 1px solid var(--color-line);
+    margin: 1em 0;
+  }
+  .markdown-body blockquote {
+    border-left: 3px solid var(--color-accent);
+    margin: 0.5em 0;
+    padding: 0.3em 0.8em;
+    color: var(--color-muted);
+  }
+  .markdown-body li.task-item {
+    list-style: none;
+    margin-left: -1.2em;
+  }
+  .markdown-body li.task-item input[type="checkbox"] {
+    accent-color: var(--color-accent);
+    margin-right: 0.35em;
+    vertical-align: -0.1em;
+  }
+
+  /* Fenced code blocks: header bar with language + copy */
+  .markdown-body .code-block {
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-sm);
+    margin: 0.6em 0;
+    overflow: hidden;
+  }
+  .markdown-body .code-block pre {
+    border: none;
+    border-radius: 0;
+    margin: 0;
+  }
+  .markdown-body .code-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.25em 0.8em;
+    background: var(--color-code-head-bg);
+    border-bottom: 1px solid var(--color-line);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  .markdown-body .code-lang {
+    color: var(--color-faint);
+    text-transform: lowercase;
+    letter-spacing: 0.05em;
+  }
+  .markdown-body .code-copy {
+    background: none;
+    border: 1px solid var(--color-line);
+    border-radius: 5px;
+    color: var(--color-muted);
+    font: inherit;
+    padding: 0.1em 0.7em;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+  }
+  .markdown-body .code-copy:hover {
+    color: var(--color-accent);
+    border-color: var(--color-line-hover);
+  }
+  .markdown-body .code-copy.copied {
+    color: var(--color-ok);
+    border-color: var(--color-ok-soft);
+  }
+
+  /* Lightweight syntax highlighting tokens */
+  .markdown-body .tok-k { color: var(--color-syntax-keyword); }
+  .markdown-body .tok-s { color: var(--color-syntax-string); }
+  .markdown-body .tok-n { color: var(--color-syntax-number); }
+  .markdown-body .tok-c { color: var(--color-syntax-comment); font-style: italic; }
+}
+
+/* ── Responsive ───────────────────────────────── */
+
+@media (max-width: 760px) {
+  .sidebar-desktop { display: none !important; }
+  .main-area { grid-column: 1 / -1 !important; }
+}
+
+/* ── Search deep-link highlight ───────────────── */
+
+@keyframes deeplink-flash {
+  0% { background: color-mix(in srgb, var(--color-accent) 22%, transparent); }
+  100% { background: transparent; }
+}
+
+.deeplink-flash {
+  animation: deeplink-flash 2.2s ease-out;
+  border-radius: 8px;
+}

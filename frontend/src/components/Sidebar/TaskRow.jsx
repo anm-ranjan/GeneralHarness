@@ -1,0 +1,98 @@
+import { useState } from 'react'
+import { useAppDispatch } from '../../context/AppContext'
+import InlineEdit from './InlineEdit'
+import SessionItem from './SessionItem'
+
+export default function TaskRow({
+  task, projectId, sessions, sessionsById, currentSessionId,
+  onSelectSession, onRenameTask, onDeleteTask,
+  onCreateSession, onImportSession, onRenameSession, onDeleteSession,
+  onMoveSession,
+}) {
+  const dispatch = useAppDispatch()
+  const [editing, setEditing] = useState(false)
+  const isActiveTask = sessions.includes(currentSessionId)
+
+  function handleHeaderKeyDown(e) {
+    if (e.key !== 'F2' || editing) return
+    e.preventDefault()
+    setEditing(true)
+  }
+
+  return (
+    <div className={`ml-3 mb-1 border-l pl-2 transition-colors ${isActiveTask ? 'border-accent/60' : 'border-line/40'}`}>
+      <div
+        className={`flex items-center gap-1 group rounded-md px-1 py-0.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70 ${isActiveTask ? 'bg-accent-soft/60' : ''}`}
+        tabIndex={0}
+        onKeyDown={handleHeaderKeyDown}
+      >
+        {editing ? (
+          <InlineEdit
+            value={task.name}
+            onSave={(name) => { onRenameTask(projectId, task.id, name); setEditing(false) }}
+            onCancel={() => setEditing(false)}
+          />
+        ) : (
+          <span
+            className={`text-[12px] font-medium uppercase tracking-wider truncate cursor-default ${isActiveTask ? 'text-accent' : 'text-faint'}`}
+            onDoubleClick={() => setEditing(true)}
+            title={task.name}
+          >
+            {task.name}
+          </span>
+        )}
+        <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ml-auto shrink-0">
+          <button
+            onClick={() => setEditing(true)}
+            className="text-faint hover:text-accent text-[11px] px-0.5"
+            title="Rename task"
+          >✎</button>
+          <button
+            onClick={() => dispatch({
+              type: 'OPEN_CONFIRM',
+              payload: {
+                title: 'Delete task?',
+                message: 'This removes the task and all sessions under it.',
+                detail: task.name,
+                confirmLabel: 'Delete',
+                tone: 'danger',
+                onConfirm: () => onDeleteTask(projectId, task.id),
+              },
+            })}
+            className="text-faint hover:text-danger text-[11px] px-0.5"
+            title="Delete task"
+          >✕</button>
+          {onImportSession && (
+            <button
+              onClick={() => onImportSession(projectId, task.id)}
+              className="text-faint hover:text-ok text-[11px] px-0.5"
+              title="Import session backup (.zip)"
+            >⇪</button>
+          )}
+          <button
+            onClick={() => onCreateSession(projectId, task.id)}
+            className="text-faint hover:text-ok text-[11px] px-0.5"
+            title="New session"
+          >+</button>
+        </div>
+      </div>
+      <div className="mt-1 space-y-px">
+        {sessions.map(sid => {
+          const s = sessionsById[sid]
+          if (!s) return null
+          return (
+            <SessionItem
+              key={sid}
+              session={s}
+              isActive={sid === currentSessionId}
+              onSelect={onSelectSession}
+              onRename={onRenameSession}
+              onMove={onMoveSession ? () => onMoveSession(s, projectId, task.id) : null}
+              onDelete={(id) => onDeleteSession(id, projectId, task.id)}
+            />
+          )
+        })}
+      </div>
+    </div>
+  )
+}

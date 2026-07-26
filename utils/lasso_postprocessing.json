@@ -1,0 +1,423 @@
+{
+  "schema_version": "1.0",
+  "tool_name": "lasso_python_postprocessing",
+  "purpose": "Reference for reading (and rarely writing) LS-Dyna binary output via the open-lasso-python package. Query this BEFORE writing any code that opens a d3plot or binout, and BEFORE indexing any returned array. The dominant failure mode is mis-indexing array axes, not mis-calling methods. Always confirm the actual shape with .shape at runtime; the shapes below are the documented convention, not a guarantee for a specific file.",
+  "package": {
+    "import_name": "lasso",
+    "install": "pip install lasso-python",
+    "primary_imports": [
+      "from lasso.dyna import D3plot, ArrayType, FilterType, Binout"
+    ],
+    "doc_root": "https://open-lasso-python.github.io/lasso-python/dyna/"
+  },
+  "file_routing": {
+    "description": "Map an output file to the class that reads it.",
+    "rules": [
+      {
+        "pattern": "d3plot, d3plot01, d3plot02, ... (split state files)",
+        "class": "D3plot",
+        "note": "Pass ONLY the path to the first file (the base 'd3plot'). The reader auto-discovers continuation files. Do not glob."
+      },
+      {
+        "pattern": "binout, binout0000, binout0001, ...",
+        "class": "Binout",
+        "note": "Pass a glob like 'binout*' to load all parts at once, or a single file path."
+      },
+      {
+        "pattern": "d3plot header only / quick metadata probe on a huge file",
+        "class": "D3plotHeader",
+        "note": "Reads only header bytes. Safe and fast on multi-GB files. Use before deciding what to load."
+      },
+      {
+        "pattern": ".fz (femzip-compressed d3plot)",
+        "class": "D3plot",
+        "note": "Opens transparently. Femzip is LOSSY: expect small deltas vs uncompressed. Use D3plot.compare() to quantify."
+      }
+    ]
+  },
+  "decision_guide": {
+    "description": "Pick the access path from the user's intent.",
+    "intents": [
+      {
+        "intent": "time-history of a global/section/joint/contact quantity (energies, forces, x-t curves)",
+        "use": "Binout",
+        "reason": "binout stores the ASCII-database time histories; far smaller and faster than d3plot for scalar-vs-time."
+      },
+      {
+        "intent": "full-field spatial result at one or more states (stress field, displacement field, plastic strain map) for plotting/meshing",
+        "use": "D3plot",
+        "reason": "d3plot holds per-element / per-node fields needed for 3D visualization and mesh export."
+      },
+      {
+        "intent": "just need counts/metadata (n_nodes, n_shells, which fields exist, precision)",
+        "use": "D3plotHeader",
+        "reason": "avoids loading state data into memory."
+      },
+      {
+        "intent": "restrict a field to specific part IDs",
+        "use": "D3plot.get_part_filter(FilterType.X, part_ids)",
+        "reason": "returns a boolean mask aligned to the element axis of state arrays."
+      },
+      {
+        "intent": "out-of-core / low-RAM extraction of one array over all states",
+        "use": "D3plot(..., state_array_filter=[...], buffered_reading=True)",
+        "reason": "keeps a single state in memory at a time."
+      }
+    ]
+  },
+  "classes": {
+    "D3plot": {
+      "fqn": "lasso.dyna.d3plot.D3plot",
+      "summary": "Reads LS-Dyna d3plot (geometry + state field data). Arrays are exposed as a dict of numpy arrays keyed by ArrayType strings.",
+      "doc": "https://open-lasso-python.github.io/lasso-python/dyna/D3plot/",
+      "constructor": {
+        "signature": "D3plot(filepath=None, use_femzip=None, n_files_to_load_at_once=None, state_array_filter=None, state_filter=None, buffered_reading=False)",
+        "params": {
+          "filepath": {
+            "type": "str",
+            "default": "None",
+            "desc": "Path to the FIRST d3plot file. None creates an empty D3plot for writing from scratch."
+          },
+          "use_femzip": {
+            "type": "Optional[bool]",
+            "default": "None",
+            "desc": "Deprecated / not used anymore. Do not set."
+          },
+          "n_files_to_load_at_once": {
+            "type": "Optional[int]",
+            "default": "None",
+            "desc": "DEPRECATED. Use buffered_reading instead."
+          },
+          "state_array_filter": {
+            "type": "Optional[List[str]]",
+            "default": "None",
+            "desc": "Whitelist of array names to load from state data. Prefer ArrayType.* constants over raw strings. Massively reduces memory."
+          },
+          "state_filter": {
+            "type": "Optional[Set[int]]",
+            "default": "None",
+            "desc": "Which states (timesteps) to load. Negative indices count from the end. e.g. {0, -1} for first and last."
+          },
+          "buffered_reading": {
+            "type": "bool",
+            "default": "False",
+            "desc": "If True, only one state is held in memory at a time during reading. Combine with state_array_filter for big files."
+          }
+        }
+      },
+      "properties": {
+        "arrays": {
+          "type": "dict",
+          "writable": true,
+          "desc": "All d3plot arrays as {name: np.ndarray}. Keys correspond to ArrayType constants. Inspect with d3plot.arrays.keys() before indexing."
+        },
+        "header": {
+          "type": "D3plotHeader",
+          "desc": "Header instance. Use for counts/flags, e.g. d3plot.header.n_shells."
+        },
+        "n_timesteps": {
+          "type": "int",
+          "desc": "Number of states (timesteps) currently loaded. Note: affected by state_filter."
+        }
+      },
+      "methods": {
+        "get_part_filter": {
+          "signature": "get_part_filter(filter_type, part_ids, for_state_array=True)",
+          "params": {
+            "filter_type": "FilterType enum member (BEAM/SHELL/SOLID/TSHELL/PART/NODE) selecting which entity class to mask.",
+            "part_ids": "Iterable[int] of part ids to keep.",
+            "for_state_array": "bool, default True. Matters for shells when rigid bodies (mattyp==20) exist, because state shell arrays exclude rigid shells (n_shells_non_rigid)."
+          },
+          "returns": "np.ndarray boolean mask to apply on the ELEMENT axis of a state array.",
+          "gotcha": "The mask aligns to the element axis (axis=1 for most state arrays). Apply as arr[:, mask], NOT arr[mask]."
+        },
+        "plot": {
+          "signature": "plot(i_timestep=0, field=None, is_element_field=True, fringe_limits=None, export_filepath='')",
+          "params": {
+            "i_timestep": "int index of state to plot (-1 = last).",
+            "field": "Optional np.ndarray, one scalar per element (or per node). Must already be reduced to 1 value per entity for the chosen timestep.",
+            "is_element_field": "bool, whether field is per-element vs per-node.",
+            "fringe_limits": "Optional (min,max) for the colorbar.",
+            "export_filepath": "str, write an interactive HTML instead of opening a window."
+          },
+          "returns": "None (renders / writes HTML).",
+          "gotcha": "Built-in plot handles ONLY shell surfaces; solids need surface extraction. For production rendering use the PyVista pipeline, not this. Field must be collapsed over integration points/layers first (e.g. .mean(axis=2))."
+        },
+        "compare": {
+          "signature": "compare(d3plot2, array_eps=None)",
+          "returns": "(hdr_differences: dict, array_differences: dict). Use to quantify femzip lossy error.",
+          "params": {
+            "d3plot2": "the other D3plot",
+            "array_eps": "Optional float tolerance."
+          }
+        },
+        "check_array_dims": {
+          "signature": "check_array_dims(array_dimensions, dimension_name, dimension_size=-1)",
+          "returns": "None; raises ValueError on mismatch. Utility for validating consistent axis sizes across arrays."
+        },
+        "get_part_filter_note": "See FilterType class for enum members.",
+        "enable_logger": {
+          "signature": "enable_logger(enable)  # staticmethod",
+          "returns": "None"
+        },
+        "write_d3plot": {
+          "signature": "write_d3plot(filepath, block_size_bytes=2048, single_file=True)",
+          "rare": true,
+          "params": {
+            "filepath": "str or BinaryIO output target.",
+            "block_size_bytes": "int byte-block padding. Set 0 for no zero-padding.",
+            "single_file": "bool, write all states into one file."
+          },
+          "returns": "None. WRITING IS RARE \u2014 only when modifying/augmenting arrays (e.g. appending history vars) or authoring a synthetic d3plot. Confirm intent before writing."
+        }
+      },
+      "minimal_examples": {
+        "open_all": ">>> d3 = D3plot('path/to/d3plot')",
+        "open_one_field_low_ram": ">>> d3 = D3plot('path/to/d3plot', state_array_filter=[ArrayType.node_displacement], buffered_reading=True)",
+        "first_and_last_state": ">>> d3 = D3plot('path/to/d3plot', state_filter={0, -1})",
+        "inspect": ">>> list(d3.arrays.keys()); d3.header.n_shells; d3.n_timesteps",
+        "part_filter": ">>> m = d3.get_part_filter(FilterType.SHELL, [13,14]); s = d3.arrays[ArrayType.element_shell_stress][:, m]"
+      }
+    },
+    "Binout": {
+      "fqn": "lasso.dyna.binout.Binout",
+      "summary": "Reads LS-Dyna binout time-history databases (glstat, matsum, secforc, nodout, rcforc, ...). Filesystem-like traversal via read(); tabular access via as_df().",
+      "doc": "https://open-lasso-python.github.io/lasso-python/dyna/Binout/",
+      "constructor": {
+        "signature": "Binout(filepath)",
+        "params": {
+          "filepath": {
+            "type": "str",
+            "desc": "Path to a binout, or a glob pattern (e.g. 'binout*') to load multiple parts. Inspect Binout.filelist to confirm what was opened."
+          }
+        }
+      },
+      "methods": {
+        "read": {
+          "signature": "read(*path)",
+          "behavior": "Return type depends on depth of path:",
+          "levels": [
+            "read()                      -> List[str]: top-level database names (e.g. ['glstat','secforc']).",
+            "read(db)                    -> List[str]: variable/subdir names inside that database.",
+            "read(db, ..., variable)     -> np.ndarray (or str for metadata like 'date')."
+          ],
+          "gotcha": "For id-resolved databases (nodout, secforc, rcforc) ALSO read the 'ids' array to label rows/columns. Data axis order is typically (time, id)."
+        },
+        "as_df": {
+          "signature": "as_df(*args)",
+          "returns": "pandas.DataFrame indexed by time; columns are ids when applicable. Raises ValueError if the path is not tabular.",
+          "prefer": "Use as_df for any time-series the user wants to plot or tabulate \u2014 index is already 'time'."
+        },
+        "save_hdf5": {
+          "signature": "save_hdf5(filepath, compression='gzip')",
+          "returns": "None. Convert a binout to HDF5 for downstream tooling.",
+          "rare": true
+        }
+      },
+      "minimal_examples": {
+        "discover": ">>> b = Binout('path/to/binout*'); b.read()  # top dirs",
+        "drill": ">>> b.read('secforc')  # variable names",
+        "series_array": ">>> b.read('secforc', 'x_force')  # ndarray (time, id)",
+        "series_df": ">>> b.as_df('glstat', 'eroded_kinetic_energy')  # time-indexed Series/DataFrame",
+        "ids": ">>> b.read('secforc', 'ids')  # id labels for the columns"
+      }
+    },
+    "D3plotHeader": {
+      "fqn": "lasso.dyna.d3plot_header.D3plotHeader",
+      "summary": "Reads ONLY header info from a d3plot. Safe on huge files; loads no state data. Use to probe counts, precision, and which field categories exist before committing to a full read.",
+      "doc": "https://open-lasso-python.github.io/lasso-python/dyna/D3plotHeader/",
+      "constructor": {
+        "signature": "D3plotHeader(filepath=None)",
+        "params": {
+          "filepath": {
+            "type": "Union[str, BinaryBuffer, None]",
+            "desc": "d3plot path or buffer; None makes an empty header to load_file() later."
+          }
+        }
+      },
+      "methods": {
+        "load_file": {
+          "signature": "load_file(file)",
+          "returns": "self on success."
+        },
+        "compare": {
+          "signature": "compare(other)",
+          "returns": "Dict[str, Tuple[Any, Any]] of differing fields."
+        }
+      },
+      "key_attributes": {
+        "precision": [
+          "wordsize (4=single,8=double)",
+          "itype",
+          "ftype",
+          "external_numbers_dtype"
+        ],
+        "counts": [
+          "n_nodes",
+          "n_shells",
+          "n_solids",
+          "n_thick_shells",
+          "n_beams",
+          "n_parts",
+          "n_airbags",
+          "n_sph_nodes",
+          "n_shell_tshell_layers",
+          "n_solid_layers",
+          "n_global_vars",
+          "n_dimensions"
+        ],
+        "presence_flags": [
+          "has_node_displacement",
+          "has_node_velocity",
+          "has_node_acceleration",
+          "has_node_temperatures",
+          "has_shell_tshell_stress",
+          "has_shell_tshell_pstrain",
+          "has_element_strain",
+          "has_solid_stress",
+          "has_solid_pstrain",
+          "has_shell_forces",
+          "has_rigid_body_data",
+          "has_rigid_road_surface"
+        ],
+        "meta": [
+          "title",
+          "title2",
+          "filetype",
+          "version",
+          "release_version",
+          "source_version",
+          "runtime"
+        ]
+      },
+      "minimal_examples": {
+        "probe": ">>> h = D3plotHeader('path/to/d3plot'); h.n_shells; h.has_solid_stress; h.wordsize"
+      }
+    },
+    "FilterType": {
+      "fqn": "lasso.dyna.filter_type.FilterType",
+      "summary": "Enum selecting an entity class for get_part_filter.",
+      "doc": "https://open-lasso-python.github.io/lasso-python/dyna/FilterType/",
+      "members": [
+        "BEAM",
+        "SHELL",
+        "SOLID",
+        "TSHELL",
+        "PART",
+        "NODE"
+      ],
+      "usage": ">>> d3.get_part_filter(FilterType.SHELL, part_ids)"
+    }
+  },
+  "array_reference": {
+    "axis_conventions": {
+      "n_states": "axis 0 of every STATE (time-dependent) array = timestep index.",
+      "element_or_node_axis": "axis 1 of state arrays = the entity index (node/element). Part-filter masks apply here.",
+      "tensor_components": "stress/strain components are ordered xx, yy, zz, xy, yz, xz (6-vector Voigt-like).",
+      "force_moment_components": "forces fx,fy,fz; moments mx,my,mz.",
+      "layers_integration_points": "shells/tshells carry a layer axis (n_shell_tshell_layers); solids carry n_solid_layers. Reduce over this axis (mean/min/max or pick a layer) before plotting a single scalar field.",
+      "critical_warning": "Axis ORDER is per-array and the upstream docs contain at least one inconsistency (element_solid_effective_plastic_strain is documented as (n_states, n_solid_layers, n_solids), unlike sibling solid arrays which are (n_states, n_solids, n_solid_layers, ...)). NEVER hardcode an axis position from this table alone \u2014 print arr.shape and confirm against header counts (n_solids, n_shells, layers) before indexing."
+    },
+    "geometry_connectivity": {
+      "node_ids": "(n_nodes)",
+      "node_coordinates": "(n_nodes, 3)  # x,y,z \u2014 base mesh coordinates",
+      "element_shell_node_indexes": "(n_shells, 4)  # 0-based node indices into node arrays",
+      "element_solid_node_indexes": "(n_solids, 8)",
+      "element_tshell_node_indexes": "(n_tshells, 8)",
+      "element_beam_node_indexes": "(n_beams, 5)",
+      "element_shell_ids": "(n_shells)",
+      "element_solid_ids": "(n_solids)",
+      "element_shell_part_indexes": "(n_shells)  # NOTE doc row label says (n_shells,4) for part_indexes and (n_shells) for node_indexes \u2014 these two appear swapped upstream; verify with .shape",
+      "element_solid_part_indexes": "(n_solids)",
+      "part_ids": "(n_parts)",
+      "part_titles": "(n_parts)"
+    },
+    "nodal_state_fields": {
+      "node_displacement": "(n_states, n_nodes, 3)  # ADD to node_coordinates to get deformed geometry",
+      "node_velocity": "(n_states, n_nodes, 3)",
+      "node_acceleration": "(n_states, n_nodes, 3)",
+      "node_temperature": "(n_states, n_nodes) or (n_states, n_nodes, 3)",
+      "node_is_alive": "(n_states, n_nodes)",
+      "node_residual_forces": "(n_states, n_nodes, 3)",
+      "node_residual_moments": "(n_states, n_nodes, 3)"
+    },
+    "shell_state_fields": {
+      "note": "Shell state arrays use n_shells_non_rigid on the element axis (rigid-body shells excluded). Match part-filter with for_state_array=True.",
+      "element_shell_stress": "(n_states, n_shells_non_rigid, n_shell_layers, 6)  # 6 = xx,yy,zz,xy,yz,xz",
+      "element_shell_effective_plastic_strain": "(n_states, n_shells_non_rigid, n_shell_layers)",
+      "element_shell_strain": "(n_states, n_shells_non_rigid, upper_lower=2, 6)",
+      "element_shell_history_vars": "(n_states, n_shells_non_rigid, n_shell_layers, n_shell_history_vars)",
+      "element_shell_bending_moment": "(n_states, n_shells_non_rigid, 3)  # mx,my,mxy",
+      "element_shell_shear_force": "(n_states, n_shells_non_rigid, 2)  # qx,qy",
+      "element_shell_normal_force": "(n_states, n_shells_non_rigid, 3)  # nx,ny,nxy",
+      "element_shell_thickness": "(n_states, n_shells_non_rigid)",
+      "element_shell_internal_energy": "(n_states, n_shells_non_rigid)",
+      "element_shell_is_alive": "(n_states, n_shells_non_rigid)"
+    },
+    "solid_state_fields": {
+      "element_solid_stress": "(n_states, n_solids, n_solid_layers, 6)",
+      "element_solid_strain": "(n_states, n_solids, n_solid_layers, 6)",
+      "element_solid_effective_plastic_strain": "(n_states, n_solid_layers, n_solids)  # <-- DOC-INCONSISTENT axis order; verify with .shape",
+      "element_solid_history_variables": "(n_states, n_solids, n_solid_layers, n_solids_history_vars)",
+      "element_solid_plastic_strain_tensor": "(n_states, n_solids, n_solid_layers, 6)",
+      "element_solid_thermal_strain_tensor": "(n_states, n_solids, n_solid_layers, 6)",
+      "element_solid_is_alive": "(n_states, n_solids)"
+    },
+    "tshell_state_fields": {
+      "element_tshell_stress": "(n_states, n_tshells, n_tshells_layers, 6)",
+      "element_tshell_effective_plastic_strain": "(n_states, n_tshells, n_tshells_layers)",
+      "element_tshell_strain": "(n_states, n_tshells, upper_lower=2, 6)",
+      "element_tshell_is_alive": "(n_states, n_tshells)"
+    },
+    "beam_state_fields": {
+      "element_beam_axial_force": "(n_states, n_beams)",
+      "element_beam_shear_force": "(n_states, n_beams, 2)  # s,t",
+      "element_beam_bending_moment": "(n_states, n_beams, 2)  # s,t",
+      "element_beam_torsion_moment": "(n_states, n_beams)",
+      "element_beam_axial_stress": "(n_states, n_beams, n_beams_layers)",
+      "element_beam_is_alive": "(n_states, n_beams)"
+    },
+    "part_global_fields": {
+      "global_timesteps": "(n_timesteps)  # the time vector",
+      "global_kinetic_energy": "(n_timesteps)",
+      "global_internal_energy": "(n_timesteps)",
+      "global_total_energy": "(n_timesteps)",
+      "part_internal_energy": "(n_states, n_parts)",
+      "part_kinetic_energy": "(n_states, n_parts)",
+      "part_mass": "(n_states, n_parts)",
+      "part_velocity": "(n_states, n_parts, 3)"
+    },
+    "specialty_fields": {
+      "sph": "sph_* arrays: positions/stress/strain per (n_states, n_sph_particles[, comps]).",
+      "airbag": "airbag_* and airbag_particle_* arrays for CPM bags.",
+      "rigid_body": "rigid_body_coordinates (n_states,n_rb,3), rigid_body_rotation_matrix (n_states,n_rb,9).",
+      "rigid_wall": "rigid_wall_force (n_states,n_walls), rigid_wall_position (n_states,n_walls,3)."
+    },
+    "discovery_helper": "ArrayType.get_state_array_names() -> List[str] of all state (time-dependent) array names."
+  },
+  "agent_protocol": {
+    "read_workflow": [
+      "1. Classify intent (time-history scalar vs full spatial field vs metadata) using decision_guide.",
+      "2. If unsure of size, open D3plotHeader first and read counts/flags.",
+      "3. Open the right class with the NARROWEST filter that satisfies the request (state_filter, state_array_filter, buffered_reading).",
+      "4. Inspect: print arrays.keys() (d3plot) or read() tree (binout) BEFORE indexing.",
+      "5. Confirm every array's .shape against header counts before slicing. Do not trust hardcoded axis order.",
+      "6. Reduce layer/integration-point axes explicitly (state which reduction: mean, max, or specific layer) and say so in the reply.",
+      "7. Apply part filters on the element axis as arr[:, mask]."
+    ],
+    "write_policy": "Writing (write_d3plot, save_hdf5) is RARE. Only do it on explicit user request. State clearly what is being written and where before doing it.",
+    "self_check": [
+      "Did I open the first d3plot file, not a glob?",
+      "Did I use ArrayType.* constants instead of raw strings?",
+      "Did I verify shapes rather than assume axis order (esp. solid eff. plastic strain)?",
+      "For shells with rigid bodies, did I use for_state_array=True and the non-rigid element count?",
+      "Am I reporting which timestep and which layer-reduction I used?"
+    ],
+    "common_errors": {
+      "wrong_axis": "Indexing element axis as axis 0 instead of axis 1 on state arrays.",
+      "rigid_shell_mismatch": "Mask length n_shells but stress array element axis is n_shells_non_rigid.",
+      "femzip_precision": "Treating .fz values as exact; they are lossy.",
+      "no_reduction": "Plotting a field that still has a layer/integration-point axis."
+    }
+  }
+}

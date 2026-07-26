@@ -1,0 +1,36 @@
+{
+  "name": "myharness-electron",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Electron desktop shell for MyHarness.",
+  "main": "main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "start:dev": "MYHARNESS_ELECTRON_DEV=1 electron .",
+    "dist:win": "electron-builder --win"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^37.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "local.myharness.desktop",
+    "productName": "MyHarness",
+    "files": [
+      "main.js",
+      "app-preload.js",
+      "../backend/**",
+      "../frontend/dist/**",
+      "../utils/**",
+      "../run.sh"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis"
+    }
+  }
+}
