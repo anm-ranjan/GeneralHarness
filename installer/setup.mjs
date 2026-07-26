@@ -15,7 +15,17 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, copyFileSync, readFileSync, writeFileSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  copyFileSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+  statSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -41,6 +51,7 @@ const AGENT_DIR = path.join(REPO_ROOT, 'backend', 'agent');
 const EXAMPLE_CONFIG = path.join(AGENT_DIR, 'agent_config.example.yaml');
 const TARGET_CONFIG = path.join(AGENT_DIR, 'agent_config.yaml');
 const IS_WINDOWS = process.platform === 'win32';
+const IS_LINUX = process.platform === 'linux';
 
 // ── tiny terminal helpers ────────────────────────────────────────────
 
@@ -116,6 +127,132 @@ function npmInstallIn(dir, extraArgs = []) {
   const hasLock = existsSync(path.join(dir, 'package-lock.json'));
   const args = hasLock ? ['ci', ...extraArgs] : ['install', ...extraArgs];
   return run('npm', args, { cwd: dir, env: npmEnv() });
+}
+
+function linuxSandboxPaths(repoRoot = REPO_ROOT) {
+  return [
+    path.join(repoRoot, 'electron', 'node_modules', 'electron', 'dist', 'chrome-sandbox'),
+    path.join(repoRoot, 'electron', 'dist', 'linux-unpacked', 'chrome-sandbox'),
+  ];
+}
+
+function inspectSandboxHelper(helperPath, stat = statSync) {
+  try {
+    const details = stat(helperPath);
+    const mode = details.mode & 0o7777;
+    return {
+      path: helperPath,
+      exists: true,
+      uid: details.uid,
+      gid: details.gid,
+      mode,
+      configured: details.uid === 0 && details.gid === 0 && mode === 0o4755,
+    };
+  } catch {
+    return {
+      path: helperPath,
+      exists: false,
+      uid: null,
+      gid: null,
+      mode: null,
+      configured: false,
+    };
+  }
+}
+
+function appArmorRestrictsUserNamespaces(
+  read = readFileSync,
+  flagPath = '/proc/sys/kernel/apparmor_restrict_unprivileged_userns',
+) {
+  try {
+    return String(read(flagPath, 'utf8')).trim() === '1';
+  } catch {
+    return false;
+  }
+}
+
+function appArmorProfileText(distDir, profileName = 'myharness-electron-appimage') {
+  const attachment = path.join(path.resolve(distDir), '*.AppImage')
+    .replaceAll('\\', '\\\\')
+    .replaceAll('"', '\\"');
+  return [
+    'abi <abi/4.0>,',
+    'include <tunables/global>',
+    '',
+    `profile ${profileName} "${attachment}" flags=(default_allow) {`,
+    '  userns,',
+    '}',
+    '',
+  ].join('\n');
+}
+
+function appArmorProfileName(appName) {
+  const slug = String(appName || 'myharness')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '') || 'myharness';
+  return `${slug}-electron-appimage`;
+}
+
+async function configureLinuxElectronSandbox(appName) {
+  if (!IS_LINUX || !appArmorRestrictsUserNamespaces()) return;
+
+  heading('Linux Electron sandbox');
+  warn('AppArmor restricts unprivileged user namespaces on this host.');
+
+  const helperStates = linuxSandboxPaths()
+    .map((helperPath) => inspectSandboxHelper(helperPath))
+    .filter((state) => state.exists);
+  const helpersToRepair = helperStates.filter((state) => !state.configured);
+
+  if (helpersToRepair.length) {
+    info('Electron development and unpacked builds need root-owned SUID sandbox helpers.');
+    if (await confirm('Configure the Electron sandbox helpers with sudo?', true)) {
+      const helperPaths = helpersToRepair.map((state) => state.path);
+      const ownershipOk = run('sudo', ['chown', 'root:root', ...helperPaths]);
+      const permissionsOk = ownershipOk && run('sudo', ['chmod', '4755', ...helperPaths]);
+      const repaired = helperPaths.every((helperPath) => inspectSandboxHelper(helperPath).configured);
+      if (permissionsOk && repaired) {
+        ok('Electron sandbox helpers are root:root with mode 4755.');
+      } else {
+        fail('Electron sandbox helper repair failed. Do not launch with --no-sandbox.');
+      }
+    } else {
+      warn('Sandbox helper repair skipped. Electron development/unpacked builds may not start.');
+      notes.push('On restricted Linux hosts, configure chrome-sandbox as root:root mode 4755 before launching Electron.');
+    }
+  } else if (helperStates.length) {
+    ok('Electron sandbox helper permissions are already correct.');
+  }
+
+  const distDir = path.join(REPO_ROOT, 'electron', 'dist');
+  const hasAppImage = existsSync(distDir)
+    && readdirSync(distDir).some((entry) => entry.endsWith('.AppImage'));
+  if (!hasAppImage) return;
+
+  info('Portable AppImages need a per-application user-namespace allowance on this host.');
+  if (!(await confirm('Install an AppArmor profile for the generated AppImage with sudo?', true))) {
+    warn('AppArmor profile installation skipped. Prefer the generated DEB package on Ubuntu.');
+    notes.push('The AppImage may be blocked by AppArmor; install the DEB package or add a per-app userns profile.');
+    return;
+  }
+
+  const profileName = appArmorProfileName(appName);
+  const profileTarget = path.join('/etc', 'apparmor.d', profileName);
+  const tempDir = mkdtempSync(path.join(tmpdir(), 'myharness-apparmor-'));
+  const tempProfile = path.join(tempDir, profileName);
+  try {
+    writeFileSync(tempProfile, appArmorProfileText(distDir, profileName), 'utf8');
+    const installed = run('sudo', ['install', '-m', '0644', tempProfile, profileTarget]);
+    const loaded = installed && run('sudo', ['apparmor_parser', '-r', profileTarget]);
+    if (loaded) {
+      ok(`Installed AppArmor profile ${profileName}.`);
+    } else {
+      fail(`Could not install/load ${profileTarget}. Prefer the generated DEB package.`);
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 // ── YAML text editing ────────────────────────────────────────────────
@@ -521,7 +658,7 @@ async function stepFrontends() {
   return { browser, desktop, tui };
 }
 
-function installFrontends({ browser, desktop, tui }, appName) {
+async function installFrontends({ browser, desktop, tui }, appName) {
   heading('Building clients');
   if (browser || desktop) {
     info('Installing frontend dependencies...');
@@ -548,6 +685,7 @@ function installFrontends({ browser, desktop, tui }, appName) {
         env: { ...npmEnv(), MYHARNESS_PRODUCT_NAME: appName },
       })) {
         ok(`Desktop package built in electron/dist for ${process.platform}.`);
+        await configureLinuxElectronSandbox(appName);
       } else {
         fail(`Desktop package build failed. Run "npm run ${target}" in electron/ for details.`);
       }
@@ -850,7 +988,7 @@ async function main() {
 
   const answers = { app, codex, claude, native, audio, frontends, server };
   if (!writeConfig(answers)) return;
-  installFrontends(frontends, app.appName);
+  await installFrontends(frontends, app.appName);
   summary(answers);
 }
 
@@ -874,6 +1012,11 @@ export {
   findKey,
   dedent,
   yamlScalar,
+  linuxSandboxPaths,
+  inspectSandboxHelper,
+  appArmorRestrictsUserNamespaces,
+  appArmorProfileText,
+  appArmorProfileName,
   EXAMPLE_CONFIG,
   TARGET_CONFIG,
 };

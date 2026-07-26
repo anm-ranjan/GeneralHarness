@@ -23,6 +23,11 @@ import {
   ConfigEditor,
   yamlScalar,
   dedent,
+  linuxSandboxPaths,
+  inspectSandboxHelper,
+  appArmorRestrictsUserNamespaces,
+  appArmorProfileText,
+  appArmorProfileName,
   EXAMPLE_CONFIG,
 } from './setup.mjs';
 
@@ -299,6 +304,38 @@ test('yamlScalar quotes hostile strings safely', () => {
 test('dedent normalises art indentation without losing relative shape', () => {
   assert.equal(dedent('    a\n      b\n    c'), 'a\n  b\nc');
   assert.equal(dedent('  a\n\n  b'), 'a\n\nb');
+});
+
+test('Linux sandbox paths cover dependency and unpacked helpers', () => {
+  assert.deepEqual(linuxSandboxPaths('/repo'), [
+    path.join('/repo', 'electron', 'node_modules', 'electron', 'dist', 'chrome-sandbox'),
+    path.join('/repo', 'electron', 'dist', 'linux-unpacked', 'chrome-sandbox'),
+  ]);
+});
+
+test('sandbox helper inspection requires root ownership and exact 4755 mode', () => {
+  const fakeStat = ({ uid = 0, gid = 0, mode = 0o104755 } = {}) =>
+    inspectSandboxHelper('/helper', () => ({ uid, gid, mode }));
+
+  assert.equal(fakeStat().configured, true);
+  assert.equal(fakeStat({ uid: 1000 }).configured, false);
+  assert.equal(fakeStat({ gid: 1000 }).configured, false);
+  assert.equal(fakeStat({ mode: 0o100755 }).configured, false);
+  assert.equal(inspectSandboxHelper('/missing', () => { throw new Error('missing'); }).exists, false);
+});
+
+test('AppArmor restriction detection is conservative', () => {
+  assert.equal(appArmorRestrictsUserNamespaces(() => '1\n'), true);
+  assert.equal(appArmorRestrictsUserNamespaces(() => '0\n'), false);
+  assert.equal(appArmorRestrictsUserNamespaces(() => { throw new Error('unsupported'); }), false);
+});
+
+test('AppArmor profile permits user namespaces only for generated AppImages', () => {
+  const profile = appArmorProfileText('/opt/My Harness/electron/dist', 'my-harness-electron-appimage');
+  assert.match(profile, /profile my-harness-electron-appimage "\/opt\/My Harness\/electron\/dist\/\*\.AppImage"/);
+  assert.match(profile, /\n  userns,\n/);
+  assert.match(profile, /flags=\(default_allow\)/);
+  assert.equal(appArmorProfileName('My Harness!'), 'my-harness-electron-appimage');
 });
 
 test('ConfigEditor reports a missing key instead of corrupting the file', () => {

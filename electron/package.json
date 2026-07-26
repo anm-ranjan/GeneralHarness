@@ -64,8 +64,12 @@
       "target": "dmg"
     },
     "linux": {
-      "target": "AppImage",
-      "category": "Development"
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "maintainer": "anm-ranjan"
     }
   }
 }

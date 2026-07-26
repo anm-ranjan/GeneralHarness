@@ -67,7 +67,11 @@ existing session over, carrying the completed context across.
 - **Web UI** — React 19 + Vite + Tailwind CSS v4, fully themeable at runtime.
 - **Desktop** — Electron shell around the same app, which additionally unlocks
   in-app file editing. Setup builds NSIS on Windows, DMG on macOS, and
-  AppImage packages on Linux; cross-OS builds should run on their target OS.
+  AppImage and DEB packages on Linux; cross-OS builds should run on their
+  target OS. On Ubuntu, the DEB is preferred. When AppArmor restricts
+  unprivileged user namespaces, setup offers to configure the Electron SUID
+  helpers and install an AppImage-specific AppArmor profile; it never disables
+  Chromium's sandbox.
 - **Rust TUI** — `tui-rs/`, a ratatui client that speaks only the public REST and
   WebSocket API, so it can attach to a backend on another machine.
 - **CLI** — `./run.sh --cli`, standalone or attached to a running backend with
@@ -106,6 +110,27 @@ The interactive installer asks for everything it needs and does the rest:
 It then creates `./.venv`, installs `requirements.txt` into it, and writes
 `backend/agent/agent_config.yaml`. Re-running it is safe: it offers to back the
 existing config up to `agent_config.yaml.bak` before overwriting.
+
+### Linux desktop installation note
+
+Linux setup produces both an AppImage and a DEB in `electron/dist/`. Prefer the
+DEB on Ubuntu and other Debian-based systems.
+
+Ubuntu 24.04 and newer can restrict the unprivileged user namespaces Electron
+normally uses for Chromium sandboxing. When setup detects that restriction, it:
+
+1. Checks the `chrome-sandbox` helpers created under Electron's dependencies and
+   the unpacked application.
+2. Offers to use `sudo` to set those helpers to owner `root:root` and mode
+   `4755`, then verifies the result.
+3. Offers to install and load a per-application AppArmor profile allowing
+   user namespaces for generated AppImages.
+
+Both privileged operations require explicit confirmation and an interactive
+sudo password. Setup never adds `--no-sandbox`, disables AppArmor, or changes
+the system-wide user-namespace setting. Running `npm ci` or rebuilding Electron
+can replace the sandbox helpers, so rerun setup if the SUID sandbox error
+returns.
 
 Then launch:
 
