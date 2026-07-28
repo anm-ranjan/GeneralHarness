@@ -50,6 +50,8 @@ def health():
 
 @router.post("/api/shutdown")
 def shutdown_server():
+    utils.kill_all_background_jobs()
+
     def stop():
         parent_pid = int(os.environ.get("MYHARNESS_RUN_PARENT_PID") or "0")
 

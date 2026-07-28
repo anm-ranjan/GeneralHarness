@@ -1,5 +1,6 @@
 """Tool implementations, caching, compression, diff helpers, and config loading."""
 
+import atexit
 import hashlib
 import base64
 import json
@@ -10,8 +11,10 @@ import fnmatch
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from urllib.parse import urlparse
@@ -180,6 +183,8 @@ _APPROVAL_MODE_DEFAULT = str(
 APPROVAL_MODE = _APPROVAL_MODE_DEFAULT
 MAX_TOOL_OUTPUT = config_int(CONFIG, ["limits", "max_tool_output"], 12000)
 DEFAULT_SHELL_TIMEOUT = config_int(CONFIG, ["shell", "default_timeout"], 120)
+MAX_BACKGROUND_JOBS = config_int(CONFIG, ["shell", "max_background_jobs"], 10)
+BACKGROUND_OUTPUT_MAX_LINES = config_int(CONFIG, ["shell", "background_output_max_lines"], 2000)
 MAX_AGENT_ITERATIONS = config_int(CONFIG, ["agent", "max_iterations"], 20)
 TOOL_CALL_CHECKPOINT = config_int(CONFIG, ["agent", "tool_call_checkpoint"], 20)
 MAX_SEARCH_RESULTS = config_int(CONFIG, ["search", "max_results"], 100)
@@ -1659,7 +1664,13 @@ def command_is_dangerous(command: str) -> str:
     return ""
 
 
-def tool_shell_run(command: str, working_directory: str, timeout: int = DEFAULT_SHELL_TIMEOUT) -> str:
+def tool_shell_run(
+    command: str,
+    working_directory: str,
+    timeout: int = DEFAULT_SHELL_TIMEOUT,
+    background: bool = False,
+    session_id: str | None = None,
+) -> str:
     resolved_cwd = _resolve_path(working_directory)
     if not is_path_allowed(resolved_cwd):
         return f"ERROR: Access denied. Working directory '{working_directory}' is not in allowed paths."
@@ -1675,6 +1686,9 @@ def tool_shell_run(command: str, working_directory: str, timeout: int = DEFAULT_
     if sys.platform == "win32" and resolved_cwd.startswith("\\\\"):
         effective_cwd = None
         shell_command = f'cd /d "{working_directory}" && {command}'
+
+    if background:
+        return _start_background_job(shell_command, effective_cwd, session_id=session_id)
 
     try:
         completed = subprocess.run(
@@ -1701,6 +1715,199 @@ def tool_shell_run(command: str, working_directory: str, timeout: int = DEFAULT_
         return truncate_output(f"ERROR: Command timed out after {timeout} seconds.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}", spill=True)
     except Exception as e:
         return f"ERROR: Could not run command: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Background shell jobs
+#
+# tool_shell_run's synchronous path (above) cannot host anything that doesn't
+# exit on its own, like a dev server or a watch task: subprocess.run() blocks
+# the tool call until the process exits or the (600s-capped) timeout fires,
+# and there is nowhere to keep a handle to check on it afterwards. This
+# registry lets shell_run(background=True) hand back a job id immediately,
+# with shell_check/shell_kill to poll output and stop it later.
+# ---------------------------------------------------------------------------
+
+_BACKGROUND_JOBS: dict[str, dict] = {}
+_BACKGROUND_JOBS_LOCK = threading.Lock()
+
+
+def _pump_stream(stream, buf: deque, lock: threading.Lock) -> None:
+    try:
+        for line in iter(stream.readline, ""):
+            with lock:
+                buf.append(line.rstrip("\n"))
+    except Exception:
+        pass
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+
+def _prune_background_jobs_locked() -> None:
+    """Drop the oldest finished jobs once the registry grows past the cap. Caller must hold _BACKGROUND_JOBS_LOCK."""
+    finished = sorted(
+        (jid for jid, job in _BACKGROUND_JOBS.items() if job["proc"].poll() is not None),
+        key=lambda jid: _BACKGROUND_JOBS[jid]["started_at"],
+    )
+    while len(_BACKGROUND_JOBS) > MAX_BACKGROUND_JOBS and finished:
+        del _BACKGROUND_JOBS[finished.pop(0)]
+
+
+def _start_background_job(shell_command: str, cwd: str | None, session_id: str | None = None) -> str:
+    with _BACKGROUND_JOBS_LOCK:
+        _prune_background_jobs_locked()
+        running = sum(1 for job in _BACKGROUND_JOBS.values() if job["proc"].poll() is None)
+        if running >= MAX_BACKGROUND_JOBS:
+            return f"ERROR: Too many background jobs already running (limit {MAX_BACKGROUND_JOBS}). Stop one with shell_kill first."
+
+    try:
+        proc = subprocess.Popen(
+            shell_command,
+            cwd=cwd,
+            shell=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+    except Exception as e:
+        return f"ERROR: Could not start background command: {e}"
+
+    job_id = uuid.uuid4().hex[:8]
+    job = {
+        "proc": proc,
+        "command": shell_command,
+        "cwd": cwd,
+        "session_id": session_id,
+        "started_at": time.time(),
+        "stdout": deque(maxlen=BACKGROUND_OUTPUT_MAX_LINES),
+        "stderr": deque(maxlen=BACKGROUND_OUTPUT_MAX_LINES),
+        "buf_lock": threading.Lock(),
+    }
+    with _BACKGROUND_JOBS_LOCK:
+        _BACKGROUND_JOBS[job_id] = job
+
+    threading.Thread(target=_pump_stream, args=(proc.stdout, job["stdout"], job["buf_lock"]), daemon=True).start()
+    threading.Thread(target=_pump_stream, args=(proc.stderr, job["stderr"], job["buf_lock"]), daemon=True).start()
+
+    return (
+        f"Started background job {job_id} (pid {proc.pid}): {shell_command}\n"
+        f"Use shell_check(job_id=\"{job_id}\") to poll output and shell_kill(job_id=\"{job_id}\") to stop it."
+    )
+
+
+def tool_shell_check(job_id: str, tail_lines: int = 200) -> str:
+    with _BACKGROUND_JOBS_LOCK:
+        job = _BACKGROUND_JOBS.get(job_id)
+    if job is None:
+        return f"ERROR: Unknown background job '{job_id}'. It may not exist, or it finished and was pruned."
+
+    proc = job["proc"]
+    returncode = proc.poll()
+    n = max(1, min(int(tail_lines), BACKGROUND_OUTPUT_MAX_LINES))
+    with job["buf_lock"]:
+        stdout_tail = list(job["stdout"])[-n:]
+        stderr_tail = list(job["stderr"])[-n:]
+
+    status = "running" if returncode is None else f"exited (code {returncode})"
+    header = f"Job {job_id} ({status}) — pid {proc.pid} — {job['command']}"
+    body = (
+        "--- stdout (tail) ---\n" + "\n".join(stdout_tail)
+        + "\n--- stderr (tail) ---\n" + "\n".join(stderr_tail)
+    )
+    return truncate_output(f"{header}\n{body}", spill=True)
+
+
+def tool_shell_kill(job_id: str) -> str:
+    with _BACKGROUND_JOBS_LOCK:
+        job = _BACKGROUND_JOBS.get(job_id)
+    if job is None:
+        return f"ERROR: Unknown background job '{job_id}'."
+
+    proc = job["proc"]
+    if proc.poll() is not None:
+        return f"Job {job_id} already exited (code {proc.returncode})."
+
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=8)
+    except Exception as e:
+        return f"ERROR: Failed to stop job {job_id}: {e}"
+    return f"Stopped job {job_id} (exit code {proc.returncode})."
+
+
+_KILL_ALL_SESSIONS = object()
+
+
+def kill_all_background_jobs(session_id=_KILL_ALL_SESSIONS, overall_timeout: float = 12.0) -> None:
+    """Best-effort cleanup so an agent's background jobs (dev servers, watch
+    tasks) don't outlive the run/session/process that started them.
+
+    Called two ways:
+    - No session_id (the default): kill every job, regardless of session.
+      Registered with atexit below, and called from the web app's process
+      shutdown paths (lifespan shutdown, /api/shutdown) so nothing outlives
+      the backend or Electron app being closed.
+    - With session_id: kill only that session's jobs. Called when a session
+      is actually deleted (there is no route back to shell_check/shell_kill
+      for it after that), so its background jobs don't run forever. A
+      cancelled-but-not-deleted run deliberately does NOT hit this path —
+      backgrounding a command is precisely so it survives past the turn that
+      started it, so cancelling that turn shouldn't kill it.
+
+    Waits against one shared deadline across all jobs (rather than a fixed
+    timeout per job) so a handful of hung processes can't multiply the total
+    wait past what callers budget for it (e.g. Electron's before-quit)."""
+    with _BACKGROUND_JOBS_LOCK:
+        if session_id is _KILL_ALL_SESSIONS:
+            procs = [job["proc"] for job in _BACKGROUND_JOBS.values() if job["proc"].poll() is None]
+        else:
+            procs = [
+                job["proc"] for job in _BACKGROUND_JOBS.values()
+                if job["proc"].poll() is None and job.get("session_id") == session_id
+            ]
+    for proc in procs:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+    deadline = time.monotonic() + overall_timeout
+    for proc in procs:
+        try:
+            proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    for proc in procs:
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    if session_id is not _KILL_ALL_SESSIONS:
+        # The session is gone for good, so there is no shell_check/shell_kill
+        # call coming for these jobs later - drop them instead of waiting for
+        # _prune_background_jobs_locked to evict them once the cap is hit.
+        with _BACKGROUND_JOBS_LOCK:
+            for jid in [jid for jid, job in _BACKGROUND_JOBS.items() if job.get("session_id") == session_id]:
+                del _BACKGROUND_JOBS[jid]
+
+
+atexit.register(kill_all_background_jobs)
 
 
 # ---------------------------------------------------------------------------
@@ -1979,6 +2186,8 @@ _REQUIRED_ARGS = {
     "file_replace": ["file_path", "old_text", "new_text"],
     "apply_patch": ["patch_text"],
     "shell_run": ["command", "working_directory"],
+    "shell_check": ["job_id"],
+    "shell_kill": ["job_id"],
 }
 
 

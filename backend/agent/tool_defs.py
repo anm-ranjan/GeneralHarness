@@ -282,15 +282,58 @@ WRITE_TOOLS = [
         "type": "function",
         "function": {
             "name": "shell_run",
-            "description": "Run a shell command in an allowed working directory and return exit code, stdout, and stderr.",
+            "description": (
+                "Run a shell command in an allowed working directory and return exit code, stdout, and stderr. "
+                "This blocks until the command exits or the timeout is hit (max 600s), so it cannot host anything "
+                "that stays running on its own — a dev server, a watch task, `tail -f`. For those, set "
+                "background=true instead: the call returns immediately with a job id, and you poll it with "
+                "shell_check and stop it with shell_kill."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {"type": "string", "description": "Command to run."},
                     "working_directory": {"type": "string", "description": "Allowed directory where command should run."},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds. Default: 120."},
+                    "timeout": {"type": "integer", "description": "Timeout in seconds for a foreground run. Default: 120. Ignored when background=true."},
+                    "background": {
+                        "type": "boolean",
+                        "description": (
+                            "Start the command detached and return immediately with a job id instead of "
+                            "waiting for it to exit. Use for dev servers, watch tasks, or anything long-running. "
+                            "Default: false."
+                        ),
+                    },
                 },
                 "required": ["command", "working_directory"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "shell_check",
+            "description": "Poll a background job started by shell_run(background=true): whether it's still running (or its exit code), plus the tail of its stdout/stderr.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "string", "description": "Job id returned by shell_run(background=true)."},
+                    "tail_lines": {"type": "integer", "description": "Number of trailing lines to return per stream. Default: 200."},
+                },
+                "required": ["job_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "shell_kill",
+            "description": "Stop a background job started by shell_run(background=true).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "string", "description": "Job id returned by shell_run(background=true)."},
+                },
+                "required": ["job_id"],
             },
         },
     },

@@ -646,6 +646,11 @@ def _ledger_tool_entry(name: str, arguments: dict, result: str) -> dict:
             "exit_code": int(exit_match.group(1)) if exit_match else None,
             "evidence": _bounded_ledger_text(result),
         })
+    elif name in {"shell_check", "shell_kill"}:
+        entry.update({
+            "job_id": arguments.get("job_id", ""),
+            "evidence": _bounded_ledger_text(result),
+        })
     elif name in WRITE_TOOL_NAMES:
         content = arguments.get("content", arguments.get("new_text", arguments.get("patch_text", "")))
         digest = (
@@ -971,6 +976,8 @@ def execute_tool(name: str, arguments: dict, ui=None) -> str:
         return err
     if name in {"file_search", "file_list", "content_search", "file_read", "image_read", "web_request", "gather_context", "skill_list", "skill_read"}:
         return utils.execute_read_only_tool(name, arguments)
+    if name == "shell_check":
+        return utils.tool_shell_check(job_id=arguments["job_id"], tail_lines=arguments.get("tail_lines", 200))
     if not request_approval(name, arguments, ui=ui):
         return "ERROR: Tool call denied by user."
     try:
@@ -1000,9 +1007,13 @@ def execute_tool(name: str, arguments: dict, ui=None) -> str:
                 command=arguments["command"],
                 working_directory=arguments["working_directory"],
                 timeout=arguments.get("timeout", utils.DEFAULT_SHELL_TIMEOUT),
+                background=arguments.get("background", False),
+                session_id=getattr(ui, "session_id", None),
             )
             utils._invalidate_cache()
             return result
+        if name == "shell_kill":
+            return utils.tool_shell_kill(job_id=arguments["job_id"])
     except Exception as e:
         return f"ERROR: Tool execution failed: {e}"
     return f"ERROR: Unknown tool '{name}'"
@@ -1181,7 +1192,12 @@ def _tool_status_line(func_name: str, func_args: dict) -> str:
         cmd = func_args.get("command", "")
         if len(cmd) > 60:
             cmd = cmd[:57] + "..."
-        return f"Run: {cmd}"
+        prefix = "Run (background)" if func_args.get("background") else "Run"
+        return f"{prefix}: {cmd}"
+    if func_name == "shell_check":
+        return f"Check background job {func_args.get('job_id', '')}"
+    if func_name == "shell_kill":
+        return f"Stop background job {func_args.get('job_id', '')}"
     if func_name == "web_request":
         return f"Fetch {func_args.get('url', '')}"
     if func_name == "skill_list":

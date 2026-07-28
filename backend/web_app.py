@@ -130,9 +130,13 @@ def _run_lock_for(session_id: str) -> threading.RLock:
 
 
 def _discard_run_lock(session_id: str) -> None:
-    """Drop a deleted session's lock. Callers ensure no run is active."""
+    """Drop a deleted session's lock and stop any background shell jobs
+    (shell_run(background=true)) it left running - there is no route back to
+    shell_check/shell_kill for them once the session is gone. Callers ensure
+    no run is active."""
     with _run_locks_guard:
         _run_locks.pop(session_id, None)
+    utils.kill_all_background_jobs(session_id)
 
 
 def _scripts_dir_for_session(session_id: str) -> str:
@@ -191,6 +195,7 @@ async def _lifespan(app: FastAPI):
     utils.register_allowed_path(str(_ATTACHMENTS_DIR))
     _manager.set_event_loop(asyncio.get_event_loop())
     yield
+    utils.kill_all_background_jobs()
 
 
 app = FastAPI(title=utils.APP_NAME, version="0.1.0", lifespan=_lifespan)

@@ -59,6 +59,9 @@ agent:
 
 shell:
   default_timeout: 120
+  # Limits for shell_run(background=true) jobs (dev servers, watch tasks).
+  max_background_jobs: 10
+  background_output_max_lines: 2000
 
 server:
   # Bind address for the FastAPI backend. 0.0.0.0 makes it available on the LAN.

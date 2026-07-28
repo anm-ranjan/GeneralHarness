@@ -436,7 +436,7 @@ async function requestBackendShutdown() {
   }
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2_000);
+    const timer = setTimeout(() => controller.abort(), 4_000);
     await fetch(new URL("/api/shutdown", activeBackendUrl).toString(), {
       method: "POST",
       signal: controller.signal,
@@ -549,9 +549,34 @@ app.on("activate", () => {
   showMainWindow();
 });
 
-app.on("before-quit", () => {
+let quitInProgress = false;
+
+async function waitForBackendExit(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (backendProcess && backendProcess.exitCode === null && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+app.on("before-quit", (event) => {
   isQuitting = true;
-  if (backendProcess) backendProcess.kill();
+  if (quitInProgress || !backendProcess) return;
+  quitInProgress = true;
+  event.preventDefault();
+  // Ask the backend to shut down gracefully first (this also kills any
+  // background jobs an agent left running - see requestBackendShutdown /
+  // /api/shutdown) and only fall back to a hard kill if it doesn't exit
+  // in time. A bare kill() would skip that cleanup on the server side.
+  requestBackendShutdown()
+    .catch(() => {})
+    // Give the backend enough room to clear its own budget for stopping
+    // background jobs (kill_all_background_jobs' overall_timeout, 12s) plus
+    // margin for the request round trip and uvicorn's own graceful shutdown.
+    .then(() => waitForBackendExit(15_000))
+    .finally(() => {
+      if (backendProcess && backendProcess.exitCode === null) backendProcess.kill();
+      app.quit();
+    });
 });
 
 app.on("window-all-closed", () => {

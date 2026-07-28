@@ -100,6 +100,10 @@ class WebUI:
                 _file_snapshots[session_id] = {}
             _file_snapshots.move_to_end(session_id)
 
+    @property
+    def session_id(self) -> str:
+        return self._sid
+
     def _emit(self, event_type: EventType, data: dict) -> None:
         event = EventEnvelope(session_id=self._sid, type=event_type, data=data)
         self._store.append_event(event)
