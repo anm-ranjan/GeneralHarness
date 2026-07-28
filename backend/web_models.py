@@ -34,6 +34,7 @@ class EventType(str, Enum):
     THINKING = "thinking"
     QUEUE_UPDATED = "queue_updated"
     WORKSPACE_CHANGED = "workspace_changed"
+    PLAN_UPDATE = "plan_update"
 
 
 def _evt_id() -> str:

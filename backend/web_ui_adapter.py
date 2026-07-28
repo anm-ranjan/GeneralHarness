@@ -304,6 +304,9 @@ class WebUI:
             # Manifest persistence must never break the run loop.
             pass
 
+    def show_plan_update(self, items: list[dict]) -> None:
+        self._emit(EventType.PLAN_UPDATE, {"items": items})
+
     def show_generated_artifact(self, path: str, media_type: str) -> None:
         version = str(time.time_ns())
         try:

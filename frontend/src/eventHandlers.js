@@ -90,6 +90,10 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       dispatch({ type: 'SET_QUEUE', payload: data.items || [] })
       break
 
+    case 'plan_update':
+      dispatch({ type: 'SET_PLAN', payload: data.items || [] })
+      break
+
     case 'assistant_delta':
       // Live-only streamed text; never part of stored replays.
       if (stateRef.current.isReplaying) break

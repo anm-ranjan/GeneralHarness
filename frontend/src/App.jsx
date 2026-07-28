@@ -3,6 +3,7 @@ import Sidebar from './components/Sidebar/Sidebar'
 import TopBar from './components/TopBar'
 import Stage from './components/Stage/Stage'
 import RunStatusDock from './components/Stage/RunStatusDock'
+import PlanPanel from './components/Stage/PlanPanel'
 import Composer from './components/Composer/Composer'
 import QueuedMessages from './components/Composer/QueuedMessages'
 import DirectoryPicker from './components/Modals/DirectoryPicker'
@@ -59,6 +60,7 @@ function AppLayout() {
       <main className="main-area flex flex-col overflow-hidden">
         <TopBar />
         <Stage />
+        <PlanPanel />
         <RunStatusDock />
         <QueuedMessages />
         <Composer />

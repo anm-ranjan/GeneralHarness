@@ -182,6 +182,17 @@ test('workspace_changed is skipped during replay so historical state does not bl
   assert.deepEqual(ctx.actions, [])
 })
 
+test('plan_update sets the plan, defaulting a missing items list to empty', () => {
+  const ctx = collect()
+  const items = [{ content: 'Read the file', status: 'completed' }, { content: 'Fix the bug', status: 'in_progress' }]
+  handleSessionEvent({ type: 'plan_update', data: { items } }, ctx.dispatch, ctx.stateRef)
+  assert.deepEqual(ctx.actions, [{ type: 'SET_PLAN', payload: items }])
+
+  const ctxEmpty = collect()
+  handleSessionEvent({ type: 'plan_update', data: {} }, ctxEmpty.dispatch, ctxEmpty.stateRef)
+  assert.deepEqual(ctxEmpty.actions, [{ type: 'SET_PLAN', payload: [] }])
+})
+
 test('provider_switch keeps its transcript note but skips the provider mutation during replay', () => {
   const live = collect()
   handleSessionEvent({

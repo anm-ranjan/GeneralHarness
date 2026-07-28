@@ -225,6 +225,40 @@ READ_ONLY_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "plan_update",
+            "description": (
+                "Publish or update a short plan/checklist of steps for the current task, shown to the user "
+                "in the session view. Send the full current plan each time (it replaces whatever was shown "
+                "before) - lay it out when starting a multi-step task, then call it again whenever a step's "
+                "status changes. Skip it for simple one-shot requests that don't need a visible plan."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "description": "The full current plan, in order.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": {"type": "string", "description": "Short label for this step."},
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "in_progress", "completed"],
+                                    "description": "Default: pending.",
+                                },
+                            },
+                            "required": ["content"],
+                        },
+                    },
+                },
+                "required": ["items"],
+            },
+        },
+    },
 ]
 
 WRITE_TOOLS = [

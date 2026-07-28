@@ -44,6 +44,12 @@ class AgentUI(typing.Protocol):
 
     def show_generated_artifact(self, path: str, media_type: str) -> None: ...
 
+    def show_plan_update(self, items: list[dict]) -> None:
+        """Optional: a published plan/checklist (plan_update tool). Callers
+        feature-detect with hasattr, so UIs without a plan surface may omit
+        this."""
+        ...
+
     def prompt_user_input(self, prompt_text: str) -> str:
         """Raises EOFError or KeyboardInterrupt on exit."""
         ...

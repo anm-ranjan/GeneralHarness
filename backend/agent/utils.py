@@ -1406,6 +1406,37 @@ def image_attachment_from_tool_result(result: str) -> tuple[str, dict[str, str] 
     }
 
 
+_PLAN_STATUSES = {"pending", "in_progress", "completed"}
+MAX_PLAN_ITEMS = 50
+
+
+def normalize_plan_items(items) -> list[dict]:
+    """Validate and normalize plan_update's items; raises ValueError with a
+    caller-facing message on anything malformed."""
+    if not isinstance(items, list) or not items:
+        raise ValueError("'items' must be a non-empty list of {content, status} objects.")
+    if len(items) > MAX_PLAN_ITEMS:
+        raise ValueError(f"Too many plan items (max {MAX_PLAN_ITEMS}).")
+    normalized = []
+    for i, raw in enumerate(items):
+        if not isinstance(raw, dict) or not str(raw.get("content", "")).strip():
+            raise ValueError(f"Item {i} is missing non-empty 'content'.")
+        status = raw.get("status", "pending")
+        if status not in _PLAN_STATUSES:
+            raise ValueError(f"Item {i} has invalid status '{status}'. Use one of: {', '.join(sorted(_PLAN_STATUSES))}.")
+        normalized.append({"content": str(raw["content"]).strip(), "status": status})
+    return normalized
+
+
+def tool_plan_update(items) -> str:
+    try:
+        normalized = normalize_plan_items(items)
+    except ValueError as e:
+        return f"ERROR: {e}"
+    done = sum(1 for item in normalized if item["status"] == "completed")
+    return f"Plan updated: {len(normalized)} step(s), {done} completed."
+
+
 def tool_web_request(url: str, method: str = "GET") -> str:
     try:
         parsed = urlparse(url)
@@ -2188,6 +2219,7 @@ _REQUIRED_ARGS = {
     "shell_run": ["command", "working_directory"],
     "shell_check": ["job_id"],
     "shell_kill": ["job_id"],
+    "plan_update": ["items"],
 }
 
 

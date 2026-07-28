@@ -59,6 +59,12 @@ class CliUI:
     def show_context_usage(self, usage_str: str) -> None:
         ui_print(f"Session usage: {usage_str}", style="cyan")
 
+    def show_plan_update(self, items: list[dict]) -> None:
+        ui_panel("Plan", "", style="cyan")
+        marks = {"completed": "[x]", "in_progress": "[~]"}
+        for item in items:
+            ui_print(f"  {marks.get(item.get('status'), '[ ]')} {item.get('content', '')}", style="dim")
+
     def show_agent_finished(self, reason: str) -> None:
         ui_print(f"Agent finished ({reason}).", style="dim")
 

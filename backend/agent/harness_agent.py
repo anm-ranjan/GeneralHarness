@@ -651,6 +651,11 @@ def _ledger_tool_entry(name: str, arguments: dict, result: str) -> dict:
             "job_id": arguments.get("job_id", ""),
             "evidence": _bounded_ledger_text(result),
         })
+    elif name == "plan_update":
+        entry.update({
+            "items": arguments.get("items", []),
+            "evidence": _bounded_ledger_text(result),
+        })
     elif name in WRITE_TOOL_NAMES:
         content = arguments.get("content", arguments.get("new_text", arguments.get("patch_text", "")))
         digest = (
@@ -978,6 +983,15 @@ def execute_tool(name: str, arguments: dict, ui=None) -> str:
         return utils.execute_read_only_tool(name, arguments)
     if name == "shell_check":
         return utils.tool_shell_check(job_id=arguments["job_id"], tail_lines=arguments.get("tail_lines", 200))
+    if name == "plan_update":
+        items = arguments.get("items", [])
+        result = utils.tool_plan_update(items)
+        if ui and not result.startswith("ERROR") and hasattr(ui, "show_plan_update"):
+            try:
+                ui.show_plan_update(utils.normalize_plan_items(items))
+            except ValueError:
+                pass
+        return result
     if not request_approval(name, arguments, ui=ui):
         return "ERROR: Tool call denied by user."
     try:
@@ -1198,6 +1212,9 @@ def _tool_status_line(func_name: str, func_args: dict) -> str:
         return f"Check background job {func_args.get('job_id', '')}"
     if func_name == "shell_kill":
         return f"Stop background job {func_args.get('job_id', '')}"
+    if func_name == "plan_update":
+        n = len(func_args.get("items") or [])
+        return f"Plan: {n} step{'s' if n != 1 else ''}"
     if func_name == "web_request":
         return f"Fetch {func_args.get('url', '')}"
     if func_name == "skill_list":

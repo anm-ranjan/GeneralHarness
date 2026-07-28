@@ -34,6 +34,7 @@ export const initialState = {
 
   stageItems: [],
   queuedMessages: [],
+  plan: [],
 
   contextPercent: 0,
   contextLabel: '',
@@ -210,6 +211,7 @@ export function reducer(state, action) {
         isCancelling: false,
         stageItems: [],
         queuedMessages: (meta.message_queue || []).map(queueItemView),
+        plan: [],
         touchedFiles: [],
         diffViewerFile: null,
         // The editor points at a path in the previous session's workspace.
@@ -236,6 +238,7 @@ export function reducer(state, action) {
         currentMeta: null,
         stageItems: [],
         queuedMessages: [],
+        plan: [],
         isRunning: false,
         isCancelling: false,
         iterationN: null,
@@ -274,6 +277,9 @@ export function reducer(state, action) {
 
     case 'SET_QUEUE':
       return { ...state, queuedMessages: (action.payload || []).map(queueItemView) }
+
+    case 'SET_PLAN':
+      return { ...state, plan: action.payload || [] }
 
     case 'SET_WS_CONNECTED':
       return patched(state, { wsConnected: action.payload })

@@ -70,3 +70,24 @@ test('no-op toggles preserve state identity', () => {
 test('unknown actions leave state untouched', () => {
   assert.equal(reducer(initialState, { type: 'NOPE' }), initialState)
 })
+
+test('SET_PLAN replaces the plan and defaults a missing payload to empty', () => {
+  const items = [{ content: 'Read the file', status: 'completed' }, { content: 'Fix the bug', status: 'in_progress' }]
+  const withPlan = reducer(initialState, { type: 'SET_PLAN', payload: items })
+  assert.deepEqual(withPlan.plan, items)
+
+  assert.deepEqual(reducer(withPlan, { type: 'SET_PLAN', payload: null }).plan, [])
+})
+
+test('SELECT_SESSION and CLEAR_SESSION reset the plan', () => {
+  const withPlan = reducer(initialState, { type: 'SET_PLAN', payload: [{ content: 'step', status: 'pending' }] })
+
+  const selected = reducer(withPlan, {
+    type: 'SELECT_SESSION',
+    payload: { meta: { id: 's1', status: 'idle' }, workspaceRoot: '' },
+  })
+  assert.deepEqual(selected.plan, [])
+
+  const withPlanAgain = reducer(selected, { type: 'SET_PLAN', payload: [{ content: 'step', status: 'pending' }] })
+  assert.deepEqual(reducer(withPlanAgain, { type: 'CLEAR_SESSION' }).plan, [])
+})
