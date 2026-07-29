@@ -489,7 +489,14 @@ impl App {
         tree: SessionTree,
         initial_session: Option<&str>,
     ) -> Self {
-        let collapsed = std::collections::HashSet::new();
+        let mut collapsed: std::collections::HashSet<NavKey> = tree
+            .projects
+            .iter()
+            .map(|project| NavKey::Project(project.id.clone()))
+            .collect();
+        if let Some(id) = initial_session {
+            expand_ancestors(&tree, &mut collapsed, &NavKey::Session(id.to_owned()));
+        }
         let rows = flatten_tree(&tree, &collapsed);
         let cursor = initial_session
             .and_then(|id| {
@@ -623,6 +630,9 @@ impl App {
     pub fn replace_tree(&mut self, tree: SessionTree, selected: Option<NavKey>) -> bool {
         let previous = self.selected().map(nav_key);
         self.tree = tree;
+        if let Some(key) = selected.as_ref() {
+            expand_ancestors(&self.tree, &mut self.collapsed, key);
+        }
         self.rows = flatten_tree(&self.tree, &self.collapsed);
         let target = selected.or(previous);
         self.cursor = target
@@ -1317,6 +1327,48 @@ fn flatten_tree(tree: &SessionTree, collapsed: &std::collections::HashSet<NavKey
     rows
 }
 
+/// Ensures every ancestor of `key` is expanded, so a specific navigation
+/// target (e.g. a just-created task or an explicitly requested session) is
+/// reachable in the flattened rows even if its project/task was folded.
+fn expand_ancestors(
+    tree: &SessionTree,
+    collapsed: &mut std::collections::HashSet<NavKey>,
+    key: &NavKey,
+) {
+    match key {
+        NavKey::Project(id) => {
+            collapsed.remove(&NavKey::Project(id.clone()));
+        }
+        NavKey::Task {
+            project_id,
+            task_id,
+        } => {
+            collapsed.remove(&NavKey::Project(project_id.clone()));
+            collapsed.remove(&NavKey::Task {
+                project_id: project_id.clone(),
+                task_id: task_id.clone(),
+            });
+        }
+        NavKey::Session(session_id) => {
+            let ancestors = tree.projects.iter().find_map(|project| {
+                project.tasks.iter().find_map(|task| {
+                    task.sessions
+                        .iter()
+                        .any(|id| id == session_id)
+                        .then(|| (project.id.clone(), task.id.clone()))
+                })
+            });
+            if let Some((project_id, task_id)) = ancestors {
+                collapsed.remove(&NavKey::Project(project_id.clone()));
+                collapsed.remove(&NavKey::Task {
+                    project_id,
+                    task_id,
+                });
+            }
+        }
+    }
+}
+
 fn nav_key(row: &NavRow) -> NavKey {
     match row {
         NavRow::Project { id, .. } => NavKey::Project(id.clone()),
@@ -1431,12 +1483,106 @@ mod tests {
             sessions: HashMap::from([(meta.id.clone(), meta)]),
         };
         let mut app = App::new("http://localhost".to_owned(), Health::default(), tree, None);
-        assert_eq!(app.rows.len(), 3);
+        assert_eq!(app.rows.len(), 1, "projects start folded");
         app.cursor = 0; // the project row
         app.toggle_collapsed();
-        assert_eq!(app.rows.len(), 1, "task and session are folded away");
+        assert_eq!(app.rows.len(), 3, "expanding reveals task and session");
         app.toggle_collapsed();
-        assert_eq!(app.rows.len(), 3, "unfolding restores descendants");
+        assert_eq!(app.rows.len(), 1, "task and session are folded away again");
+    }
+
+    #[test]
+    fn navigator_starts_with_every_project_folded() {
+        let projects = ["alpha", "beta", "__chats__"].map(|id| ProjectInfo {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            tasks: vec![TaskInfo {
+                id: format!("{id}-task"),
+                name: "Task".to_owned(),
+                sessions: vec![format!("{id}-session")],
+            }],
+            ..ProjectInfo::default()
+        });
+        let sessions = projects
+            .iter()
+            .map(|project| {
+                let id = format!("{}-session", project.id);
+                (
+                    id.clone(),
+                    SessionMeta {
+                        id,
+                        ..SessionMeta::default()
+                    },
+                )
+            })
+            .collect();
+        let tree = SessionTree {
+            projects: projects.to_vec(),
+            sessions,
+        };
+        let app = App::new("http://localhost".to_owned(), Health::default(), tree, None);
+        assert_eq!(
+            app.rows.len(),
+            3,
+            "only the three project rows are visible by default"
+        );
+        assert!(app
+            .rows
+            .iter()
+            .all(|row| matches!(row, NavRow::Project { .. })));
+    }
+
+    #[test]
+    fn requested_session_unfolds_only_its_own_project() {
+        let make_project = |id: &str| ProjectInfo {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            tasks: vec![TaskInfo {
+                id: format!("{id}-task"),
+                name: "Task".to_owned(),
+                sessions: vec![format!("{id}-session")],
+            }],
+            ..ProjectInfo::default()
+        };
+        let projects = vec![make_project("alpha"), make_project("beta")];
+        let sessions = projects
+            .iter()
+            .map(|project| {
+                let id = format!("{}-session", project.id);
+                (
+                    id.clone(),
+                    SessionMeta {
+                        id,
+                        ..SessionMeta::default()
+                    },
+                )
+            })
+            .collect();
+        let tree = SessionTree { projects, sessions };
+        let app = App::new(
+            "http://localhost".to_owned(),
+            Health::default(),
+            tree,
+            Some("beta-session"),
+        );
+        assert_eq!(
+            app.active_session_id.as_deref(),
+            Some("beta-session"),
+            "the requested session is selected"
+        );
+        assert!(
+            app.rows
+                .iter()
+                .any(|row| matches!(row, NavRow::Session(s) if s.meta.id == "beta-session")),
+            "its project unfolds so the session is visible"
+        );
+        assert!(
+            !app
+                .rows
+                .iter()
+                .any(|row| matches!(row, NavRow::Session(s) if s.meta.id == "alpha-session")),
+            "unrelated projects stay folded"
+        );
     }
 
     #[test]
@@ -1776,6 +1922,25 @@ mod tests {
         composer.clear_text();
         assert!(composer.text.is_empty());
         assert_eq!(composer.cursor, 0);
+    }
+
+    #[test]
+    fn composer_edits_german_umlauts_and_eszett() {
+        let mut composer = ComposerState::default();
+        composer.insert_str("Größe: über Straße");
+        assert_eq!(composer.cursor, "Größe: über Straße".len());
+        // Walk left until the cursor sits right after the "S" in "Straße".
+        while composer.text[..composer.cursor] != *"Größe: über S" {
+            composer.move_left();
+        }
+        composer.backspace();
+        assert_eq!(composer.text, "Größe: über traße");
+        composer.insert_char('S');
+        assert_eq!(composer.text, "Größe: über Straße");
+        composer.insert_char('ẞ');
+        assert_eq!(composer.text, "Größe: über Sẞtraße");
+        composer.delete_forward();
+        assert_eq!(composer.text, "Größe: über Sẞraße");
     }
 
     #[test]

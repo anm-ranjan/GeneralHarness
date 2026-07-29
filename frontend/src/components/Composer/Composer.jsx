@@ -303,6 +303,7 @@ export default function Composer() {
   }
 
   function handleKeyDown(e) {
+    if (e.key === 'Enter' && e.isComposing) return
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault()
       handleSend()

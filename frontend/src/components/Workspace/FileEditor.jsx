@@ -289,6 +289,7 @@ export default function FileEditor({ path }) {
             value={find}
             onChange={e => { setFind(e.target.value); searchFromRef.current = 0 }}
             onKeyDown={e => {
+              if (e.key === 'Enter' && e.isComposing) return
               if (e.key === 'Enter') { e.preventDefault(); findNext() }
               if (e.key === 'Escape') { e.preventDefault(); setFindOpen(false); setReplaceOpen(false); textareaRef.current?.focus() }
             }}
@@ -316,6 +317,7 @@ export default function FileEditor({ path }) {
                 value={replace}
                 onChange={e => setReplace(e.target.value)}
                 onKeyDown={e => {
+                  if (e.key === 'Enter' && e.isComposing) return
                   if (e.key === 'Enter') { e.preventDefault(); replaceCurrent() }
                   if (e.key === 'Escape') { e.preventDefault(); setFindOpen(false); setReplaceOpen(false); textareaRef.current?.focus() }
                 }}

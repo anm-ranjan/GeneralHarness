@@ -1484,8 +1484,20 @@ struct TerminalSession {
     keyboard_enhanced: bool,
 }
 
+#[cfg(windows)]
+fn enable_utf8_console() {
+    use windows_sys::Win32::System::Console::{SetConsoleCP, SetConsoleOutputCP};
+    const CP_UTF8: u32 = 65001;
+    unsafe {
+        SetConsoleCP(CP_UTF8);
+        SetConsoleOutputCP(CP_UTF8);
+    }
+}
+
 impl TerminalSession {
     fn enter() -> Result<Self> {
+        #[cfg(windows)]
+        enable_utf8_console();
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableBracketedPaste) {
