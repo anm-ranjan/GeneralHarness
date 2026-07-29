@@ -184,10 +184,25 @@ impl MyHarnessClient {
         .await
     }
 
-    pub async fn send_message(&self, session_id: &str, text: &str) -> Result<MessageResponse> {
+    pub async fn send_message(
+        &self,
+        session_id: &str,
+        text: &str,
+        images: &[crate::app::PendingImage],
+    ) -> Result<MessageResponse> {
+        let images: Vec<Value> = images
+            .iter()
+            .map(|image| {
+                json!({
+                    "data": image.data_url,
+                    "mime": image.mime,
+                    "name": image.name,
+                })
+            })
+            .collect();
         self.post_json(
             &format!("api/sessions/{session_id}/message"),
-            &json!({ "text": text, "images": [], "attachments": [] }),
+            &json!({ "text": text, "images": images, "attachments": [] }),
         )
         .await
     }

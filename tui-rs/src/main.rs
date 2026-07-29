@@ -1,6 +1,7 @@
 mod api;
 mod app;
 mod args;
+mod clipboard;
 mod events;
 mod ui;
 mod ws;
@@ -214,7 +215,10 @@ async fn run_ui(
             if app.modal.is_some() && !modal_submitting(app) {
                 append_paste(app, &text);
             } else if app.pane_focus == PaneFocus::Conversation && !app.composer.state.submitting {
-                append_composer_text(app, &text);
+                match clipboard::read_clipboard_image() {
+                    Some(image) => attach_pasted_image(app, image),
+                    None => append_composer_text(app, &text),
+                }
             }
             continue;
         }
@@ -448,6 +452,9 @@ fn handle_conversation_key(
         KeyCode::Right => app.composer.move_right(),
         KeyCode::Backspace if key.modifiers.contains(KeyModifiers::ALT) => {
             app.composer.delete_word_back();
+        }
+        KeyCode::Backspace if app.composer.text.is_empty() && app.composer.remove_last_image() => {
+            app.notice = Some("Removed the last pasted image.".to_owned());
         }
         KeyCode::Backspace => app.composer.backspace(),
         KeyCode::Delete => app.composer.delete_forward(),
@@ -773,6 +780,17 @@ fn append_composer_text(app: &mut App, text: &str) {
     app.composer.insert_str(&sanitized);
 }
 
+fn attach_pasted_image(app: &mut App, mut image: app::PendingImage) {
+    let index = app.composer.images.len() + 1;
+    image.name = format!("clipboard-{index}.png");
+    match app.composer.add_image(image) {
+        Ok(()) => {
+            app.notice = Some(format!("Attached image {index} from the clipboard."));
+        }
+        Err(message) => app.composer.state.error = Some(message),
+    }
+}
+
 fn submit_inline_composer(
     app: &mut App,
     client: api::MyHarnessClient,
@@ -797,12 +815,13 @@ fn submit_inline_composer(
         return;
     }
     let text = app.composer.text.clone();
+    let images = app.composer.images.clone();
     let request_id = app.allocate_request_id();
     app.composer.state.submitting = true;
     app.composer.state.request_id = request_id;
     app.composer.state.error = None;
     tokio::spawn(async move {
-        match client.send_message(&session_id, &text).await {
+        match client.send_message(&session_id, &text, &images).await {
             Ok(response) => {
                 let _ = actions.send(ActionUpdate::MessageSent {
                     request_id,

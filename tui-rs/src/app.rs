@@ -125,6 +125,21 @@ pub enum PaneFocus {
     Conversation,
 }
 
+/// Maximum number of image attachments per message, mirroring the backend's
+/// `_MAX_ATTACHMENTS_PER_MESSAGE` in `backend/web_helpers.py`.
+pub const MAX_PENDING_IMAGES: usize = 4;
+/// Maximum size of a single image attachment, mirroring the backend's
+/// `_MAX_ATTACHMENT_BYTES` in `backend/web_helpers.py`.
+pub const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+
+#[derive(Clone, Debug)]
+pub struct PendingImage {
+    pub name: String,
+    pub mime: String,
+    pub data_url: String,
+    pub size_bytes: usize,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ComposerState {
     pub session_id: Option<String>,
@@ -133,9 +148,30 @@ pub struct ComposerState {
     pub state: FormState,
     pub history_pos: Option<usize>,
     pub stash: String,
+    pub images: Vec<PendingImage>,
 }
 
 impl ComposerState {
+    /// Attempts to add a pasted clipboard image, enforcing the same limits
+    /// the backend applies when it saves message attachments.
+    pub fn add_image(&mut self, image: PendingImage) -> Result<(), String> {
+        if self.images.len() >= MAX_PENDING_IMAGES {
+            return Err(format!(
+                "Only {MAX_PENDING_IMAGES} image attachments are allowed per message."
+            ));
+        }
+        if image.size_bytes > MAX_IMAGE_BYTES {
+            return Err("Pasted image is larger than the 10 MB attachment limit.".to_owned());
+        }
+        self.images.push(image);
+        self.state.error = None;
+        Ok(())
+    }
+
+    pub fn remove_last_image(&mut self) -> bool {
+        self.images.pop().is_some()
+    }
+
     pub fn insert_char(&mut self, character: char) {
         self.text.insert(self.cursor, character);
         self.cursor += character.len_utf8();
@@ -270,6 +306,7 @@ impl ComposerState {
         self.state.error = None;
         self.history_pos = None;
         self.stash.clear();
+        self.images.clear();
     }
 }
 

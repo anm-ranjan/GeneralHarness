@@ -270,11 +270,20 @@ fn draw_inline_composer(frame: &mut Frame, area: Rect, app: &App, rows: &[Range<
     let viewport = area.height.saturating_sub(2).max(1);
     let (cursor_row, cursor_column) = composer_cursor(text, rows, app.composer.cursor);
     let scroll = composer_scroll(cursor_row, rows.len(), viewport);
+    let title = if app.composer.images.is_empty() {
+        " Message ".to_owned()
+    } else {
+        format!(
+            " Message ({} image{} attached, Backspace on empty line to remove) ",
+            app.composer.images.len(),
+            if app.composer.images.len() == 1 { "" } else { "s" }
+        )
+    };
     frame.render_widget(
         Paragraph::new(lines)
             .block(
                 Block::default()
-                    .title(" Message ")
+                    .title(title)
                     .borders(Borders::ALL)
                     .border_style(pane_border(focused)),
             )

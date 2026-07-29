@@ -51,6 +51,14 @@ newline support; classic `cmd.exe` windows need `Alt+Enter` instead.
   newlines. The TUI enables the kitty keyboard protocol when the terminal
   supports it so Shift+Enter is distinguishable from Enter; in terminals
   without that support (e.g. macOS Terminal.app), use `Alt+Enter` instead
+- Pasting an image: on `Ctrl+V`/`Cmd+V` the TUI checks the OS clipboard for
+  image data (macOS and Windows natively, Linux under X11) before falling
+  back to pasted text, and attaches it to the next sent message the same way
+  the web/Electron composer does. Attaching more than 4 images or one over
+  10 MB is rejected with an error, matching the backend's limits. Backspace
+  on an empty draft line removes the most recently attached image. Clipboard
+  image paste is not supported on Linux Wayland sessions (only text paste
+  works there)
 - `Left` / `Right`: move the composer cursor; `Backspace` / `Delete` edit around it
 - `Up` / `Down`: move the cursor between draft lines in a multi-line draft;
   at the draft's edge (or in a single-line draft) they scroll the transcript
