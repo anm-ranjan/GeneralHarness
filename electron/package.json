@@ -7,6 +7,8 @@
   "//": "electron-builder's deb target requires homepage and author for the package metadata it generates; without them `npm run dist:linux` fails after the AppImage is already built.",
   "homepage": "https://github.com/anm-ranjan/GeneralHarness",
   "author": "anm-ranjan",
+  "//desktopName": "Linux window association. Electron reads this to set app_id, and electron-builder derives StartupWMClass and (with linux.syncDesktopName) the installed .desktop filename from it, so all three agree and the desktop environment can link a running window to the launcher. Deliberately tied to `name` rather than to the product name, which changes whenever the app is renamed at setup.",
+  "desktopName": "myharness-electron.desktop",
   "type": "commonjs",
   "scripts": {
     "start": "electron .",
@@ -72,7 +74,8 @@
         "deb"
       ],
       "category": "Development",
-      "maintainer": "anm-ranjan"
+      "maintainer": "anm-ranjan",
+      "syncDesktopName": true
     }
   }
 }
