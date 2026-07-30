@@ -48,6 +48,37 @@ def health():
     }
 
 
+@router.get("/api/fleet")
+def fleet():
+    """The configured fleet of machines this UI can switch between.
+
+    Read once from the host serving the page, so the list stays stable while
+    the user switches around it. An empty `hosts` means single-machine mode.
+    """
+    return {"self": utils.FLEET_SELF_ID, "poll_seconds": utils.FLEET_POLL_SECONDS,
+            "hosts": utils.fleet_registry()}
+
+
+@router.get("/api/fleet/status")
+def fleet_status():
+    """Cheap liveness and activity summary, polled directly by the browser for
+    every configured host so background runs on the machine you are not
+    looking at stay visible — especially ones blocked on an approval."""
+    waiting = set(web_app._manager.pending_approval_session_ids())
+    running = 0
+    for meta in web_app._store.list_sessions():
+        if meta.id in waiting:
+            continue
+        if meta.status == "running":
+            running += 1
+    return {
+        "host_id": utils.FLEET_SELF_ID,
+        "app_name": utils.APP_NAME,
+        "running": running,
+        "waiting_approval": len(waiting),
+    }
+
+
 @router.post("/api/shutdown")
 def shutdown_server():
     utils.kill_all_background_jobs()

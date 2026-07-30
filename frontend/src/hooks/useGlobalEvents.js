@@ -5,7 +5,11 @@ import { runStateNotification } from '../runStates'
 // Application-level WebSocket carrying run-state changes for every session,
 // independent of which session is selected. Powers sidebar activity badges
 // and desktop notifications for background runs.
-export default function useGlobalEvents(dispatch, stateRef) {
+//
+// Scoped to one host: `activeHostId` tears the socket down and reopens it
+// against the machine being switched to, so run states from the previous host
+// stop arriving once its sessions are no longer on screen.
+export default function useGlobalEvents(dispatch, stateRef, activeHostId) {
   const wsRef = useRef(null)
 
   useEffect(() => {
@@ -81,5 +85,5 @@ export default function useGlobalEvents(dispatch, stateRef) {
         socket.close()
       }
     }
-  }, [dispatch, stateRef])
+  }, [dispatch, stateRef, activeHostId])
 }

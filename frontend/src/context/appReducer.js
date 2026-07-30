@@ -75,6 +75,16 @@ export const initialState = {
   // session_id -> 'running' | 'waiting_approval' for non-idle sessions,
   // fed by the application-level /api/events stream.
   runStates: {},
+
+  // The machines this UI can switch between. Empty means single-machine mode
+  // and the host switcher stays hidden. Each host owns its own projects,
+  // tasks, and sessions; only one is ever loaded at a time.
+  fleetHosts: [],
+  activeHostId: '',
+  // host_id -> { online, running, waitingApproval } from the fleet status poll.
+  fleetStatuses: {},
+  // True between choosing a host and that host's session tree arriving.
+  hostSwitching: false,
 }
 
 // Returns the same state object when every patched field already matches, so
@@ -176,6 +186,56 @@ export function reducer(state, action) {
     case 'SET_SERVER_ONLINE':
       return patched(state, { serverOnline: action.payload })
 
+    case 'SET_FLEET':
+      return patched(state, {
+        fleetHosts: action.payload.hosts,
+        activeHostId: action.payload.activeHostId,
+      })
+
+    case 'SET_HOST_STATUS': {
+      const { hostId, status } = action.payload
+      const previous = state.fleetStatuses[hostId]
+      if (
+        previous
+        && previous.online === status.online
+        && previous.running === status.running
+        && previous.waitingApproval === status.waitingApproval
+      ) {
+        return state
+      }
+      return {
+        ...state,
+        fleetStatuses: { ...state.fleetStatuses, [hostId]: status },
+      }
+    }
+
+    // Switching machines replaces the entire workspace rather than merging
+    // anything, so every host-owned slice resets to its initial value. Keeping
+    // a stale field here is how one host's data ends up rendered under the
+    // other's label, so this deliberately rebuilds from initialState instead of
+    // clearing fields one by one.
+    case 'SWITCH_HOST':
+      return {
+        ...initialState,
+        // The registry came from the host that served the page and describes
+        // the fleet, not the machine being viewed. Status polling likewise
+        // keeps running for every host across the switch.
+        fleetHosts: state.fleetHosts,
+        fleetStatuses: state.fleetStatuses,
+        activeHostId: action.payload.hostId,
+        hostSwitching: true,
+        // Panel layout is a user preference rather than host data.
+        workspacePanelOpen: state.workspacePanelOpen,
+        workspacePanelTab: state.workspacePanelTab,
+        lastActivityTime: Date.now(),
+      }
+
+    // The target host died between the status poll and the switch. The
+    // workspace stays empty and the health poll reports it offline; this just
+    // stops the switcher claiming it is still working on it.
+    case 'HOST_SWITCH_FAILED':
+      return patched(state, { hostSwitching: false })
+
     case 'SET_TREE': {
       const { projects, sessions } = action.payload
       const maps = buildNameMaps(projects)
@@ -191,6 +251,9 @@ export function reducer(state, action) {
         currentWorkspaceRoot: currentMeta
           ? effectiveWorkspaceRoot(currentMeta, currentProjectRoot)
           : state.currentWorkspaceRoot,
+        // The tree is the last thing a switch waits on: once it lands, the
+        // new host's workspace is what the user is looking at.
+        hostSwitching: false,
         ...maps,
       }
     }

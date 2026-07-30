@@ -7,11 +7,13 @@ import {
   useRef,
   useSyncExternalStore,
 } from 'react'
-import { api } from '../api'
+import { api, isAbandonedRequest } from '../api'
 import { initialState, reducer } from './appReducer'
 import useGlobalEvents from '../hooks/useGlobalEvents'
+import useFleet from '../hooks/useFleet'
 
 const AppContext = createContext(null)
+const FleetContext = createContext(null)
 
 // Minimal external store. Components subscribe to the slices they actually
 // read (useAppSelector) instead of every consumer re-rendering on every
@@ -43,7 +45,16 @@ export function AppProvider({ children }) {
   // Always-current view of the store for callbacks that must not re-subscribe.
   const stateRef = useMemo(() => ({ get current() { return store.getState() } }), [store])
 
-  useGlobalEvents(dispatch, stateRef)
+  // Which machine is being viewed. Capabilities, the event stream, and the
+  // health poll are all per host, so they re-run whenever this changes.
+  const activeHostId = useSyncExternalStore(
+    store.subscribe,
+    () => store.getState().activeHostId,
+    () => store.getState().activeHostId,
+  )
+
+  const switchHost = useFleet(dispatch, stateRef)
+  useGlobalEvents(dispatch, stateRef, activeHostId)
 
   useEffect(() => {
     let cancelled = false
@@ -57,10 +68,11 @@ export function AppProvider({ children }) {
           }
         })
         .catch(err => {
-          if (!cancelled) {
-            dispatch({ type: 'SET_SERVER_ONLINE', payload: false })
-            console.error('Health check failed:', err)
-          }
+          // A request abandoned by a host switch is not a health signal: the
+          // host it was asking about is no longer the one on screen.
+          if (cancelled || isAbandonedRequest(err)) return
+          dispatch({ type: 'SET_SERVER_ONLINE', payload: false })
+          console.error('Health check failed:', err)
         })
     }
 
@@ -70,13 +82,20 @@ export function AppProvider({ children }) {
       cancelled = true
       clearInterval(timer)
     }
-  }, [])
+  }, [activeHostId])
 
   return (
     <AppContext.Provider value={store}>
-      {children}
+      <FleetContext.Provider value={switchHost}>
+        {children}
+      </FleetContext.Provider>
     </AppContext.Provider>
   )
+}
+
+/** Switch the whole app to another machine in the fleet. */
+export function useSwitchHost() {
+  return useContext(FleetContext)
 }
 
 function useStore() {

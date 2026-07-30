@@ -291,6 +291,8 @@ from web_runs import (  # noqa: F401
 from web_routes.system import (  # noqa: F401
     browse_directory,
     codex_status,
+    fleet,
+    fleet_status,
     get_local_image,
     get_project,
     health,

@@ -4,6 +4,7 @@ import useApi from '../../hooks/useApi'
 import { isSlashCommand, SUGGESTED_SLASH_COMMANDS } from '../../constants'
 import ComposerToolbar from './ComposerToolbar'
 import { api } from '../../api'
+import { hostStorageKey } from '../../fleet'
 
 export default function Composer() {
   const { state, dispatch } = useApp()
@@ -32,14 +33,14 @@ export default function Composer() {
 
   useEffect(() => {
     if (!state.currentSessionId) return
-    setInput(localStorage.getItem(draftKey(state.currentSessionId)) || '')
+    setInput(localStorage.getItem(draftKey(state.activeHostId, state.currentSessionId)) || '')
     setAttachments([])
     setAudioError('')
   }, [state.currentSessionId])
 
   useEffect(() => {
     if (!state.currentSessionId) return
-    localStorage.setItem(draftKey(state.currentSessionId), input)
+    localStorage.setItem(draftKey(state.activeHostId, state.currentSessionId), input)
   }, [state.currentSessionId, input])
 
   useEffect(() => {
@@ -118,7 +119,7 @@ export default function Composer() {
     }
     setInput('')
     setAttachmentError('')
-    localStorage.removeItem(draftKey(state.currentSessionId))
+    localStorage.removeItem(draftKey(state.activeHostId, state.currentSessionId))
     setAttachments([])
     sendMessage(state.currentSessionId, text, attachments)
     requestAnimationFrame(resizeInput)
@@ -495,8 +496,10 @@ function fileExtension(name = '') {
   return ext && ext !== name ? ext.slice(0, 8).toUpperCase() : 'FILE'
 }
 
-function draftKey(sessionId) {
-  return `myharness:draft:${sessionId}`
+// Session ids are only unique within one machine, so drafts are namespaced by
+// host: without it, two hosts' sessions could share a draft.
+function draftKey(hostId, sessionId) {
+  return hostStorageKey(hostId, `draft:${sessionId}`)
 }
 
 function resizeImage(file) {

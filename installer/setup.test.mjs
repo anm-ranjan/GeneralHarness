@@ -20,6 +20,8 @@ import {
   buildConfig,
   writeConfig,
   stepExistingConfig,
+  stepFleet,
+  suggestHostId,
   ConfigEditor,
   yamlScalar,
   dedent,
@@ -395,4 +397,125 @@ test('declining the backup still overwrites and writes no .bak', async () => {
 test('a fresh install needs no overwrite prompt', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'mh-setup-'));
   assert.equal(await stepExistingConfig(path.join(dir, 'agent_config.yaml')), true);
+});
+
+// ── fleet ─────────────────────────────────────────────────────────────
+//
+// The fleet block is the only list-of-mappings the installer writes, and it is
+// the one place where a wrong answer silently hides a machine from the UI.
+
+/** Read a list of mappings (e.g. fleet.hosts) out of a YAML document. */
+function readMappingList(text, dotted) {
+  const lines = text.split('\n');
+  const key = dotted.split('.').pop();
+  const start = lines.findIndex((line) => line.trim() === `${key}:`);
+  if (start === -1) return [];
+  const indent = lines[start].length - lines[start].trimStart().length;
+  const entries = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim() || line.trim().startsWith('#')) break;
+    if (line.length - line.trimStart().length <= indent) break;
+    const trimmed = line.trim();
+    const body = trimmed.startsWith('- ') ? trimmed.slice(2) : trimmed;
+    if (trimmed.startsWith('- ')) entries.push({});
+    const [field, ...rest] = body.split(':');
+    entries[entries.length - 1][field.trim()] = unquote(rest.join(':').trim());
+  }
+  return entries;
+}
+
+const FLEET_ANSWERS = {
+  ...MINIMAL,
+  fleet: {
+    enabled: true,
+    self: 'mac',
+    pollSeconds: 15,
+    hosts: [
+      { id: 'mac', label: 'MacBook', url: 'http://127.0.0.1:8420' },
+      { id: 'jarvis', label: 'Jarvis', url: 'http://127.0.0.1:8421' },
+    ],
+  },
+};
+
+test('a configured fleet is written as a list of host mappings', () => {
+  const out = buildConfig(FLEET_ANSWERS, TEMPLATE);
+
+  assert.equal(readKey(out, 'fleet.enabled'), true);
+  assert.equal(readKey(out, 'fleet.self'), 'mac');
+  assert.equal(readKey(out, 'fleet.poll_seconds'), 15);
+  assert.deepEqual(readMappingList(out, 'fleet.hosts'), [
+    { id: 'mac', label: 'MacBook', url: 'http://127.0.0.1:8420' },
+    { id: 'jarvis', label: 'Jarvis', url: 'http://127.0.0.1:8421' },
+  ]);
+});
+
+test('answers without a fleet leave the block disabled and empty', () => {
+  const out = buildConfig(MINIMAL, TEMPLATE);
+  assert.equal(readKey(out, 'fleet.enabled'), false);
+  assert.equal(readKey(out, 'fleet.self'), '');
+  assert.deepEqual(readKey(out, 'fleet.hosts'), []);
+});
+
+test('host labels containing YAML metacharacters stay quoted', () => {
+  const answers = {
+    ...MINIMAL,
+    fleet: {
+      enabled: true,
+      self: 'mac',
+      pollSeconds: 10,
+      hosts: [
+        { id: 'mac', label: 'Ani: "work" #1', url: 'http://127.0.0.1:8420' },
+        { id: 'jarvis', label: 'Jarvis', url: 'http://127.0.0.1:8421' },
+      ],
+    },
+  };
+  const hosts = readMappingList(buildConfig(answers, TEMPLATE), 'fleet.hosts');
+  assert.equal(hosts[0].label, 'Ani: "work" #1');
+});
+
+test('declining the fleet prompt leaves it disabled', async () => {
+  prompts.inject([false]);
+  const fleet = await stepFleet({ host: '127.0.0.1', port: 8420 });
+  assert.deepEqual(fleet, { enabled: false, self: '', pollSeconds: 10, hosts: [] });
+});
+
+test('stepFleet collects this machine and its peers', async () => {
+  prompts.inject([
+    true,                     // set up a fleet
+    'mac', 'MacBook', 'http://127.0.0.1:8420',   // this machine
+    true,                     // add another
+    'jarvis', 'Jarvis', 'http://127.0.0.1:8421', // peer
+    'jarvis.local', 8420,     // tunnel details, since the URL is loopback
+    false,                    // no more machines
+    12,                       // poll seconds
+  ]);
+
+  const fleet = await stepFleet({ host: '0.0.0.0', port: 8420 });
+
+  assert.equal(fleet.enabled, true);
+  assert.equal(fleet.self, 'mac');
+  assert.equal(fleet.pollSeconds, 12);
+  assert.deepEqual(fleet.hosts, [
+    { id: 'mac', label: 'MacBook', url: 'http://127.0.0.1:8420' },
+    { id: 'jarvis', label: 'Jarvis', url: 'http://127.0.0.1:8421' },
+  ]);
+});
+
+test('a fleet of one machine is refused, since there is nothing to switch to', async () => {
+  prompts.inject([
+    true,
+    'mac', 'MacBook', 'http://127.0.0.1:8420',
+    false,  // decline to add a second machine
+  ]);
+
+  const fleet = await stepFleet({ host: '127.0.0.1', port: 8420 });
+  assert.equal(fleet.enabled, false);
+  assert.deepEqual(fleet.hosts, []);
+});
+
+test('suggestHostId produces a plain identifier from a hostname', () => {
+  assert.equal(suggestHostId('Jarvis.local'), 'jarvis');
+  assert.equal(suggestHostId("Ani's MacBook Pro.local"), 'anismacbookpro');
+  assert.equal(suggestHostId(''), 'this-machine');
 });

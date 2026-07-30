@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback } from 'react'
 import { useApp } from '../../context/AppContext'
 import useSessionTree from '../../hooks/useSessionTree'
 import useApi from '../../hooks/useApi'
-import { api, importSessionBackup } from '../../api'
+import { api, importSessionBackup, isAbandonedRequest } from '../../api'
 import SearchInput from './SearchInput'
+import HostSwitcher from './HostSwitcher'
 import ProjectNode from './ProjectNode'
 import ChatsNode from './ChatsNode'
 import useStartChat from '../../hooks/useStartChat'
@@ -18,9 +19,15 @@ export default function Sidebar() {
   const [search, setSearch] = useState('')
   const [moveRequest, setMoveRequest] = useState(null)
 
+  // Reloads on a host switch: the tree belongs to one machine, and
+  // SWITCH_HOST has already emptied the previous host's copy.
   useEffect(() => {
-    tree.loadTree().catch(err => console.error('Failed to load tree:', err))
-  }, [])
+    tree.loadTree().catch(err => {
+      if (isAbandonedRequest(err)) return
+      dispatch({ type: 'HOST_SWITCH_FAILED' })
+      console.error('Failed to load tree:', err)
+    })
+  }, [state.activeHostId])
 
   const selectSession = useCallback(async (sid) => {
     try {
@@ -119,6 +126,8 @@ export default function Sidebar() {
     <div className="flex flex-col h-full px-5 pt-8 pb-5">
       <h1 className="text-[18px] font-bold text-text-bright mb-0.5">{state.appName}</h1>
       <p className="text-[12px] text-faint mb-4">Agent Sessions</p>
+
+      <HostSwitcher />
 
       <SearchInput value={search} onChange={setSearch} />
 

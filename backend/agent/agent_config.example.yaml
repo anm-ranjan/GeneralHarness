@@ -70,6 +70,35 @@ server:
   host: 127.0.0.1
   port: 8420
 
+# Other machines running MyHarness that the web UI can switch between. Each
+# host owns its own projects, tasks, and sessions — switching swaps the whole
+# tree, nothing is merged across machines.
+#
+# Keep `hosts` identical on every machine and change only `self`, so there is
+# one fleet definition to maintain. The browser connects to each `url`
+# directly, so point them at SSH tunnels and leave every backend on 127.0.0.1:
+#
+#   ssh -N -L 8421:127.0.0.1:8420 jarvis.local
+#
+fleet:
+  enabled: false
+  # Which entry in `hosts` is this machine. MYHARNESS_FLEET_SELF overrides.
+  self: ""
+  # How often the UI re-checks the other hosts for reachability and for runs
+  # waiting on an approval.
+  poll_seconds: 10
+  # Every machine in the fleet, this one included. For example:
+  #
+  #   hosts:
+  #     - id: mac                    # stable and unique; renaming it resets
+  #       label: MacBook             # that host's saved UI state
+  #       url: http://127.0.0.1:8420 # as reached from the browser
+  #     - id: jarvis
+  #       label: Jarvis
+  #       url: http://127.0.0.1:8421 # the tunnel above
+  #       enabled: false             # keep the entry but stop offering the host
+  hosts: []
+
 logging:
   enabled: true
   level: info

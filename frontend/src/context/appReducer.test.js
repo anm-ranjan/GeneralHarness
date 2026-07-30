@@ -91,3 +91,99 @@ test('SELECT_SESSION and CLEAR_SESSION reset the plan', () => {
   const withPlanAgain = reducer(selected, { type: 'SET_PLAN', payload: [{ content: 'step', status: 'pending' }] })
   assert.deepEqual(reducer(withPlanAgain, { type: 'CLEAR_SESSION' }).plan, [])
 })
+
+// ── host switching ────────────────────────────────────────────────
+//
+// Hosts share no projects, tasks, or sessions, so the danger is a slice of the
+// machine being left surviving into the machine being entered and rendering
+// under the wrong label.
+
+const FLEET = [
+  { id: 'mac', label: 'MacBook', url: 'http://127.0.0.1:8420', self: true },
+  { id: 'jarvis', label: 'Jarvis', url: 'http://127.0.0.1:8421', self: false },
+]
+
+function loadedHostState() {
+  let state = reducer(initialState, {
+    type: 'SET_FLEET',
+    payload: { hosts: FLEET, activeHostId: 'mac' },
+  })
+  state = reducer(state, {
+    type: 'SET_TREE',
+    payload: {
+      projects: [{ id: 'p1', name: 'Proj', root: '/Users/a/proj', tasks: [{ id: 't1', name: 'Task', sessions: ['s1'] }] }],
+      sessions: { s1: { id: 's1', project_id: 'p1', task_id: 't1', title: 'S', updated_at: '2026-01-01T00:00:00Z' } },
+    },
+  })
+  state = reducer(state, {
+    type: 'SELECT_SESSION',
+    payload: {
+      meta: { id: 's1', project_id: 'p1', task_id: 't1', title: 'S' },
+      workspaceRoot: '/Users/a/proj',
+    },
+  })
+  return reducer(state, { type: 'APPEND_STAGE_ITEM', payload: { type: 'user_message', text: 'hi' } })
+}
+
+test('SWITCH_HOST clears every slice owned by the machine being left', () => {
+  const before = loadedHostState()
+  assert.equal(before.currentSessionId, 's1')
+  assert.equal(before.projects.length, 1)
+
+  const after = reducer(before, { type: 'SWITCH_HOST', payload: { hostId: 'jarvis' } })
+
+  assert.equal(after.activeHostId, 'jarvis')
+  assert.equal(after.hostSwitching, true)
+  assert.equal(after.currentSessionId, null)
+  assert.equal(after.currentMeta, null)
+  assert.equal(after.currentWorkspaceRoot, '')
+  assert.deepEqual(after.projects, [])
+  assert.deepEqual(after.sessionsById, {})
+  assert.deepEqual(after.projectRoots, {})
+  assert.deepEqual(after.stageItems, [])
+  assert.deepEqual(after.runStates, {})
+  assert.equal(after.isRunning, false)
+  // Capabilities belong to the previous machine and must be re-fetched.
+  assert.equal(after.serverOnline, false)
+  assert.equal(after.claudeAgentEnabled, false)
+})
+
+test('SWITCH_HOST keeps the fleet registry and cross-host statuses', () => {
+  let state = loadedHostState()
+  state = reducer(state, {
+    type: 'SET_HOST_STATUS',
+    payload: { hostId: 'jarvis', status: { online: true, running: 1, waitingApproval: 0 } },
+  })
+
+  const after = reducer(state, { type: 'SWITCH_HOST', payload: { hostId: 'jarvis' } })
+
+  assert.deepEqual(after.fleetHosts, FLEET)
+  assert.deepEqual(after.fleetStatuses.jarvis, { online: true, running: 1, waitingApproval: 0 })
+})
+
+test('SWITCH_HOST preserves panel layout, which is a user preference', () => {
+  let state = loadedHostState()
+  state = reducer(state, { type: 'TOGGLE_WORKSPACE_PANEL' })
+  state = reducer(state, { type: 'SET_WORKSPACE_TAB', payload: 'files' })
+
+  const after = reducer(state, { type: 'SWITCH_HOST', payload: { hostId: 'jarvis' } })
+
+  assert.equal(after.workspacePanelOpen, state.workspacePanelOpen)
+  assert.equal(after.workspacePanelTab, 'files')
+})
+
+test('the new host tree ends the switching state', () => {
+  const switched = reducer(loadedHostState(), { type: 'SWITCH_HOST', payload: { hostId: 'jarvis' } })
+  const loaded = reducer(switched, {
+    type: 'SET_TREE',
+    payload: { projects: [], sessions: {} },
+  })
+  assert.equal(loaded.hostSwitching, false)
+})
+
+test('SET_HOST_STATUS returns the same state when nothing changed', () => {
+  const status = { online: true, running: 0, waitingApproval: 0 }
+  const first = reducer(initialState, { type: 'SET_HOST_STATUS', payload: { hostId: 'jarvis', status } })
+  const second = reducer(first, { type: 'SET_HOST_STATUS', payload: { hostId: 'jarvis', status: { ...status } } })
+  assert.equal(second, first)
+})

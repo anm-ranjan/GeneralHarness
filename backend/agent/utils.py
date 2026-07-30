@@ -61,6 +61,35 @@ def normalize_allowed_paths(value) -> list:
     return []
 
 
+def normalize_fleet_hosts(value) -> list:
+    """Clean the configured fleet host list into {id, label, url} entries.
+
+    Entries missing an id or url are dropped rather than raising: a typo in one
+    host should not stop the machine you are sitting at from starting.
+    Duplicate ids keep the first entry, and validate_startup_config warns.
+    """
+    if not isinstance(value, list):
+        return []
+    hosts = []
+    seen = set()
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        if not str(entry.get("enabled", True)).lower() in ("true", "1", "yes"):
+            continue
+        host_id = str(entry.get("id") or "").strip()
+        url = str(entry.get("url") or "").strip().rstrip("/")
+        if not host_id or not url or host_id in seen:
+            continue
+        seen.add(host_id)
+        hosts.append({
+            "id": host_id,
+            "label": str(entry.get("label") or host_id).strip(),
+            "url": url,
+        })
+    return hosts
+
+
 # ---------------------------------------------------------------------------
 # Config constants
 # ---------------------------------------------------------------------------
@@ -315,6 +344,36 @@ DESKTOP_ALLOWED_FRONTEND_ORIGINS = [
 SERVER_HOST = str(nested_get(CONFIG, ["server", "host"], "127.0.0.1") or "127.0.0.1").strip()
 SERVER_PORT = config_int(CONFIG, ["server", "port"], 8420)
 
+# Fleet: the other machines running MyHarness that this UI can switch to.
+# Each host keeps its own projects, tasks, and sessions; the browser talks to
+# one host at a time and never merges their data. The list is meant to be
+# identical on every machine, with `self` naming which entry is this one.
+FLEET_ENABLED = str(
+    nested_get(CONFIG, ["fleet", "enabled"], "false")
+).lower() in ("true", "1", "yes")
+FLEET_SELF_ID = (
+    os.environ.get("MYHARNESS_FLEET_SELF")
+    or str(nested_get(CONFIG, ["fleet", "self"], "") or "")
+).strip()
+FLEET_POLL_SECONDS = config_int(CONFIG, ["fleet", "poll_seconds"], 10)
+FLEET_HOSTS = normalize_fleet_hosts(nested_get(CONFIG, ["fleet", "hosts"], []))
+
+
+def fleet_registry() -> list:
+    """The configured fleet as the web UI sees it, with `self` marked.
+
+    Returns an empty list when the fleet is disabled or under-specified, which
+    the frontend treats as "single machine" and hides the host switcher for.
+    """
+    if not FLEET_ENABLED or len(FLEET_HOSTS) < 2:
+        return []
+    if not any(host["id"] == FLEET_SELF_ID for host in FLEET_HOSTS):
+        return []
+    return [
+        {**host, "self": host["id"] == FLEET_SELF_ID}
+        for host in FLEET_HOSTS
+    ]
+
 
 # ---------------------------------------------------------------------------
 # Startup validation
@@ -363,6 +422,57 @@ def validate_startup_config(host: str = "", port: int = 0) -> list:
             f"The backend binds {resolved_host}, exposing an UNAUTHENTICATED agent API to "
             "every host on your network. Bind 127.0.0.1 unless it is behind a trusted proxy."
         )
+
+    warnings.extend(_fleet_warnings())
+
+    return warnings
+
+
+def _fleet_warnings() -> list:
+    """Explain why a configured fleet is not taking effect, rather than
+    silently hiding the host switcher."""
+    if not FLEET_ENABLED:
+        return []
+
+    warnings = []
+    raw_hosts = nested_get(CONFIG, ["fleet", "hosts"], [])
+    raw_count = len(raw_hosts) if isinstance(raw_hosts, list) else 0
+    if raw_count > len(FLEET_HOSTS):
+        warnings.append(
+            f"fleet.hosts: {raw_count - len(FLEET_HOSTS)} entr(y/ies) were skipped for a "
+            "missing id, a missing url, or a duplicate id."
+        )
+
+    if len(FLEET_HOSTS) < 2:
+        warnings.append(
+            "fleet.enabled is true but fewer than two usable hosts are configured, so the "
+            "host switcher stays hidden."
+        )
+        return warnings
+
+    if not FLEET_SELF_ID:
+        warnings.append(
+            "fleet.self is not set, so this machine cannot identify itself in fleet.hosts "
+            "and the host switcher stays hidden. Set fleet.self or MYHARNESS_FLEET_SELF."
+        )
+    elif not any(host["id"] == FLEET_SELF_ID for host in FLEET_HOSTS):
+        known = ", ".join(host["id"] for host in FLEET_HOSTS)
+        warnings.append(
+            f"fleet.self is '{FLEET_SELF_ID}', which is not one of the configured host ids "
+            f"({known}). The host switcher stays hidden."
+        )
+
+    for host in FLEET_HOSTS:
+        if ":" in host["id"]:
+            warnings.append(
+                f"fleet host id '{host['id']}' contains ':', which is reserved. Use a plain "
+                "identifier such as 'jarvis'."
+            )
+        if "://" not in host["url"]:
+            warnings.append(
+                f"fleet host '{host['id']}' has url '{host['url']}' with no scheme. Use a full "
+                "URL the browser can reach, e.g. http://127.0.0.1:8421."
+            )
 
     return warnings
 

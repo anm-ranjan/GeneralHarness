@@ -1,3 +1,5 @@
+import { apiUrl } from './api.js'
+
 export function esc(s) {
   return String(s || '')
     .replace(/&/g, '&amp;')
@@ -45,7 +47,9 @@ export function parseContextUsage(usage) {
 export function localImageUrl(src, workspaceRoot) {
   const raw = String(src || '').trim()
   if (!raw || /^https?:\/\//i.test(raw)) return ''
-  if (raw.startsWith('/api/')) return raw
+  // Images are served by whichever host owns the workspace, so they carry the
+  // active host's base rather than being same-origin relative.
+  if (raw.startsWith('/api/')) return apiUrl(raw)
 
   const versionIndex = raw.search(/[?#]/)
   const sourcePath = versionIndex === -1 ? raw : raw.slice(0, versionIndex)
@@ -55,7 +59,7 @@ export function localImageUrl(src, workspaceRoot) {
   const routedUrl = resolvedPath => {
     const params = new URLSearchParams({ path: resolvedPath })
     if (version) params.set('v', version)
-    return `/api/files/image?${params.toString()}`
+    return apiUrl(`/api/files/image?${params.toString()}`)
   }
   if (isAbsolute) return routedUrl(path)
   if (workspaceRoot && !path.startsWith('http')) {

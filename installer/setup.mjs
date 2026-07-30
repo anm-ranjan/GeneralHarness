@@ -25,7 +25,7 @@ import {
   writeFileSync,
   statSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -375,6 +375,37 @@ class ConfigEditor {
       `${pad}${key}:`,
       ...values.map((value) => `${pad}  - ${yamlScalar(value)}`),
     ]);
+  }
+
+  /**
+   * Write a list of mappings, e.g. fleet.hosts:
+   *
+   *   hosts:
+   *     - id: "mac"
+   *       label: "MacBook"
+   *
+   * `fields` fixes the key order so regenerating a config produces a stable
+   * diff rather than reshuffling on object-key order.
+   */
+  setMappingList(keyPath, entries, fields) {
+    const found = findKey(this.lines, keyPath);
+    if (!found) {
+      warn(`Could not find "${keyPath.join('.')}" in agent_config.example.yaml; left unchanged.`);
+      return false;
+    }
+    const pad = ' '.repeat(found.indent);
+    const key = keyPath[keyPath.length - 1];
+    if (!entries.length) return this.replace(keyPath, [`${pad}${key}: []`]);
+
+    const body = [];
+    for (const entry of entries) {
+      const present = fields.filter((field) => entry[field] !== undefined);
+      present.forEach((field, i) => {
+        const prefix = i === 0 ? `${pad}  - ` : `${pad}    `;
+        body.push(`${prefix}${field}: ${yamlScalar(entry[field])}`);
+      });
+    }
+    return this.replace(keyPath, [`${pad}${key}:`, ...body]);
   }
 
   setBlockText(keyPath, text) {
@@ -789,6 +820,118 @@ async function stepServerAndPermissions() {
   };
 }
 
+/** A plain identifier usable as a fleet host id: lowercase, no separators. */
+function suggestHostId(name) {
+  const cleaned = String(name || '').toLowerCase().split('.')[0].replace(/[^a-z0-9_-]/g, '');
+  return cleaned || 'this-machine';
+}
+
+async function askHostId(message, initial, taken) {
+  for (;;) {
+    const value = ((await text(message, initial)) || '').trim();
+    if (!value) {
+      warn('An id is required.');
+      continue;
+    }
+    // ':' is reserved, and a duplicate would silently drop a machine from the
+    // switcher — both are things the backend refuses to guess about.
+    if (value.includes(':')) {
+      warn('Ids cannot contain ":". Use a plain name such as "jarvis".');
+      continue;
+    }
+    if (taken.includes(value)) {
+      warn(`"${value}" is already used by another machine in this fleet.`);
+      continue;
+    }
+    return value;
+  }
+}
+
+async function askHostUrl(message, initial) {
+  for (;;) {
+    const value = ((await text(message, initial)) || '').trim().replace(/\/+$/, '');
+    if (!/^https?:\/\/[^/\s]+/.test(value)) {
+      warn('Enter a full URL the browser can open, e.g. http://127.0.0.1:8421.');
+      continue;
+    }
+    return value;
+  }
+}
+
+/**
+ * Optional multi-machine setup.
+ *
+ * Machines keep entirely separate projects, tasks, and sessions; this only
+ * records which machines exist and where the browser reaches them. Because the
+ * browser connects to each backend directly, the expected deployment is an SSH
+ * tunnel per remote machine, which keeps every backend bound to loopback.
+ */
+async function stepFleet(server) {
+  heading('Fleet (optional)');
+  info('Run MyHarness on more than one machine and switch between them in the UI.');
+  info('Each machine keeps its own projects and sessions; switching swaps the workspace.');
+
+  if (!(await confirm('Set up a fleet of machines now?', false))) {
+    return { enabled: false, self: '', pollSeconds: 10, hosts: [] };
+  }
+
+  const loopback = server.host === '0.0.0.0' || server.host === '::' ? '127.0.0.1' : server.host;
+  const selfId = await askHostId('Short id for THIS machine', suggestHostId(hostname()), []);
+  const selfLabel = (await text('Display name for this machine', hostname().split('.')[0] || selfId)) || selfId;
+  const selfUrl = await askHostUrl('URL for this machine as the browser reaches it', `http://${loopback}:${server.port}`);
+
+  const hosts = [{ id: selfId, label: selfLabel, url: selfUrl }];
+  const tunnels = [];
+  let nextPort = server.port + 1;
+
+  info('');
+  info('Now add the other machines. Each one needs MyHarness installed and running,');
+  info('and this same fleet list in its own config with its own "self" value.');
+
+  for (;;) {
+    const another = await confirm(
+      hosts.length === 1 ? 'Add another machine?' : 'Add one more machine?',
+      hosts.length === 1,
+    );
+    if (!another) break;
+
+    const id = await askHostId('Short id for the other machine', '', hosts.map((h) => h.id));
+    const label = (await text('Display name', id)) || id;
+    const url = await askHostUrl(
+      `URL for ${label} as reached from THIS machine's browser`,
+      `http://127.0.0.1:${nextPort}`,
+    );
+    // A loopback URL means a tunnel has to exist for it to resolve, so collect
+    // what is needed to print the exact command at the end.
+    const loopbackMatch = url.match(/^https?:\/\/(?:127\.0\.0\.1|localhost)(?::(\d+))?/);
+    if (loopbackMatch) {
+      const localPort = loopbackMatch[1] || '80';
+      const sshHost = (await text(`SSH host for ${label} (for the tunnel command)`, `${id}.local`)) || `${id}.local`;
+      const remotePort = await integer(`Backend port on ${label}`, 8420, 1, 65535);
+      tunnels.push(`ssh -N -L ${localPort}:127.0.0.1:${remotePort} ${sshHost}`);
+    }
+    hosts.push({ id, label, url });
+    nextPort = Number.parseInt(url.match(/:(\d+)/)?.[1] || nextPort, 10) + 1;
+  }
+
+  if (hosts.length < 2) {
+    warn('A fleet needs at least two machines, so the host switcher stays hidden.');
+    warn('Re-run setup once the other machine is ready, or edit fleet.hosts by hand.');
+    return { enabled: false, self: '', pollSeconds: 10, hosts: [] };
+  }
+
+  const pollSeconds = await integer('How often to check the other machines, in seconds', 10, 2, 3600);
+
+  notes.push(
+    `Copy the fleet.hosts list into every machine's agent_config.yaml, changing only fleet.self.`,
+  );
+  for (const tunnel of tunnels) {
+    notes.push(`Open the tunnel before switching hosts:  ${tunnel}`);
+  }
+
+  return { enabled: true, self: selfId, pollSeconds, hosts };
+}
+
 function findPython() {
   const candidates = [process.env.MYHARNESS_PYTHON, 'python3', 'python'].filter(Boolean);
   for (const candidate of candidates) {
@@ -892,6 +1035,14 @@ function buildConfig(answers, templateText) {
   editor.set(['claude_agent', 'max_turns'], claude.maxTurns ?? 0);
   editor.set(['claude_agent', 'permission_mode'], claude.permissionMode || '');
 
+  // Absent for a single-machine setup, and for configs written before fleets
+  // existed, so fall back to the template's disabled defaults.
+  const fleet = answers.fleet || { enabled: false, self: '', pollSeconds: 10, hosts: [] };
+  editor.set(['fleet', 'enabled'], Boolean(fleet.enabled));
+  editor.set(['fleet', 'self'], fleet.self || '');
+  editor.set(['fleet', 'poll_seconds'], fleet.pollSeconds ?? 10);
+  editor.setMappingList(['fleet', 'hosts'], fleet.hosts || [], ['id', 'label', 'url']);
+
   editor.set(['desktop', 'enabled'], answers.frontends.desktop);
   editor.set(['desktop', 'backend_url'], `http://${answers.server.host === '0.0.0.0' ? '127.0.0.1' : answers.server.host}:${answers.server.port}`);
 
@@ -926,6 +1077,10 @@ function summary(answers) {
   console.log('     ./run.sh --cli        terminal CLI');
   console.log('');
   console.log(`   ${bold('Config')}   ${TARGET_CONFIG}`);
+  if (answers.fleet?.enabled) {
+    const others = answers.fleet.hosts.filter((host) => host.id !== answers.fleet.self);
+    console.log(`   ${bold('Fleet')}    this machine is "${answers.fleet.self}"; switch to ${others.map((h) => h.label).join(', ')} from the sidebar`);
+  }
   console.log(`   ${bold('Python')}   ./.venv (run.sh and Electron pick this up automatically)`);
   console.log(`   ${bold('Secrets')}  API keys are not written to YAML; export MYHARNESS_API_KEY and MYHARNESS_STT_API_KEY.`);
 
@@ -985,8 +1140,9 @@ async function main() {
   const audio = await stepAudio(pythonInfo);
   const frontends = await stepFrontends();
   const server = await stepServerAndPermissions();
+  const fleet = await stepFleet(server);
 
-  const answers = { app, codex, claude, native, audio, frontends, server };
+  const answers = { app, codex, claude, native, audio, frontends, server, fleet };
   if (!writeConfig(answers)) return;
   await installFrontends(frontends, app.appName);
   summary(answers);
@@ -1009,6 +1165,8 @@ export {
   buildConfig,
   writeConfig,
   stepExistingConfig,
+  stepFleet,
+  suggestHostId,
   findKey,
   dedent,
   yamlScalar,
