@@ -22,6 +22,8 @@ import {
   stepExistingConfig,
   stepFleet,
   suggestHostId,
+  backendImportCheckArgs,
+  REQUIRED_BACKEND_MODULES,
   ConfigEditor,
   yamlScalar,
   dedent,
@@ -519,3 +521,33 @@ test('suggestHostId produces a plain identifier from a hostname', () => {
   assert.equal(suggestHostId("Ani's MacBook Pro.local"), 'anismacbookpro');
   assert.equal(suggestHostId(''), 'this-machine');
 });
+
+// ── backend dependency check ──────────────────────────────────────────
+//
+// Setup builds the desktop package around whatever is in ./.venv, so an
+// environment that cannot import these ships as an app that opens and then
+// reports its backend exiting.
+
+test('the dependency check uses import names, not distribution names', () => {
+  // PyYAML installs as "yaml" and PyMuPDF as "fitz"; checking the distribution
+  // name would fail for a perfectly good venv.
+  assert.ok(REQUIRED_BACKEND_MODULES.includes('yaml'));
+  assert.ok(!REQUIRED_BACKEND_MODULES.includes('PyYAML'));
+  for (const name of REQUIRED_BACKEND_MODULES) {
+    assert.match(name, /^[a-z_][a-z0-9_]*$/, `${name} is not a valid import name`);
+  }
+})
+
+test('the dependency check covers what the backend imports at startup', () => {
+  // web_app.py cannot reach its first line of work without these.
+  for (const name of ['fastapi', 'uvicorn', 'pydantic']) {
+    assert.ok(REQUIRED_BACKEND_MODULES.includes(name), `missing ${name}`);
+  }
+})
+
+test('the dependency check is a single runnable python -c statement', () => {
+  const args = backendImportCheckArgs();
+  assert.equal(args[0], '-c');
+  assert.equal(args.length, 2);
+  assert.equal(args[1], `import ${REQUIRED_BACKEND_MODULES.join(', ')}`);
+})
