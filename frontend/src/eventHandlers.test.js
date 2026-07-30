@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { handleSessionEvent, toolDetail } from './eventHandlers.js'
+import { handleSessionEvent, isCodexProtocolStatus, toolDetail } from './eventHandlers.js'
 import { effectiveWorkspaceRoot, workspaceDisplayName } from './sessionWorkspace.js'
 
 // Session replay is dispatched as a single BATCH action; flatten it so these
@@ -35,6 +35,32 @@ test('toolDetail prefers useful fields', () => {
   assert.equal(toolDetail('file_read', { path: '/tmp/a' }), '/tmp/a')
   assert.equal(toolDetail('shell_run', { command: 'npm test' }), 'npm test')
   assert.equal(toolDetail('content_search', { query: 'needle' }), 'needle')
+})
+
+test('Codex protocol statuses are hidden only when verbose mode is off', () => {
+  assert.equal(isCodexProtocolStatus('Codex turn accepted in 0.4s.'), true)
+  assert.equal(isCodexProtocolStatus('Codex app-server resume failed.'), false)
+
+  const quiet = collect({ currentProvider: 'codex-app-server', verbose: false })
+  handleSessionEvent({
+    type: 'status',
+    data: { text: 'Waiting for Codex response…' },
+  }, quiet.dispatch, quiet.stateRef)
+  assert.deepEqual(quiet.actions, [])
+
+  const verbose = collect({ currentProvider: 'codex-app-server', verbose: true })
+  handleSessionEvent({
+    type: 'status',
+    data: { text: 'Waiting for Codex response…' },
+  }, verbose.dispatch, verbose.stateRef)
+  assert.equal(verbose.actions[0].type, 'APPEND_STAGE_ITEM')
+
+  const warning = collect({ currentProvider: 'codex-app-server', verbose: false })
+  handleSessionEvent({
+    type: 'status',
+    data: { text: 'Codex app-server resume failed.' },
+  }, warning.dispatch, warning.stateRef)
+  assert.equal(warning.actions[0].type, 'APPEND_STAGE_ITEM')
 })
 
 test('verbose tool events retain status, correlation, duration, and failure state', () => {
@@ -254,4 +280,23 @@ test('run_finished and error clear any dangling stream bubble', () => {
   const errCtx = collect()
   handleSessionEvent({ type: 'error', data: { text: 'boom' } }, errCtx.dispatch, errCtx.stateRef)
   assert.ok(errCtx.actions.some(a => a.type === 'CLEAR_ASSISTANT_STREAM'))
+})
+
+test('new Codex file cards do not duplicate dedicated change records', () => {
+  const current = collect()
+  handleSessionEvent({
+    type: 'codex_file_change',
+    data: { path: 'src/app.js', status: 'modified', records_change: false },
+  }, current.dispatch, current.stateRef)
+  assert.deepEqual(current.actions.map(a => a.type), ['APPEND_STAGE_ITEM'])
+
+  const legacy = collect()
+  handleSessionEvent({
+    type: 'codex_file_change',
+    data: { path: 'src/legacy.js', status: 'modified' },
+  }, legacy.dispatch, legacy.stateRef)
+  assert.deepEqual(legacy.actions.map(a => a.type), [
+    'APPEND_STAGE_ITEM',
+    'APPEND_FILE_CHANGE',
+  ])
 })

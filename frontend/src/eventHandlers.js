@@ -16,6 +16,23 @@ export function toolDetail(_name, args) {
   return ''
 }
 
+export function isCodexProtocolStatus(text) {
+  return [
+    /^Starting Codex app-server run…$/,
+    /^Resuming Codex thread…$/,
+    /^Starting Codex thread…$/,
+    /^Codex thread ready in \d+(?:\.\d+)?s\.$/,
+    /^Starting Codex turn…$/,
+    /^Codex turn accepted in \d+(?:\.\d+)?s\.$/,
+    /^Waiting for Codex response…$/,
+    /^Codex first response after \d+(?:\.\d+)?s\.$/,
+    /^Interrupting Codex turn…$/,
+    /^Codex run completed in \d+(?:\.\d+)?s\.$/,
+    /^thread started$/,
+    /^turn started$/,
+  ].some(pattern => pattern.test(String(text || '')))
+}
+
 // Wraps dispatch so stage items appended while replaying a stored event carry
 // the event's absolute index in the session log, used for search deep-linking.
 function indexedDispatch(dispatch, eventIndex) {
@@ -179,6 +196,10 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       break
 
     case 'status':
+      if (
+        !stateRef.current.verbose
+        && isCodexProtocolStatus(data.text)
+      ) break
       dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: stateRef.current.silentCommand ? 'indicator' : 'status', text: data.text } })
       if (data.approval_mode) dispatch({ type: 'SET_APPROVAL_MODE', payload: data.approval_mode })
       if (data.verbose !== undefined) dispatch({ type: 'SET_VERBOSE', payload: data.verbose })
@@ -224,10 +245,15 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
 
     case 'codex_file_change':
       dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'codex_file_change', path: data.path, status: data.status } })
-      dispatch({
-        type: 'APPEND_FILE_CHANGE',
-        payload: { path: data.path, action: data.status || 'modified', tool: 'codex', timestamp: evt.created_at || new Date().toISOString() },
-      })
+      // Older stored Codex events doubled as the Changes-panel record. New
+      // runs emit a dedicated file_change event so the transcript card can
+      // remain verbose-only without losing the change record.
+      if (data.records_change !== false) {
+        dispatch({
+          type: 'APPEND_FILE_CHANGE',
+          payload: { path: data.path, action: data.status || 'modified', tool: 'codex', timestamp: evt.created_at || new Date().toISOString() },
+        })
+      }
       break
 
     case 'codex_item':

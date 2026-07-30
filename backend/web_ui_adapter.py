@@ -304,6 +304,13 @@ class WebUI:
             # Manifest persistence must never break the run loop.
             pass
 
+    def show_observed_file_change(self, path: str, action: str, tool: str) -> None:
+        """Record a provider-owned edit without inventing a revert baseline."""
+        self._emit(
+            EventType.FILE_CHANGE,
+            {"path": path, "action": action, "tool": tool},
+        )
+
     def show_plan_update(self, items: list[dict]) -> None:
         self._emit(EventType.PLAN_UPDATE, {"items": items})
 
@@ -326,7 +333,10 @@ class WebUI:
         self._emit(EventType.CODEX_COMMAND, {"command": command, "status": status})
 
     def show_codex_file_change(self, path: str, status: str) -> None:
-        self._emit(EventType.CODEX_FILE_CHANGE, {"path": path, "status": status})
+        self._emit(
+            EventType.CODEX_FILE_CHANGE,
+            {"path": path, "status": status, "records_change": False},
+        )
 
     def show_codex_item(self, item_type: str, raw: dict) -> None:
         self._emit(EventType.CODEX_ITEM, {"item_type": item_type, "raw": raw})

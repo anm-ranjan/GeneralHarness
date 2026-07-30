@@ -195,6 +195,7 @@ async def _lifespan(app: FastAPI):
     utils.register_allowed_path(str(_ATTACHMENTS_DIR))
     _manager.set_event_loop(asyncio.get_event_loop())
     yield
+    shutdown_codex_runtime()
     utils.kill_all_background_jobs()
 
 
@@ -287,6 +288,7 @@ from web_runs import (  # noqa: F401
     _handle_slash_command,
     _message_block_detail,
     _start_agent_run_locked,
+    shutdown_codex_runtime,
 )
 from web_routes.system import (  # noqa: F401
     browse_directory,

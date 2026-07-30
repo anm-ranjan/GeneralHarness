@@ -10,7 +10,7 @@ import time
 import utils
 import harness_agent as agent
 import skill_registry
-from codex_app_server_provider import CodexAppServerProvider
+from codex_app_server_provider import CodexAppServerRuntime
 from claude_agent_provider import CLAUDE_PROVIDER_ID, ClaudeAgentProvider
 from web_models import EventType
 from web_ui_adapter import WebUI
@@ -18,6 +18,36 @@ from web_ui_adapter import WebUI
 import web_app
 import web_helpers
 from web_helpers import _emit_session_event, _emit_queue_updated
+
+
+_codex_runtime: CodexAppServerRuntime | None = None
+_codex_runtime_lock = threading.Lock()
+
+
+def _get_codex_runtime() -> CodexAppServerRuntime:
+    global _codex_runtime
+    with _codex_runtime_lock:
+        if _codex_runtime is None:
+            _codex_runtime = CodexAppServerRuntime(
+                codex_bin=utils.CODEX_APP_SERVER_BINARY,
+                listen=utils.CODEX_APP_SERVER_LISTEN,
+                timeout_seconds=utils.CODEX_APP_SERVER_TIMEOUT,
+                sandbox=utils.CODEX_APP_SERVER_SANDBOX,
+                approval_policy=utils.CODEX_APP_SERVER_APPROVAL_POLICY,
+                model=utils.CODEX_APP_SERVER_MODEL,
+                allowed_roots=utils.ALLOWED_PATHS,
+                reasoning_effort=utils.CODEX_APP_SERVER_REASONING_EFFORT,
+            )
+        return _codex_runtime
+
+
+def shutdown_codex_runtime() -> None:
+    global _codex_runtime
+    with _codex_runtime_lock:
+        runtime = _codex_runtime
+        _codex_runtime = None
+    if runtime is not None:
+        runtime.stop()
 
 
 def _effective_run_settings(meta) -> dict:
@@ -218,19 +248,8 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
             web_ui = WebUI(session_id, web_app._manager, run, web_app._store, run_settings=run_settings)
             run_started = time.monotonic()
             try:
-                import asyncio as _aio
-                provider = CodexAppServerProvider(
-                    codex_bin=utils.CODEX_APP_SERVER_BINARY,
-                    listen=utils.CODEX_APP_SERVER_LISTEN,
-                    timeout_seconds=utils.CODEX_APP_SERVER_TIMEOUT,
-                    sandbox=utils.CODEX_APP_SERVER_SANDBOX,
-                    approval_policy=utils.CODEX_APP_SERVER_APPROVAL_POLICY,
-                    model=utils.CODEX_APP_SERVER_MODEL,
-                    allowed_roots=utils.ALLOWED_PATHS,
-                    reasoning_effort=run_settings["reasoning_effort"],
-                )
                 prompt = web_helpers._codex_prompt_with_attachments(text, saved_attachments, workspace_root)
-                _aio.run(provider.run(
+                _get_codex_runtime().run(
                     meta=meta,
                     user_prompt=prompt,
                     workspace=workspace_root,
@@ -239,14 +258,15 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
                     store=web_app._store,
                     display_prompt=text,
                     display_images=saved_attachments,
-                ))
+                    reasoning_effort=run_settings["reasoning_effort"],
+                )
             except Exception as e:
                 web_ui.show_error(f"Codex error: {e}")
             finally:
                 if run.cancel_event.is_set() and not web_ui.finished_reason:
                     web_ui.show_agent_finished("interrupted")
                 elif not web_ui.finished_reason:
-                    web_ui.show_agent_finished("completed")
+                    web_ui.show_agent_finished("error")
                 _emit_run_metrics(web_ui, session_id, meta, run_started)
                 _finish_run_and_start_next(session_id)
     elif meta.provider == CLAUDE_PROVIDER_ID:

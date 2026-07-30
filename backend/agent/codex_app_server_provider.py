@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 import utils
 import skill_registry
@@ -21,6 +23,26 @@ class AppServerProtocolError(RuntimeError):
 
 class CodexAppServerRunError(RuntimeError):
     pass
+
+
+class CodexThreadResumeError(CodexAppServerRunError):
+    pass
+
+
+def _thread_id_from_message(msg: dict[str, Any]) -> str | None:
+    params = msg.get("params")
+    if not isinstance(params, dict):
+        return None
+    for key in ("threadId", "thread_id"):
+        value = params.get(key)
+        if isinstance(value, str) and value:
+            return value
+    thread = params.get("thread")
+    if isinstance(thread, dict):
+        value = thread.get("id")
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 class AppServerTransport:
@@ -38,40 +60,94 @@ class AppServerTransport:
         self.process: asyncio.subprocess.Process | None = None
         self._next_id = 1
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
-        self._notifications: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._thread_queues: dict[str, asyncio.Queue[dict[str, Any] | BaseException]] = {}
         self._writer_lock = asyncio.Lock()
+        self._lifecycle_lock = asyncio.Lock()
         self._reader_task: asyncio.Task[None] | None = None
-        self._stderr_task: asyncio.Task[str] | None = None
+        self._stderr_task: asyncio.Task[None] | None = None
+        self._stderr_chunks: deque[str] = deque(maxlen=200)
+        self._connection_closed = True
+        self.generation = 0
 
     async def start(self) -> None:
-        if self.process is not None:
-            return
-        args = [self.codex_bin, "app-server", "--listen", self.listen]
-        for override in self.config_overrides:
-            args.extend(["-c", override])
-        self.process = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=self.env,
-        )
-        self._reader_task = asyncio.create_task(self._read_loop())
-        if self.process.stderr is not None:
-            self._stderr_task = asyncio.create_task(self._collect_stderr(self.process.stderr))
+        async with self._lifecycle_lock:
+            if (
+                self.process is not None
+                and self.process.returncode is None
+                and not self._connection_closed
+            ):
+                return
+            await self._stop_process()
+            args = [self.codex_bin, "app-server", "--listen", self.listen]
+            for override in self.config_overrides:
+                args.extend(["-c", override])
+            self.process = await asyncio.create_subprocess_exec(
+                *args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=self.env,
+            )
+            self.generation += 1
+            self._connection_closed = False
+            self._stderr_chunks.clear()
+            self._reader_task = asyncio.create_task(self._read_loop())
+            if self.process.stderr is not None:
+                self._stderr_task = asyncio.create_task(self._collect_stderr(self.process.stderr))
 
     async def stop(self) -> None:
-        if self._reader_task:
-            self._reader_task.cancel()
-        if self.process is None:
-            return
-        self.process.terminate()
-        try:
-            await asyncio.wait_for(self.process.wait(), timeout=5)
-        except asyncio.TimeoutError:
-            self.process.kill()
-            await self.process.wait()
+        async with self._lifecycle_lock:
+            await self._stop_process()
+
+    async def _stop_process(self) -> None:
+        process = self.process
+        reader_task = self._reader_task
+        stderr_task = self._stderr_task
         self.process = None
+        self._reader_task = None
+        self._stderr_task = None
+        self._connection_closed = True
+        if process is not None and process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+        if reader_task and reader_task is not asyncio.current_task():
+            reader_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reader_task
+        if stderr_task:
+            if not stderr_task.done():
+                stderr_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stderr_task
+        self._fail_all(AppServerProtocolError("Codex app-server connection closed."))
+
+    def subscribe_thread(
+        self, thread_id: str
+    ) -> asyncio.Queue[dict[str, Any] | BaseException]:
+        if thread_id in self._thread_queues:
+            raise AppServerProtocolError(f"Codex thread {thread_id} already has an active turn.")
+        queue: asyncio.Queue[dict[str, Any] | BaseException] = asyncio.Queue()
+        self._thread_queues[thread_id] = queue
+        return queue
+
+    def unsubscribe_thread(self, thread_id: str) -> None:
+        self._thread_queues.pop(thread_id, None)
+
+    def _fail_all(self, exc: BaseException) -> None:
+        for future in list(self._pending.values()):
+            if not future.done():
+                future.set_exception(exc)
+        for queue in list(self._thread_queues.values()):
+            queue.put_nowait(exc)
+
+    async def wait(self) -> int:
+        if self.process is None:
+            raise AppServerProtocolError("Codex app-server is not running.")
+        return await self.process.wait()
 
     async def request(
         self,
@@ -85,7 +161,7 @@ class AppServerTransport:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[dict[str, Any]] = loop.create_future()
         self._pending[msg_id] = future
-        await self._write({"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params or {}})
+        await self._write({"id": msg_id, "method": method, "params": params or {}})
         try:
             return await asyncio.wait_for(future, timeout=timeout)
         finally:
@@ -93,21 +169,18 @@ class AppServerTransport:
 
     async def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         await self.start()
-        await self._write({"jsonrpc": "2.0", "method": method, "params": params or {}})
+        await self._write({"method": method, "params": params or {}})
 
     async def respond(self, request_id: int | str, result: dict[str, Any]) -> None:
-        await self._write({"jsonrpc": "2.0", "id": request_id, "result": result})
+        await self._write({"id": request_id, "result": result})
 
-    async def notifications(self) -> AsyncIterator[dict[str, Any]]:
-        while True:
-            yield await self._notifications.get()
+    async def respond_error(
+        self, request_id: int | str, code: int, message: str
+    ) -> None:
+        await self._write({"id": request_id, "error": {"code": code, "message": message}})
 
     async def stderr_text(self) -> str:
-        if not self._stderr_task:
-            return ""
-        if self._stderr_task.done():
-            return self._stderr_task.result()
-        return ""
+        return "".join(self._stderr_chunks)
 
     async def _write(self, payload: dict[str, Any]) -> None:
         if self.process is None or self.process.stdin is None:
@@ -120,60 +193,85 @@ class AppServerTransport:
     async def _read_loop(self) -> None:
         if self.process is None or self.process.stdout is None:
             raise AppServerProtocolError("Codex app-server stdout is unavailable.")
-        while True:
-            line = await self.process.stdout.readline()
-            if not line:
-                break
-            text = line.decode("utf-8", errors="replace").strip()
-            if not text:
-                continue
-            try:
-                msg = json.loads(text)
-            except json.JSONDecodeError:
-                await self._notifications.put({"method": "harness/json_parse_error", "params": {"raw": text}})
-                continue
-            if "id" in msg and ("result" in msg or "error" in msg):
-                future = self._pending.get(msg["id"])
-                if future is None:
-                    await self._notifications.put({"method": "harness/unmatched_response", "params": msg})
+        try:
+            while True:
+                line = await self.process.stdout.readline()
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").strip()
+                if not text:
                     continue
-                if msg.get("error") is not None:
-                    future.set_exception(AppServerProtocolError(str(msg["error"])))
-                else:
-                    future.set_result(msg.get("result") or {})
-                continue
-            await self._notifications.put(msg)
+                try:
+                    msg = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                if "id" in msg and ("result" in msg or "error" in msg):
+                    future = self._pending.get(msg["id"])
+                    if future is None:
+                        continue
+                    if msg.get("error") is not None:
+                        future.set_exception(AppServerProtocolError(str(msg["error"])))
+                    else:
+                        future.set_result(msg.get("result") or {})
+                    continue
+                thread_id = _thread_id_from_message(msg)
+                thread_queue = self._thread_queues.get(thread_id or "")
+                if thread_queue is not None:
+                    await thread_queue.put(msg)
+                elif (
+                    "id" in msg
+                    and "method" in msg
+                    and "result" not in msg
+                    and "error" not in msg
+                ):
+                    await self.respond_error(
+                        msg["id"],
+                        -32601,
+                        f"MyHarness does not support global server request {msg['method']}",
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._connection_closed = True
+            self._fail_all(AppServerProtocolError(f"Codex app-server read failed: {exc}"))
+        else:
+            self._connection_closed = True
+            self._fail_all(AppServerProtocolError("Codex app-server closed its output stream."))
 
-    async def _collect_stderr(self, stderr: asyncio.StreamReader) -> str:
-        chunks: list[str] = []
+    async def _collect_stderr(self, stderr: asyncio.StreamReader) -> None:
         while True:
             line = await stderr.readline()
             if not line:
                 break
-            chunks.append(line.decode("utf-8", errors="replace"))
-        return "".join(chunks)
+            self._stderr_chunks.append(line.decode("utf-8", errors="replace"))
 
 
 class CodexAppServerClient:
     def __init__(self, transport: AppServerTransport, timeout_seconds: int = 1800):
         self.transport = transport
         self.timeout_seconds = timeout_seconds
-        self.initialized = False
+        self._initialized_generation = 0
+        self._initialize_lock = asyncio.Lock()
 
     async def initialize(self, experimental_api: bool = False) -> None:
-        if self.initialized:
-            return
-        await self.transport.start()
-        await self.transport.request(
-            "initialize",
-            {
-                "clientInfo": {"name": "myharness", "title": utils.APP_NAME, "version": "0.1.0"},
-                "capabilities": {"experimentalApi": experimental_api},
-            },
-            timeout=60,
-        )
-        await self.transport.notify("initialized", {})
-        self.initialized = True
+        async with self._initialize_lock:
+            await self.transport.start()
+            if self._initialized_generation == self.transport.generation:
+                return
+            await self.transport.request(
+                "initialize",
+                {
+                    "clientInfo": {
+                        "name": "myharness",
+                        "title": utils.APP_NAME,
+                        "version": "0.1.0",
+                    },
+                    "capabilities": {"experimentalApi": experimental_api},
+                },
+                timeout=60,
+            )
+            await self.transport.notify("initialized", {})
+            self._initialized_generation = self.transport.generation
 
     async def thread_start(
         self,
@@ -420,6 +518,11 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+async def _wait_for_cancel(cancel_event: threading.Event) -> None:
+    while not cancel_event.is_set():
+        await asyncio.sleep(0.1)
+
+
 class CodexAppServerProvider:
     def __init__(
         self,
@@ -452,6 +555,7 @@ class CodexAppServerProvider:
             env=self._build_env(),
         )
         self.client = CodexAppServerClient(self.transport, timeout_seconds=timeout_seconds)
+        self._loaded_threads: dict[str, int] = {}
 
     async def run(
         self,
@@ -463,6 +567,7 @@ class CodexAppServerProvider:
         store,
         display_prompt: str | None = None,
         display_images: list[dict] | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         user_prompt = user_prompt.strip()
         if not user_prompt:
@@ -500,34 +605,40 @@ class CodexAppServerProvider:
             store.update_session(meta)
 
         ui.show_user_message(display_prompt if display_prompt is not None else user_prompt, display_images)
-        ui.show_status("Starting Codex app-server run…")
+        self._show_verbose_status(ui, "Starting Codex app-server run…")
 
         try:
-            await self._run_turn(meta, workspace_path, prompt, thread_id, ui, cancel_event, store, run_started_at)
-        except CodexAppServerRunError as exc:
-            if thread_id:
-                codex_state = dict(meta.codex_state) if meta.codex_state else {}
-                codex_state["resume_failures"] = codex_state.get("resume_failures", 0) + 1
-                meta.codex_state = codex_state
-                store.update_session(meta)
-                ui.show_provider_warning(
-                    "Codex app-server resume failed; falling back to a fresh thread with summary.",
-                    str(exc),
-                )
-                await self._run_turn(
-                    meta,
-                    workspace_path,
-                    build_fallback_prompt(meta, user_prompt, store.load_codex_summary(meta.id)),
-                    None,
-                    ui,
-                    cancel_event,
-                    store,
-                    time.perf_counter(),
-                )
-            else:
-                ui.show_error(f"Codex app-server failed: {exc}")
-        finally:
-            await self.transport.stop()
+            await self._run_turn(
+                meta,
+                workspace_path,
+                prompt,
+                thread_id,
+                ui,
+                cancel_event,
+                store,
+                run_started_at,
+                reasoning_effort,
+            )
+        except CodexThreadResumeError as exc:
+            codex_state = dict(meta.codex_state) if meta.codex_state else {}
+            codex_state["resume_failures"] = codex_state.get("resume_failures", 0) + 1
+            meta.codex_state = codex_state
+            store.update_session(meta)
+            ui.show_provider_warning(
+                "Codex app-server resume failed; falling back to a fresh thread with summary.",
+                str(exc),
+            )
+            await self._run_turn(
+                meta,
+                workspace_path,
+                build_fallback_prompt(meta, user_prompt, store.load_codex_summary(meta.id)),
+                None,
+                ui,
+                cancel_event,
+                store,
+                time.perf_counter(),
+                reasoning_effort,
+            )
 
     async def _run_turn(
         self,
@@ -539,20 +650,29 @@ class CodexAppServerProvider:
         cancel_event: threading.Event,
         store,
         run_started_at: float,
+        reasoning_effort: str | None = None,
     ) -> None:
         codex_state = dict(meta.codex_state) if meta.codex_state else {}
         try:
             phase_started_at = time.perf_counter()
             if thread_id:
-                ui.show_status("Resuming Codex thread…")
-                await self.client.thread_resume(
-                    thread_id=thread_id,
-                    cwd=str(workspace),
-                    approval_policy=self.approval_policy,
-                    sandbox=self.sandbox,
-                )
+                await self.client.initialize(utils.CODEX_APP_SERVER_EXPERIMENTAL_API)
+                if self._loaded_threads.get(thread_id) != self.transport.generation:
+                    self._show_verbose_status(ui, "Resuming Codex thread…")
+                    try:
+                        await self.client.thread_resume(
+                            thread_id=thread_id,
+                            cwd=str(workspace),
+                            approval_policy=self.approval_policy,
+                            sandbox=self.sandbox,
+                        )
+                    except (AppServerProtocolError, asyncio.TimeoutError) as exc:
+                        stderr = await self.transport.stderr_text()
+                        detail = f"{exc}\n{stderr}" if stderr else str(exc)
+                        raise CodexThreadResumeError(detail) from exc
+                    self._loaded_threads[thread_id] = self.transport.generation
             else:
-                ui.show_status("Starting Codex thread…")
+                self._show_verbose_status(ui, "Starting Codex thread…")
                 result = await self.client.thread_start(
                     cwd=str(workspace),
                     model=self.model,
@@ -563,31 +683,59 @@ class CodexAppServerProvider:
                 thread_id = extract_thread_id_from_result(result)
                 if not thread_id:
                     raise CodexAppServerRunError(f"Could not extract thread id from thread/start: {result}")
+                self._loaded_threads[thread_id] = self.transport.generation
                 codex_state.update({"mode": "app-server", "thread_id": thread_id, "transport": "stdio"})
                 meta.codex_state = codex_state
                 store.update_session(meta)
-            ui.show_status(f"Codex thread ready in {_elapsed(phase_started_at)}.")
+            self._show_verbose_status(
+                ui, f"Codex thread ready in {_elapsed(phase_started_at)}."
+            )
 
             phase_started_at = time.perf_counter()
-            ui.show_status("Starting Codex turn…")
-            turn_result = await self.client.turn_start(
-                thread_id=thread_id,
-                text=prompt,
-                cwd=str(workspace),
-                approval_policy=self.approval_policy,
-                sandbox=self.sandbox,
-                writable_roots=self.allowed_roots,
-                effort=self.reasoning_effort,
-            )
-            turn_id = extract_turn_id_from_result(turn_result)
-            if not turn_id:
-                raise CodexAppServerRunError(f"Could not extract turn id from turn/start: {turn_result}")
-            codex_state.update({"mode": "app-server", "thread_id": thread_id, "last_turn_id": turn_id, "transport": "stdio"})
-            meta.codex_state = codex_state
-            store.update_session(meta)
-            ui.show_status(f"Codex turn accepted in {_elapsed(phase_started_at)}.")
+            self._show_verbose_status(ui, "Starting Codex turn…")
+            notification_queue = self.transport.subscribe_thread(thread_id)
+            try:
+                turn_result = await self.client.turn_start(
+                    thread_id=thread_id,
+                    text=prompt,
+                    cwd=str(workspace),
+                    approval_policy=self.approval_policy,
+                    sandbox=self.sandbox,
+                    writable_roots=self.allowed_roots,
+                    effort=reasoning_effort or self.reasoning_effort,
+                )
+                turn_id = extract_turn_id_from_result(turn_result)
+                if not turn_id:
+                    raise CodexAppServerRunError(
+                        f"Could not extract turn id from turn/start: {turn_result}"
+                    )
+                codex_state.update(
+                    {
+                        "mode": "app-server",
+                        "thread_id": thread_id,
+                        "last_turn_id": turn_id,
+                        "transport": "stdio",
+                    }
+                )
+                meta.codex_state = codex_state
+                store.update_session(meta)
+                self._show_verbose_status(
+                    ui, f"Codex turn accepted in {_elapsed(phase_started_at)}."
+                )
 
-            await self._stream_turn(meta, thread_id, turn_id, prompt, ui, cancel_event, store, run_started_at)
+                await self._stream_turn(
+                    meta,
+                    thread_id,
+                    turn_id,
+                    prompt,
+                    ui,
+                    cancel_event,
+                    store,
+                    run_started_at,
+                    notification_queue,
+                )
+            finally:
+                self.transport.unsubscribe_thread(thread_id)
         except (AppServerProtocolError, asyncio.TimeoutError) as exc:
             stderr = await self.transport.stderr_text()
             detail = f"{exc}\n{stderr}" if stderr else str(exc)
@@ -603,57 +751,210 @@ class CodexAppServerProvider:
         cancel_event: threading.Event,
         store,
         run_started_at: float,
+        notification_queue: asyncio.Queue[dict[str, Any] | BaseException],
     ) -> None:
         final_messages: list[str] = []
         deltas: list[str] = []
         agent_message_phases: dict[str, str] = {}
         stream_started_at = time.perf_counter()
         first_response_seen = False
-        ui.show_status("Waiting for Codex response…")
-        async with asyncio.timeout(self.timeout_seconds):
-            async for msg in self.transport.notifications():
-                if cancel_event.is_set():
-                    await self.client.turn_interrupt(thread_id, turn_id)
-                    ui.show_error("Codex app-server run cancelled.")
-                    return
-                if _is_server_request(msg):
-                    await self._handle_server_request(msg, ui)
-                    continue
+        self._show_verbose_status(ui, "Waiting for Codex response…")
+        cancel_task = asyncio.create_task(_wait_for_cancel(cancel_event))
+        message_task: asyncio.Task[dict[str, Any] | BaseException] | None = None
+        cancellation_requested = False
+        completed_params: dict[str, Any] | None = None
+        try:
+            async with asyncio.timeout(self.timeout_seconds):
+                while completed_params is None:
+                    message_wait = notification_queue.get()
+                    if cancellation_requested:
+                        message_wait = asyncio.wait_for(message_wait, timeout=30)
+                    message_task = asyncio.create_task(message_wait)
+                    wait_tasks: set[asyncio.Task[Any]] = {message_task}
+                    if not cancellation_requested:
+                        wait_tasks.add(cancel_task)
+                    done, _ = await asyncio.wait(
+                        wait_tasks,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if cancel_task in done and not cancellation_requested:
+                        cancellation_requested = True
+                        await self.client.turn_interrupt(thread_id, turn_id)
+                        self._show_verbose_status(ui, "Interrupting Codex turn…")
+                        if message_task not in done:
+                            message_task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await message_task
+                            message_task = None
+                            continue
+                    if message_task not in done:
+                        continue
+                    try:
+                        queued = message_task.result()
+                    except asyncio.TimeoutError:
+                        ui.show_agent_finished("interrupted")
+                        return
+                    message_task = None
+                    if isinstance(queued, BaseException):
+                        raise queued
+                    msg = queued
+                    if _is_server_request(msg):
+                        await self._handle_server_request(msg, ui)
+                        continue
 
-                received_at = time.perf_counter()
-                persisted_msg = {
-                    **msg,
-                    "_myharness_received_at": _utc_now_iso(),
-                    "_myharness_elapsed_ms": round((received_at - run_started_at) * 1000),
-                }
-                before_delta_count = len(deltas)
-                before_final_count = len(final_messages)
-                store.append_codex_raw_event(meta.id, persisted_msg)
-                self._emit_ui_event(msg, ui, final_messages, deltas, agent_message_phases)
-                if (
-                    not first_response_seen
-                    and (len(deltas) > before_delta_count or len(final_messages) > before_final_count)
-                ):
-                    first_response_seen = True
-                    ui.show_status(f"Codex first response after {_elapsed(stream_started_at)}.")
+                    received_at = time.perf_counter()
+                    persisted_msg = {
+                        **msg,
+                        "_myharness_received_at": _utc_now_iso(),
+                        "_myharness_elapsed_ms": round(
+                            (received_at - run_started_at) * 1000
+                        ),
+                    }
+                    before_delta_count = len(deltas)
+                    before_final_count = len(final_messages)
+                    store.append_codex_raw_event(meta.id, persisted_msg)
+                    self._emit_ui_event(
+                        msg, ui, final_messages, deltas, agent_message_phases
+                    )
+                    if (
+                        not first_response_seen
+                        and (
+                            len(deltas) > before_delta_count
+                            or len(final_messages) > before_final_count
+                        )
+                    ):
+                        first_response_seen = True
+                        self._show_verbose_status(
+                            ui,
+                            f"Codex first response after {_elapsed(stream_started_at)}.",
+                        )
 
-                if msg.get("method") == "turn/completed":
-                    params = msg.get("params") or {}
-                    if params.get("turnId") in (None, turn_id) or params.get("turn_id") == turn_id:
-                        break
+                    if msg.get("method") == "turn/completed":
+                        params = msg.get("params") or {}
+                        if (
+                            params.get("turnId") in (None, turn_id)
+                            or params.get("turn_id") == turn_id
+                        ):
+                            completed_params = params
+        finally:
+            cancel_task.cancel()
+            if message_task:
+                message_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cancel_task
+            if message_task:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await message_task
 
-        final_text = "".join(deltas).strip() or (final_messages[-1].strip() if final_messages else "")
-        if final_text:
-            ui.show_assistant_markdown(final_text)
-        self._update_summary(meta, prompt, final_text, store)
-        ui.show_status(f"Codex run completed in {_elapsed(run_started_at)}.")
-        ui.show_agent_finished("completed")
+        final_text = "".join(deltas).strip() or (
+            final_messages[-1].strip() if final_messages else ""
+        )
+        status = self._turn_status(completed_params or {})
+        if status == "interrupted" or cancellation_requested:
+            ui.show_agent_finished("interrupted")
+            return
+        if status == "completed":
+            if final_text:
+                ui.show_assistant_markdown(final_text)
+            self._update_summary(meta, prompt, final_text, store)
+            self._show_verbose_status(
+                ui, f"Codex run completed in {_elapsed(run_started_at)}."
+            )
+            ui.show_agent_finished("completed")
+            return
+        error = self._turn_error(completed_params or {})
+        ui.show_error(f"Codex turn failed{f': {error}' if error else '.'}")
+        ui.show_agent_finished("error")
 
     async def _handle_server_request(self, msg: dict[str, Any], ui) -> None:
         method = msg.get("method", "")
         params = msg.get("params") or {}
-        approved = ui.request_approval(method, json.dumps(params, indent=2, ensure_ascii=False), None)
-        await self.transport.respond(msg["id"], {"approved": approved, "decision": "approved" if approved else "denied"})
+        if method in {
+            "item/commandExecution/requestApproval",
+            "item/fileChange/requestApproval",
+        }:
+            approved = await asyncio.to_thread(
+                ui.request_approval,
+                method,
+                json.dumps(params, indent=2, ensure_ascii=False),
+                None,
+            )
+            await self.transport.respond(
+                msg["id"], {"decision": "accept" if approved else "decline"}
+            )
+            return
+        if method == "item/permissions/requestApproval":
+            approved = await asyncio.to_thread(
+                ui.request_approval,
+                method,
+                json.dumps(params, indent=2, ensure_ascii=False),
+                None,
+            )
+            await self.transport.respond(
+                msg["id"],
+                {
+                    "permissions": params.get("permissions", {}) if approved else {},
+                    "scope": "turn",
+                },
+            )
+            return
+        if method == "item/tool/requestUserInput":
+            await self.transport.respond(msg["id"], {"answers": {}})
+            return
+        if method == "mcpServer/elicitation/request":
+            await self.transport.respond(
+                msg["id"], {"action": "decline", "content": None}
+            )
+            return
+        await self.transport.respond_error(
+            msg["id"], -32601, f"MyHarness does not support server request {method}"
+        )
+
+    @staticmethod
+    def _verbose(ui) -> bool:
+        run_settings = getattr(ui, "run_settings", {}) or {}
+        value = run_settings.get("verbose_tools")
+        return value if isinstance(value, bool) else utils.UI_VERBOSE_TOOLS
+
+    def _show_verbose_status(self, ui, text: str) -> None:
+        if self._verbose(ui):
+            ui.show_status(text)
+
+    @staticmethod
+    def _turn_status(params: dict[str, Any]) -> str:
+        turn = params.get("turn")
+        if isinstance(turn, dict) and isinstance(turn.get("status"), str):
+            return turn["status"]
+        status = params.get("status")
+        return status if isinstance(status, str) else "failed"
+
+    @staticmethod
+    def _turn_error(params: dict[str, Any]) -> str:
+        turn = params.get("turn")
+        error = turn.get("error") if isinstance(turn, dict) else params.get("error")
+        if isinstance(error, dict):
+            value = error.get("message")
+            return value if isinstance(value, str) else json.dumps(error, ensure_ascii=False)
+        return error if isinstance(error, str) else ""
+
+    @staticmethod
+    def _file_changes(item: dict[str, Any]) -> list[tuple[str, str]]:
+        changes: list[tuple[str, str]] = []
+        for change in item.get("changes") or []:
+            if not isinstance(change, dict):
+                continue
+            path = change.get("path")
+            kind = change.get("kind")
+            kind_type = kind.get("type") if isinstance(kind, dict) else kind
+            action = {"add": "created", "delete": "deleted", "update": "modified"}.get(
+                kind_type, "modified"
+            )
+            if isinstance(path, str) and path:
+                changes.append((path, action))
+        legacy_path = item.get("path")
+        if not changes and isinstance(legacy_path, str) and legacy_path:
+            changes.append((legacy_path, item.get("status") or "modified"))
+        return changes
 
     def _emit_ui_event(
         self,
@@ -665,7 +966,7 @@ class CodexAppServerProvider:
     ) -> None:
         method = msg.get("method", "")
         params = msg.get("params") or {}
-        verbose = utils.UI_VERBOSE_TOOLS
+        verbose = self._verbose(ui)
 
         if method in {"thread/started", "turn/started"}:
             if verbose:
@@ -692,13 +993,22 @@ class CodexAppServerProvider:
                 if phase == "final_answer":
                     final_messages.append(text)
                 return
+            if (
+                item_type in {"file_change", "fileChange"}
+                and method == "item/completed"
+            ):
+                for path, action in self._file_changes(item):
+                    ui.show_observed_file_change(path, action, "codex")
+                    if verbose:
+                        ui.show_codex_file_change(path, action)
+                return
             if not verbose:
                 return
-            if item_type in {"command_execution", "commandExecution"}:
+            if (
+                item_type in {"command_execution", "commandExecution"}
+                and method == "item/completed"
+            ):
                 ui.show_codex_command(item.get("command", ""), item.get("status", "running"))
-                return
-            if item_type in {"file_change", "fileChange"}:
-                ui.show_codex_file_change(item.get("path", ""), item.get("status", ""))
                 return
             ui.show_codex_item(item_type or method, msg)
             return
@@ -736,3 +1046,87 @@ class CodexAppServerProvider:
             "known_risks": previous.get("known_risks", ["Codex app-server protocol may change."]),
         }
         store.write_codex_summary(meta.id, summary)
+
+
+class CodexAppServerRuntime:
+    """Backend-scoped app-server connection shared by all Codex sessions."""
+
+    def __init__(self, **provider_kwargs: Any):
+        self._provider_kwargs = provider_kwargs
+        self._provider: CodexAppServerProvider | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._ready = threading.Event()
+        self._start_lock = threading.Lock()
+        self._startup_error: BaseException | None = None
+
+    def start(self) -> None:
+        with self._start_lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._ready.clear()
+                self._startup_error = None
+                self._thread = threading.Thread(
+                    target=self._thread_main,
+                    name="myharness-codex-app-server",
+                    daemon=True,
+                )
+                self._thread.start()
+        if not self._ready.wait(timeout=10):
+            raise CodexAppServerRunError("Timed out starting the Codex runtime.")
+        if self._startup_error is not None:
+            raise CodexAppServerRunError(
+                f"Could not start the Codex runtime: {self._startup_error}"
+            )
+
+    def run(self, **run_kwargs: Any) -> None:
+        self.start()
+        if self._loop is None or self._provider is None:
+            raise CodexAppServerRunError("Codex runtime did not initialize.")
+        future = asyncio.run_coroutine_threadsafe(
+            self._provider.run(**run_kwargs), self._loop
+        )
+        future.result()
+
+    def stop(self) -> None:
+        with self._start_lock:
+            loop = self._loop
+            provider = self._provider
+            thread = self._thread
+        if loop is None or thread is None:
+            return
+        if provider is not None and loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(provider.transport.stop(), loop)
+            with contextlib.suppress(Exception):
+                future.result(timeout=10)
+            loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=10)
+        with self._start_lock:
+            self._loop = None
+            self._provider = None
+            self._thread = None
+
+    def _thread_main(self) -> None:
+        loop: asyncio.AbstractEventLoop | None = None
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            self._provider = CodexAppServerProvider(**self._provider_kwargs)
+            self._loop = loop
+        except BaseException as exc:
+            self._startup_error = exc
+            self._ready.set()
+            if loop is not None:
+                loop.close()
+            return
+        self._ready.set()
+        try:
+            loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+            loop.close()
