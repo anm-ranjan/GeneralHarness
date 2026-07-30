@@ -4,6 +4,9 @@
   "version": "0.1.0",
   "description": "Electron desktop shell for MyHarness.",
   "main": "main.js",
+  "//": "electron-builder's deb target requires homepage and author for the package metadata it generates; without them `npm run dist:linux` fails after the AppImage is already built.",
+  "homepage": "https://github.com/anm-ranjan/GeneralHarness",
+  "author": "anm-ranjan",
   "type": "commonjs",
   "scripts": {
     "start": "electron .",
