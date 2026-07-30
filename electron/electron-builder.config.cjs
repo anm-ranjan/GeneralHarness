@@ -1,13 +1,24 @@
 "use strict";
 
 const packageJson = require("./package.json");
+const { sanitizeProductName } = require("./product-name.cjs");
 
-const productName = String(process.env.MYHARNESS_PRODUCT_NAME || "MyHarness").trim() || "MyHarness";
+const rawProductName = String(process.env.MYHARNESS_PRODUCT_NAME || "MyHarness").trim();
+const productName = sanitizeProductName(rawProductName);
 const slug = productName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "myharness";
+
+if (rawProductName && rawProductName !== productName) {
+  console.warn(
+    `[electron-builder] Packaging as "${productName}": "${rawProductName}" contains characters ` +
+    "that cannot appear in a bundle name. The name shown inside the app is unaffected.",
+  );
+}
 
 module.exports = {
   ...packageJson.build,
   productName,
   appId: `local.${slug}.desktop`,
-  artifactName: `${productName.replace(/[\\/:"*?<>|]+/g, "-")}-\${version}-\${os}-\${arch}.\${ext}`,
+  // productName is already filesystem-safe, so the artifact name needs no
+  // second, differently-spelled sanitization pass.
+  artifactName: `${productName}-\${version}-\${os}-\${arch}.\${ext}`,
 };
