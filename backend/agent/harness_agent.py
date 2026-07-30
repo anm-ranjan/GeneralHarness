@@ -821,6 +821,15 @@ def _web_output_fragment() -> str:
     )
 
 
+def _plan_fragment() -> str:
+    return (
+        "PLAN DISCIPLINE: For multi-step work, publish a short checklist with plan_update. Once published, "
+        "it is a live status display for the user, not a one-time announcement: mark each step 'completed' "
+        "in the call right after you finish it, keep exactly one step 'in_progress', and update it one last "
+        "time before your final reply so nothing is left showing as unfinished. "
+    )
+
+
 def _build_managed_system_content(workspace_root: str | None = None) -> str:
     return (
         "You are a pragmatic coding agent with access to file listing, filename search, content search, file read, web request, "
@@ -838,6 +847,7 @@ def _build_managed_system_content(workspace_root: str | None = None) -> str:
         "file_read for reading, content_search for searching, file_list for listing. "
         "shell_run is ONLY for running scripts, tests, builds, and commands that have no tool equivalent. "
         + _gather_context_fragment()
+        + _plan_fragment()
         + utils.skill_registry.prompt_fragment()
         + f"You can only access these directories: {', '.join(utils.ALLOWED_PATHS)}. "
         + _workspace_fragment(workspace_root)
@@ -871,6 +881,7 @@ def _build_native_system_content(workspace_root: str | None = None) -> str:
         "CRITICAL: NEVER guess or fabricate file names, directory contents, or file contents. "
         "Always inspect before editing. "
         + _gather_context_fragment()
+        + _plan_fragment()
         + utils.skill_registry.prompt_fragment()
         + f"You can only access these directories: {', '.join(utils.ALLOWED_PATHS)}. "
         + _workspace_fragment(workspace_root)
@@ -1254,6 +1265,9 @@ def run_agent(
     total_tool_calls = 0
     checkpoint_injected = False
     interrupted = False
+    published_plan: list[dict] = []
+    tool_calls_since_plan_update = 0
+    plan_final_nudge_used = False
     if api_caller is not None:
         model_call = api_caller
     else:
@@ -1514,12 +1528,34 @@ def run_agent(
                 turn_messages.append(tool_msg)
                 total_tool_calls += 1
 
+                if func_name == "plan_update" and not tool_result.startswith("ERROR"):
+                    try:
+                        published_plan = utils.normalize_plan_items(func_args.get("items", []))
+                    except ValueError:
+                        published_plan = []
+                    tool_calls_since_plan_update = 0
+                else:
+                    tool_calls_since_plan_update += 1
+
                 if func_name == "file_write" and not tool_result.startswith("ERROR"):
                     utils.compress_file_write_args(assistant_msg, tool_call["id"])
 
             if cancel_event and cancel_event.is_set():
                 interrupted = True
                 break
+
+            if (
+                published_plan
+                and tool_calls_since_plan_update >= utils.PLAN_REMINDER_AFTER_TOOL_CALLS
+            ):
+                reminder = utils.plan_reminder_message(published_plan)
+                tool_calls_since_plan_update = 0
+                if reminder is None:
+                    published_plan = []
+                else:
+                    reminder_msg = {"role": "user", "content": reminder}
+                    messages.append(reminder_msg)
+                    turn_messages.append(reminder_msg)
 
             if (
                 not checkpoint_injected
@@ -1544,6 +1580,26 @@ def run_agent(
                 elif verbose_tools:
                     ui_print(f"  {_BULLET} {status_text}", style="yellow")
         elif assistant_msg.get("content"):
+            # The plan is most often left stale right at the end of a turn: the
+            # work is done but the last steps were never marked completed. Give
+            # the model one chance to reconcile before the answer is shown.
+            if published_plan and not plan_final_nudge_used:
+                plan_final_nudge_used = True
+                reminder = utils.plan_reminder_message(published_plan)
+                if reminder:
+                    reminder_msg = {
+                        "role": "user",
+                        "content": (
+                            reminder
+                            + "\nYou are about to finish this turn, so bring the plan up to date first, "
+                            "then repeat your reply."
+                        ),
+                    }
+                    messages.append(reminder_msg)
+                    turn_messages.append(reminder_msg)
+                    tool_calls_since_plan_update = 0
+                    continue
+                published_plan = []
             if ui:
                 ui.show_assistant_markdown(assistant_msg["content"])
             else:

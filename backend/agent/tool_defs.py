@@ -233,7 +233,12 @@ READ_ONLY_TOOLS = [
                 "Publish or update a short plan/checklist of steps for the current task, shown to the user "
                 "in the session view. Send the full current plan each time (it replaces whatever was shown "
                 "before) - lay it out when starting a multi-step task, then call it again whenever a step's "
-                "status changes. Skip it for simple one-shot requests that don't need a visible plan."
+                "status changes. Skip it for simple one-shot requests that don't need a visible plan.\n"
+                "Keeping it current is mandatory once you have published one: mark a step 'completed' in the "
+                "very next call after you finish it - never batch several completions at the end - and keep "
+                "exactly one step 'in_progress' while you work on it. Before you write your final reply, make "
+                "one last call so every finished step reads 'completed'; a plan left showing unfinished steps "
+                "is shown to the user as still in progress."
             ),
             "parameters": {
                 "type": "object",

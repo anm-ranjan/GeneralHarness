@@ -1434,7 +1434,34 @@ def tool_plan_update(items) -> str:
     except ValueError as e:
         return f"ERROR: {e}"
     done = sum(1 for item in normalized if item["status"] == "completed")
-    return f"Plan updated: {len(normalized)} step(s), {done} completed."
+    summary = f"Plan updated: {len(normalized)} step(s), {done} completed."
+    if done < len(normalized):
+        summary += (
+            " Call plan_update again as soon as a step finishes — mark it completed before you"
+            " start the next one, and keep at most one step in_progress."
+        )
+    return summary
+
+
+# How many tool calls may go by after a plan_update before the agent is
+# reminded that its published plan is stale.
+PLAN_REMINDER_AFTER_TOOL_CALLS = 6
+
+
+def plan_reminder_message(items: list[dict]) -> str | None:
+    """Nudge text for a published plan with unfinished steps, or None if the
+    plan is already fully completed."""
+    pending = [item for item in items if item["status"] != "completed"]
+    if not pending:
+        return None
+    lines = "\n".join(f"- [{item['status']}] {item['content']}" for item in items)
+    return (
+        "[PLAN REMINDER] Your visible plan still shows unfinished steps:\n"
+        f"{lines}\n"
+        "If any of them are actually done, call plan_update now with the full updated plan so the "
+        "user sees the real progress. Mark the step you are working on as in_progress. Do not "
+        "mention this reminder in your reply."
+    )
 
 
 def tool_web_request(url: str, method: str = "GET") -> str:

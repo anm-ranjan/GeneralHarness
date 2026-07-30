@@ -12,6 +12,9 @@ export default function PlanPanel() {
   if (!state.currentSessionId || items.length === 0) return null
 
   const done = items.filter((item) => item.status === 'completed').length
+  // A finished plan has nothing left to track — drop the panel instead of
+  // leaving a fully struck-through list on screen.
+  if (done === items.length) return null
 
   return (
     <div className="border-t border-line px-7 py-2 bg-bg/95">
