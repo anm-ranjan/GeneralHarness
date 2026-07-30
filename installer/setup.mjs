@@ -658,7 +658,7 @@ async function stepFrontends() {
   return { browser, desktop, tui };
 }
 
-async function installFrontends({ browser, desktop, tui }, appName) {
+async function installFrontends({ browser, desktop, tui }, appName, pythonInfo) {
   heading('Building clients');
   if (browser || desktop) {
     info('Installing frontend dependencies...');
@@ -676,6 +676,14 @@ async function installFrontends({ browser, desktop, tui }, appName) {
   }
 
   if (desktop) {
+    // The Electron package copies ./.venv wholesale, so an unusable venv is
+    // baked into the artifact. Say so at the moment it gets captured, since
+    // the symptom is otherwise a packaged app that opens and then reports its
+    // backend exiting with a nonzero code.
+    if (pythonInfo && pythonInfo.usable === false) {
+      warn('The desktop package bundles ./.venv, which cannot import the backend dependencies.');
+      warn('The built app will launch and then fail when its backend exits. Fix the venv and rebuild.');
+    }
     info('Installing Electron dependencies...');
     if (npmInstallIn(path.join(REPO_ROOT, 'electron'))) {
       ok('Electron dependencies installed.');
@@ -800,6 +808,16 @@ function findPython() {
   return null;
 }
 
+// Import names, not distribution names: PyYAML installs as `yaml`, PyMuPDF as
+// `fitz`. These are the modules backend/web_app.py needs to reach its first
+// line of work, so if any is missing the backend cannot start at all.
+const REQUIRED_BACKEND_MODULES = ['fastapi', 'uvicorn', 'pydantic', 'yaml', 'requests'];
+
+/** Args that import every module the backend cannot start without. */
+function backendImportCheckArgs() {
+  return ['-c', `import ${REQUIRED_BACKEND_MODULES.join(', ')}`];
+}
+
 async function stepPythonEnv() {
   heading('Python environment');
   const venvDir = path.join(REPO_ROOT, '.venv');
@@ -809,6 +827,22 @@ async function stepPythonEnv() {
 
   if (existsSync(venvPython)) {
     ok(`Reusing the existing venv at ${venvDir}`);
+    // A venv made by `uv venv` (or `python -m venv --without-pip`) has no pip,
+    // so every install below fails and setup finishes around an empty
+    // environment. That surfaces much later, and far from its cause, as the
+    // packaged app dying at launch with "No module named 'uvicorn'".
+    if (!probe(venvPython, ['-m', 'pip', '--version']).ok) {
+      info('That venv has no pip (uv creates them this way); bootstrapping it with ensurepip.');
+      if (!run(venvPython, ['-m', 'ensurepip', '--upgrade'])) {
+        fail(`Could not bootstrap pip into ${venvDir}.`);
+        notes.push(
+          `The venv at ${venvDir} has no pip and ensurepip could not add it. On Debian/Ubuntu `
+          + 'install python3-venv, or delete .venv and re-run setup to build a fresh one.',
+        );
+        return null;
+      }
+      ok('pip is available in the venv.');
+    }
   } else {
     const python = findPython();
     if (!python) {
@@ -826,12 +860,28 @@ async function stepPythonEnv() {
   const pip = [venvPython, '-m', 'pip'];
   run(venvPython, ['-m', 'pip', 'install', '--upgrade', 'pip']);
   info('Installing requirements.txt (this can take a few minutes)...');
-  if (run(venvPython, ['-m', 'pip', 'install', '-r', path.join(REPO_ROOT, 'requirements.txt')])) {
-    ok('Backend dependencies installed.');
-  } else {
+  const installed = run(venvPython, ['-m', 'pip', 'install', '-r', path.join(REPO_ROOT, 'requirements.txt')]);
+  if (!installed) {
     fail('Installing requirements.txt failed. Run it manually with ./.venv/bin/python -m pip.');
   }
-  return { venvDir, venvPython, pip };
+
+  // Check the environment rather than trusting the installer's exit code: a
+  // half-populated venv or a wheel that failed to build can still report
+  // success, and the desktop package is built around whatever is in .venv at
+  // this moment. Better to say so here than to ship an app that dies on launch.
+  const usable = probe(venvPython, backendImportCheckArgs()).ok;
+  if (usable) {
+    if (installed) ok('Backend dependencies installed.');
+  } else {
+    fail('The venv cannot import the backend dependencies, so the backend will not start.');
+    notes.push(
+      `Backend dependencies are missing from ${venvDir}. Install them with `
+      + `"${venvPython} -m pip install -r requirements.txt" and re-run setup before `
+      + 'building the desktop package, which bundles this venv as-is.',
+    );
+  }
+
+  return { venvDir, venvPython, pip, usable };
 }
 
 /** Apply the answers to the template text and return the finished YAML. */
@@ -988,7 +1038,7 @@ async function main() {
 
   const answers = { app, codex, claude, native, audio, frontends, server };
   if (!writeConfig(answers)) return;
-  await installFrontends(frontends, app.appName);
+  await installFrontends(frontends, app.appName, pythonInfo);
   summary(answers);
 }
 
@@ -1009,6 +1059,8 @@ export {
   buildConfig,
   writeConfig,
   stepExistingConfig,
+  backendImportCheckArgs,
+  REQUIRED_BACKEND_MODULES,
   findKey,
   dedent,
   yamlScalar,
