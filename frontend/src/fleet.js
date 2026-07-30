@@ -73,13 +73,35 @@ export function hostStorageKey(hostId, key) {
  */
 export function hostStatus(result) {
   if (!result || result.ok !== true) {
-    return { online: false, running: 0, waitingApproval: 0 }
+    return { online: false, running: 0, waitingApproval: 0, reportedId: '' }
   }
   return {
     online: true,
     running: Math.max(0, Number(result.running) || 0),
     waitingApproval: Math.max(0, Number(result.waiting_approval) || 0),
+    // What that machine calls itself. The fleet list is meant to be identical
+    // everywhere, so this should equal the id configured for the host.
+    reportedId: String(result.host_id || '').trim(),
   }
+}
+
+/**
+ * The id a host calls itself when it disagrees with the id configured for it,
+ * or '' when they match.
+ *
+ * Host ids namespace saved per-host state and are how every machine refers to
+ * every other, so two configs that disagree are a real misconfiguration -- but
+ * a silent one, because each machine works fine on its own. Reporting it is
+ * the difference between a five-minute fix and a confusing afternoon.
+ *
+ * An empty reported id means the peer has no fleet configured (or predates
+ * this check), which is not something to complain about.
+ */
+export function hostIdMismatch(host, status) {
+  if (!status || !status.online) return ''
+  const reported = String(status.reportedId || '').trim()
+  if (!reported || reported === host.id) return ''
+  return reported
 }
 
 /**

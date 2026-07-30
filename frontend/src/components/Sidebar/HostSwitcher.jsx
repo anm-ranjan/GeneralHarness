@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useApp, useSwitchHost } from '../../context/AppContext'
 import {
   describeHostStatus,
+  hostIdMismatch,
   hostNeedsAttention,
   summarizeOtherHosts,
 } from '../../fleet'
@@ -91,6 +92,10 @@ export default function HostSwitcher() {
             // re-enables it automatically once it comes back.
             const reachable = Boolean(status?.online)
             const selectable = reachable && !isActive
+            // The host answers, but calls itself something else: the fleet
+            // lists were not kept identical across machines. Switching still
+            // works, so this warns rather than blocks.
+            const mismatch = hostIdMismatch(host, status)
 
             return (
               <li key={host.id}>
@@ -108,11 +113,15 @@ export default function HostSwitcher() {
                         : 'opacity-50 cursor-not-allowed'
                   }`}
                   title={
-                    isActive
-                      ? `Working on ${host.label}`
-                      : reachable
-                        ? `Switch to ${host.label} (${host.url})`
-                        : `${host.label} is not responding at ${host.url}`
+                    mismatch
+                      ? `${host.label} is configured as "${host.id}" here but calls itself `
+                        + `"${mismatch}". Use the same fleet.hosts list on every machine, `
+                        + 'changing only fleet.self.'
+                      : isActive
+                        ? `Working on ${host.label}`
+                        : reachable
+                          ? `Switch to ${host.label} (${host.url})`
+                          : `${host.label} is not responding at ${host.url}`
                   }
                 >
                   <ComputerIcon
@@ -127,6 +136,11 @@ export default function HostSwitcher() {
                     >
                       {describeHostStatus(status)}
                     </span>
+                    {mismatch && (
+                      <span className="block text-[11px] text-amber-500 truncate">
+                        calls itself “{mismatch}”, not “{host.id}”
+                      </span>
+                    )}
                   </span>
                   {isActive && <span className="text-[11px] text-accent shrink-0">●</span>}
                 </button>

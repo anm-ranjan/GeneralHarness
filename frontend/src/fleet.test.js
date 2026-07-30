@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   describeHostStatus,
   hostNeedsAttention,
+  hostIdMismatch,
   hostStatus,
   hostStorageKey,
   normalizeFleet,
@@ -80,15 +81,15 @@ test('hostStorageKey falls back to the single-host namespace', () => {
 
 test('hostStatus reads a successful poll', () => {
   const status = hostStatus({ ok: true, running: 2, waiting_approval: 1 })
-  assert.deepEqual(status, { online: true, running: 2, waitingApproval: 1 })
+  assert.deepEqual(status, { online: true, running: 2, waitingApproval: 1, reportedId: '' })
 })
 
 test('hostStatus treats a failed or malformed poll as offline', () => {
-  assert.deepEqual(hostStatus(null), { online: false, running: 0, waitingApproval: 0 })
-  assert.deepEqual(hostStatus({ ok: false }), { online: false, running: 0, waitingApproval: 0 })
+  assert.deepEqual(hostStatus(null), { online: false, running: 0, waitingApproval: 0, reportedId: '' })
+  assert.deepEqual(hostStatus({ ok: false }), { online: false, running: 0, waitingApproval: 0, reportedId: '' })
   assert.deepEqual(
     hostStatus({ ok: true, running: 'x', waiting_approval: -3 }),
-    { online: true, running: 0, waitingApproval: 0 },
+    { online: true, running: 0, waitingApproval: 0, reportedId: '' },
   )
 })
 
@@ -126,4 +127,37 @@ test('summarizeOtherHosts counts unpolled hosts as offline', () => {
     summarizeOtherHosts(hosts, {}, 'mac'),
     { waitingApproval: 0, running: 0, offline: 1 },
   )
+})
+
+// ── host id divergence ────────────────────────────────────────────────
+//
+// Host ids namespace saved per-host state and are how machines refer to each
+// other, so configs that disagree are a real misconfiguration -- and a silent
+// one, since each machine works fine alone.
+
+test('hostStatus carries the id a host reports for itself', () => {
+  const status = hostStatus({ ok: true, running: 0, waiting_approval: 0, host_id: 'jarvis' })
+  assert.equal(status.reportedId, 'jarvis')
+  assert.equal(hostStatus({ ok: false }).reportedId, '')
+})
+
+test('hostIdMismatch reports the id a host actually calls itself', () => {
+  const host = { id: 'Jarvis', label: 'Jarvis', url: 'http://a' }
+  const status = hostStatus({ ok: true, host_id: 'jarvis' })
+  assert.equal(hostIdMismatch(host, status), 'jarvis')
+})
+
+test('hostIdMismatch stays quiet when the ids agree', () => {
+  const host = { id: 'jarvis', label: 'Jarvis', url: 'http://a' }
+  assert.equal(hostIdMismatch(host, hostStatus({ ok: true, host_id: 'jarvis' })), '')
+})
+
+test('hostIdMismatch stays quiet when there is nothing to compare', () => {
+  const host = { id: 'jarvis', label: 'Jarvis', url: 'http://a' }
+  // A peer with no fleet configured, or one predating the check, reports ''.
+  assert.equal(hostIdMismatch(host, hostStatus({ ok: true })), '')
+  assert.equal(hostIdMismatch(host, hostStatus({ ok: true, host_id: '   ' })), '')
+  // An offline host has nothing to say about itself.
+  assert.equal(hostIdMismatch(host, hostStatus({ ok: false })), '')
+  assert.equal(hostIdMismatch(host, null), '')
 })

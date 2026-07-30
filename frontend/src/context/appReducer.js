@@ -200,6 +200,7 @@ export function reducer(state, action) {
         && previous.online === status.online
         && previous.running === status.running
         && previous.waitingApproval === status.waitingApproval
+        && previous.reportedId === status.reportedId
       ) {
         return state
       }

@@ -23,6 +23,7 @@ import {
   stepFleet,
   suggestHostId,
   backendImportCheckArgs,
+  fleetTunnelScript,
   REQUIRED_BACKEND_MODULES,
   ConfigEditor,
   yamlScalar,
@@ -551,3 +552,40 @@ test('the dependency check is a single runnable python -c statement', () => {
   assert.equal(args.length, 2);
   assert.equal(args[1], `import ${REQUIRED_BACKEND_MODULES.join(', ')}`);
 })
+
+// ── fleet tunnel launcher ─────────────────────────────────────────────
+//
+// Remote hosts are reached over loopback so their backends stay bound to
+// 127.0.0.1, which means nothing works until a tunnel is up. The installer
+// cannot hold one open, so it writes a launcher instead.
+
+const TUNNELS = [
+  { localPort: '8421', remotePort: 8420, sshHost: 'jarvis.local' },
+  { localPort: '8422', remotePort: 8420, sshHost: 'nas.local' },
+];
+
+test('the tunnel script forwards every configured host', () => {
+  const script = fleetTunnelScript(TUNNELS);
+  assert.ok(script.startsWith('#!/usr/bin/env bash'));
+  assert.match(script, /"8421:127\.0\.0\.1:8420 jarvis\.local"/);
+  assert.match(script, /"8422:127\.0\.0\.1:8420 nas\.local"/);
+});
+
+test('the tunnel script restarts dropped tunnels', () => {
+  // A silently dead tunnel is indistinguishable in the UI from a host that is
+  // switched off, so the script must not just run ssh once.
+  const script = fleetTunnelScript(TUNNELS);
+  assert.match(script, /while true/);
+  assert.match(script, /sleep 5/);
+  assert.match(script, /ServerAliveInterval=30/);
+});
+
+test('the tunnel script fails loudly on a port that is already bound', () => {
+  assert.match(fleetTunnelScript(TUNNELS), /ExitOnForwardFailure=yes/);
+});
+
+test('the tunnel script cleans up its children on interrupt', () => {
+  const script = fleetTunnelScript(TUNNELS);
+  assert.match(script, /trap cleanup INT TERM/);
+  assert.match(script, /kill "\$pid"/);
+});
