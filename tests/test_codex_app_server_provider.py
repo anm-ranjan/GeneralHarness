@@ -66,8 +66,8 @@ class FakeClient:
         self.thread_start_calls += 1
         return {"thread": {"id": self.next_thread_id}}
 
-    async def turn_start(self, thread_id, text, **_kwargs):
-        self.turn_calls.append((thread_id, text))
+    async def turn_start(self, thread_id, text, **kwargs):
+        self.turn_calls.append((thread_id, text, kwargs))
         if self.turn_error:
             raise self.turn_error
         turn_id = f"turn_{len(self.turn_calls)}"
@@ -232,6 +232,23 @@ class CodexAppServerProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.resume_calls, ["thr_existing"])
         self.assertEqual([call[0] for call in client.turn_calls], ["thr_existing", "thr_existing"])
         self.assertEqual(client.thread_start_calls, 0)
+
+    async def test_run_overrides_model_and_reasoning_effort_for_the_turn(self):
+        provider, _transport, client = make_provider()
+
+        await provider.run(
+            meta=make_meta(),
+            user_prompt="Continue",
+            workspace=self.tmp.name,
+            ui=FakeUI(),
+            cancel_event=threading.Event(),
+            store=FakeStore(),
+            model="gpt-test-sol",
+            reasoning_effort="high",
+        )
+
+        self.assertEqual(client.turn_calls[0][2]["model"], "gpt-test-sol")
+        self.assertEqual(client.turn_calls[0][2]["effort"], "high")
 
     async def test_only_resume_failure_replays_on_a_fresh_thread(self):
         provider, _transport, client = make_provider()

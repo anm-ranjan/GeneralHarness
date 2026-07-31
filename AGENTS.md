@@ -153,7 +153,7 @@ if the user should be asked about it.
   `data/chats/<chat_id>/`, and otherwise reuse the whole session pipeline. The
   reserved bucket cannot be renamed or deleted.
 - **Per-session overrides** persist provider and working directory; run settings
-  override iterations, reasoning effort, approval behavior, and verbosity
+  override model, iterations, reasoning effort, approval behavior, and verbosity
   without touching process-wide defaults.
 - **Approvals** follow `permissions.approval_mode`: `always_ask`, `shell_only`,
   `auto_approve`.
@@ -235,6 +235,8 @@ if the user should be asked about it.
 | POST | `/api/sessions` | Create a session |
 | POST | `/api/chats` | Create a sandboxed chat |
 | GET/PATCH/DELETE | `/api/sessions/{id}` | Read, rename, delete a session |
+| GET | `/api/sessions/{id}/model-options` | Provider model catalog and supported thinking levels |
+| PATCH | `/api/sessions/{id}/run-settings` | Persist the session model and thinking level |
 | POST | `/api/sessions/{id}/move` | Move a session to another task |
 | GET | `/api/sessions/{id}/events` | Paginated events |
 | GET | `/api/sessions/{id}/export` | Markdown or HTML transcript |
@@ -271,6 +273,21 @@ if the user should be asked about it.
 `run.cmd` mirrors these on Windows and defaults to the Electron shell.
 
 ## Verification
+
+Keep this checkout for development only. The local testing environment is:
+
+```text
+/Users/animesh/Software/Harness_2BOrNot2B
+```
+
+Before testing, sync the current source into that directory and build there.
+Old files and folders in the testing environment may be removed during the
+sync, but always preserve its `data/` directory. Also preserve machine-local
+configuration and credentials rather than copying development secrets.
+Do not retain generated build output in this development checkout. After
+testing, remove local `frontend/dist/`, `electron/dist/`, `tui-rs/target/`,
+Python `__pycache__/` directories, and test caches; builds belong only in the
+testing environment.
 
 Use the smallest check that covers the change.
 

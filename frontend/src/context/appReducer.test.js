@@ -92,6 +92,26 @@ test('SELECT_SESSION and CLEAR_SESSION reset the plan', () => {
   assert.deepEqual(reducer(withPlanAgain, { type: 'CLEAR_SESSION' }).plan, [])
 })
 
+test('SET_RUN_SETTINGS updates current meta and the session tree copy', () => {
+  const selected = reducer(initialState, {
+    type: 'SELECT_SESSION',
+    payload: {
+      meta: { id: 's1', status: 'idle', run_settings: {} },
+      workspaceRoot: '',
+    },
+  })
+  const next = reducer(selected, {
+    type: 'SET_RUN_SETTINGS',
+    payload: { model: 'opus', reasoning_effort: 'high' },
+  })
+
+  assert.deepEqual(next.currentMeta.run_settings, {
+    model: 'opus',
+    reasoning_effort: 'high',
+  })
+  assert.deepEqual(next.sessionsById.s1.run_settings, next.currentMeta.run_settings)
+})
+
 // ── host switching ────────────────────────────────────────────────
 //
 // Hosts share no projects, tasks, or sessions, so the danger is a slice of the

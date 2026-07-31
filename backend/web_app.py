@@ -260,6 +260,7 @@ from web_models import (  # noqa: F401
     RenameSessionRequest,
     RenameTaskRequest,
     SendMessageRequest,
+    UpdateRunSettingsRequest,
 )
 from web_helpers import (  # noqa: F401
     _codex_external_path_refs,
@@ -316,6 +317,7 @@ from web_routes.sessions import (  # noqa: F401
     get_session,
     get_session_attachment,
     get_session_events,
+    get_session_model_options,
     get_session_metrics,
     list_sessions,
     move_session,
@@ -323,6 +325,7 @@ from web_routes.sessions import (  # noqa: F401
     rename_session,
     rename_task,
     search_sessions,
+    update_session_run_settings,
 )
 from web_routes.runs import (  # noqa: F401
     _QueueReorderRequest,

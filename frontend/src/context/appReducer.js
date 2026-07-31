@@ -502,6 +502,22 @@ export function reducer(state, action) {
           : state.currentMeta,
       }
 
+    case 'SET_RUN_SETTINGS': {
+      if (!state.currentMeta) return state
+      const runSettings = { ...action.payload }
+      return {
+        ...state,
+        currentMeta: { ...state.currentMeta, run_settings: runSettings },
+        sessionsById: {
+          ...state.sessionsById,
+          [state.currentMeta.id]: {
+            ...(state.sessionsById[state.currentMeta.id] || state.currentMeta),
+            run_settings: runSettings,
+          },
+        },
+      }
+    }
+
     case 'SET_PROVIDER': {
       const provider = action.payload
       return {

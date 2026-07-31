@@ -3,6 +3,7 @@ import useSessionTree from '../../hooks/useSessionTree'
 import { api } from '../../api'
 import { useState } from 'react'
 import { effectiveWorkspaceRoot } from '../../sessionWorkspace'
+import ProviderLogo from '../ProviderLogo'
 
 export default function ProviderPicker() {
   const { state, dispatch } = useApp()
@@ -50,7 +51,7 @@ export default function ProviderPicker() {
               disabled={Boolean(selectingProvider)}
               className="w-full py-2.5 text-[13px] font-medium text-text-bright border border-line rounded-md hover:border-accent hover:text-accent transition-colors"
             >
-              Native Agent
+              <span className="inline-flex items-center gap-2"><ProviderLogo provider="native" /> Native Agent</span>
             </button>
           )}
           {state.claudeAgentEnabled && (
@@ -59,7 +60,7 @@ export default function ProviderPicker() {
               disabled={Boolean(selectingProvider)}
               className="w-full py-2.5 text-[13px] font-medium text-accent border border-accent/30 rounded-md hover:bg-accent-soft transition-colors"
             >
-              Claude
+              <span className="inline-flex items-center gap-2"><ProviderLogo provider="claude-agent" /> Claude</span>
             </button>
           )}
           {state.codexAppServerEnabled && (
@@ -68,7 +69,7 @@ export default function ProviderPicker() {
               disabled={Boolean(selectingProvider)}
               className="w-full py-2.5 text-[13px] font-medium text-ok border border-ok/30 rounded-md hover:bg-ok-soft transition-colors"
             >
-              Codex App Server
+              <span className="inline-flex items-center gap-2"><ProviderLogo provider="codex-app-server" /> Codex App Server</span>
             </button>
           )}
           {!state.nativeEnabled && !state.claudeAgentEnabled && !state.codexAppServerEnabled && (

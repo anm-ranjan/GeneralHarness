@@ -64,11 +64,22 @@ def _effective_run_settings(meta) -> dict:
         max_iters = int(max_iters) if max_iters is not None else None
     except (TypeError, ValueError):
         max_iters = None
+    default_model = (
+        utils.CODEX_APP_SERVER_MODEL
+        if meta.provider == "codex-app-server"
+        else utils.CLAUDE_AGENT_MODEL if meta.provider == CLAUDE_PROVIDER_ID else utils.MODEL
+    )
+    default_effort = (
+        "high"
+        if meta.provider == CLAUDE_PROVIDER_ID
+        else utils.CODEX_APP_SERVER_REASONING_EFFORT
+    )
     return {
         "approval_mode": rs.get("approval_mode") or utils.APPROVAL_MODE,
         "verbose_tools": verbose if isinstance(verbose, bool) else utils.UI_VERBOSE_TOOLS,
         "max_iterations": max_iters if max_iters and max_iters > 0 else utils.MAX_AGENT_ITERATIONS,
-        "reasoning_effort": rs.get("reasoning_effort") or utils.CODEX_APP_SERVER_REASONING_EFFORT,
+        "model": rs.get("model") or default_model,
+        "reasoning_effort": rs.get("reasoning_effort") or default_effort,
     }
 
 
@@ -258,6 +269,7 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
                     store=web_app._store,
                     display_prompt=text,
                     display_images=saved_attachments,
+                    model=run_settings["model"],
                     reasoning_effort=run_settings["reasoning_effort"],
                 )
             except Exception as e:
@@ -276,12 +288,13 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
             try:
                 import asyncio as _aio
                 provider = ClaudeAgentProvider(
-                    model=utils.CLAUDE_AGENT_MODEL,
+                    model=run_settings["model"],
                     timeout_seconds=utils.CLAUDE_AGENT_TIMEOUT,
                     max_turns=utils.CLAUDE_AGENT_MAX_TURNS,
                     allowed_roots=utils.ALLOWED_PATHS,
                     approval_mode=run_settings["approval_mode"],
                     cli_path=utils.CLAUDE_AGENT_BINARY,
+                    reasoning_effort=run_settings["reasoning_effort"],
                 )
                 prompt = web_helpers._codex_prompt_with_attachments(text, saved_attachments, workspace_root)
                 _aio.run(provider.run(
@@ -628,6 +641,13 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
 
         old_provider = current
         meta.provider = target
+        # Model identifiers and thinking levels are provider-specific. Carrying
+        # a Codex model into Claude (or the inverse) would fail the next run.
+        meta.run_settings = {
+            key: value
+            for key, value in (meta.run_settings or {}).items()
+            if key not in {"model", "reasoning_effort"}
+        }
         if target in native_family:
             meta.codex_state = meta.codex_state or {}
         web_app._store.update_session(meta)

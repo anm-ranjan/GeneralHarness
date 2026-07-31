@@ -28,13 +28,23 @@ from web_models import (
     RenameProjectRequest,
     RenameSessionRequest,
     RenameTaskRequest,
+    UpdateRunSettingsRequest,
 )
 from web_ui_adapter import _file_snapshots
 
 import web_app
 import web_helpers
+import web_runs
 
 router = APIRouter()
+
+_CLAUDE_MODELS = (
+    {"id": "sonnet", "display_name": "Sonnet", "description": "Balanced speed and intelligence"},
+    {"id": "opus", "display_name": "Opus", "description": "Most capable for complex work"},
+    {"id": "haiku", "display_name": "Haiku", "description": "Fastest for lightweight tasks"},
+)
+_CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+_CODEX_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 
 
 def _active_session_ids(session_ids: list[str]) -> list[str]:
@@ -263,6 +273,115 @@ def get_session(session_id: str):
         "meta": meta.model_dump(mode="json"),
         "events": [e.model_dump(mode="json") for e in events],
     }
+
+
+@router.get("/api/sessions/{session_id}/model-options")
+def get_session_model_options(session_id: str):
+    meta = web_app._store.load_session(session_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    effective = web_runs._effective_run_settings(meta)
+
+    if meta.provider == "codex-app-server":
+        if not web_app._codex_app_server_available():
+            raise HTTPException(status_code=409, detail="Codex app-server is not available")
+        try:
+            result = web_runs._get_codex_runtime().list_models()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Could not load Codex models: {exc}") from exc
+        models = []
+        for item in result.get("data") or []:
+            if item.get("hidden"):
+                continue
+            efforts = [
+                option.get("reasoningEffort")
+                for option in item.get("supportedReasoningEfforts") or []
+                if option.get("reasoningEffort")
+            ]
+            models.append({
+                "id": item.get("model") or item.get("id"),
+                "display_name": item.get("displayName") or item.get("model") or item.get("id"),
+                "description": item.get("description") or "",
+                "is_default": bool(item.get("isDefault")),
+                "default_effort": item.get("defaultReasoningEffort"),
+                "supported_efforts": efforts,
+            })
+        return {
+            "provider": meta.provider,
+            "current_model": effective["model"] or next(
+                (item["id"] for item in models if item["is_default"]), ""
+            ),
+            "current_effort": effective["reasoning_effort"],
+            "models": models,
+        }
+
+    if meta.provider == "claude-agent":
+        configured_model = str(effective["model"] or "sonnet")
+        current_model = next(
+            (item["id"] for item in _CLAUDE_MODELS if item["id"] in configured_model.lower()),
+            configured_model,
+        )
+        models = list(_CLAUDE_MODELS)
+        if current_model == configured_model and not any(
+            item["id"] == current_model for item in models
+        ):
+            models.insert(0, {
+                "id": configured_model,
+                "display_name": configured_model,
+                "description": "Configured Claude model",
+            })
+        return {
+            "provider": meta.provider,
+            "current_model": current_model,
+            "current_effort": effective["reasoning_effort"],
+            "models": [
+                {**item, "is_default": item["id"] == current_model,
+                 "default_effort": "high", "supported_efforts": list(_CLAUDE_EFFORTS)}
+                for item in models
+            ],
+        }
+
+    return {
+        "provider": "native",
+        "current_model": effective["model"] or "",
+        "current_effort": "",
+        "models": [{
+            "id": effective["model"] or "",
+            "display_name": effective["model"] or "Native default",
+            "description": "Configured API model",
+            "is_default": True,
+            "default_effort": "",
+            "supported_efforts": [],
+        }],
+    }
+
+
+@router.patch("/api/sessions/{session_id}/run-settings")
+def update_session_run_settings(session_id: str, req: UpdateRunSettingsRequest):
+    if web_app._manager.get_active_run(session_id):
+        raise HTTPException(status_code=409, detail="Run settings cannot change while the agent is running")
+    meta = web_app._store.load_session(session_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    model = (req.model or "").strip()
+    effort = (req.reasoning_effort or "").strip().lower()
+    if not model:
+        raise HTTPException(status_code=400, detail="Choose a model")
+    allowed_efforts = _CLAUDE_EFFORTS if meta.provider == "claude-agent" else _CODEX_EFFORTS
+    if effort and effort not in allowed_efforts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown thinking level '{effort}'. Choose from: {', '.join(allowed_efforts)}",
+        )
+
+    settings = dict(meta.run_settings or {})
+    settings["model"] = model
+    if effort:
+        settings["reasoning_effort"] = effort
+    meta.run_settings = settings
+    web_app._store.update_session(meta)
+    return meta.model_dump(mode="json")
 
 
 @router.get("/api/sessions/{session_id}/events")

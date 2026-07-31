@@ -119,6 +119,7 @@ class ClaudeAgentProvider:
         allowed_roots: list[str] | None = None,
         approval_mode: str = "auto_approve",
         cli_path: str | None = None,
+        reasoning_effort: str | None = None,
     ):
         self.model = model or None
         self.timeout_seconds = timeout_seconds
@@ -126,6 +127,7 @@ class ClaudeAgentProvider:
         self.allowed_roots = _canonical_allowed_roots(allowed_roots or [])
         self.approval_mode = approval_mode
         self.cli_path = cli_path or None
+        self.reasoning_effort = reasoning_effort or None
 
     async def run(
         self,
@@ -199,6 +201,7 @@ class ClaudeAgentProvider:
         options = ClaudeAgentOptions(
             cwd=str(workspace_path),
             model=self.model,
+            effort=self.reasoning_effort,
             permission_mode=permission_mode,
             resume=resume_session_id,
             add_dirs=[r for r in self.allowed_roots if r != str(workspace_path)],

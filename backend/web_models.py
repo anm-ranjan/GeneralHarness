@@ -71,7 +71,7 @@ class SessionMeta(BaseModel):
     message_queue: list["QueuedMessage"] = Field(default_factory=list)
     # Per-session overrides for run behavior. Absent keys inherit the process
     # defaults from agent config. Known keys: approval_mode, verbose_tools,
-    # max_iterations, reasoning_effort.
+    # max_iterations, model, reasoning_effort.
     run_settings: dict = Field(default_factory=dict)
 
 
@@ -153,6 +153,11 @@ class RenameTaskRequest(BaseModel):
 
 class RenameSessionRequest(BaseModel):
     title: str
+
+
+class UpdateRunSettingsRequest(BaseModel):
+    model: str | None = None
+    reasoning_effort: str | None = None
 
 
 class MoveSessionRequest(BaseModel):

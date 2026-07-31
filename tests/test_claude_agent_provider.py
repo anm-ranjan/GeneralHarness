@@ -167,6 +167,7 @@ class ClaudeAgentProviderTests(unittest.TestCase):
             ):
                 provider = provider_module.ClaudeAgentProvider(
                     model="claude-test",
+                    reasoning_effort="medium",
                     timeout_seconds=30,
                     max_turns=7,
                     allowed_roots=[tmp],
@@ -185,6 +186,7 @@ class ClaudeAgentProviderTests(unittest.TestCase):
         options = captured["options"]
         self.assertEqual(options["cli_path"], "/custom/bin/claude")
         self.assertEqual(options["model"], "claude-test")
+        self.assertEqual(options["effort"], "medium")
         self.assertEqual(options["max_turns"], 7)
         self.assertEqual(options["permission_mode"], "default")
         self.assertIn("Prior completed work.", captured["prompt"])

@@ -293,6 +293,20 @@ class CodexAppServerClient:
             params["developerInstructions"] = developer_instructions
         return await self.transport.request("thread/start", params, timeout=60)
 
+    async def model_list(self) -> dict[str, Any]:
+        await self.initialize(utils.CODEX_APP_SERVER_EXPERIMENTAL_API)
+        models: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            params: dict[str, Any] = {"includeHidden": False}
+            if cursor:
+                params["cursor"] = cursor
+            result = await self.transport.request("model/list", params, timeout=60)
+            models.extend(result.get("data") or [])
+            cursor = result.get("nextCursor")
+            if not cursor:
+                return {"data": models}
+
     async def thread_resume(
         self,
         thread_id: str,
@@ -320,21 +334,21 @@ class CodexAppServerClient:
         approval_policy: str = "on-request",
         sandbox: str = "workspace-write",
         writable_roots: list[str] | None = None,
+        model: str | None = None,
         effort: str | None = None,
     ) -> dict[str, Any]:
         await self.initialize(utils.CODEX_APP_SERVER_EXPERIMENTAL_API)
-        return await self.transport.request(
-            "turn/start",
-            {
-                "threadId": thread_id,
-                "input": [{"type": "text", "text": text}],
-                "cwd": cwd,
-                "approvalPolicy": approval_policy,
-                "sandboxPolicy": self._build_sandbox_policy(sandbox, writable_roots or []),
-                "effort": effort or utils.CODEX_APP_SERVER_REASONING_EFFORT,
-            },
-            timeout=60,
-        )
+        params: dict[str, Any] = {
+            "threadId": thread_id,
+            "input": [{"type": "text", "text": text}],
+            "cwd": cwd,
+            "approvalPolicy": approval_policy,
+            "sandboxPolicy": self._build_sandbox_policy(sandbox, writable_roots or []),
+            "effort": effort or utils.CODEX_APP_SERVER_REASONING_EFFORT,
+        }
+        if model:
+            params["model"] = model
+        return await self.transport.request("turn/start", params, timeout=60)
 
     async def turn_interrupt(self, thread_id: str, turn_id: str) -> dict[str, Any]:
         await self.initialize(utils.CODEX_APP_SERVER_EXPERIMENTAL_API)
@@ -567,6 +581,7 @@ class CodexAppServerProvider:
         store,
         display_prompt: str | None = None,
         display_images: list[dict] | None = None,
+        model: str | None = None,
         reasoning_effort: str | None = None,
     ) -> None:
         user_prompt = user_prompt.strip()
@@ -617,6 +632,7 @@ class CodexAppServerProvider:
                 cancel_event,
                 store,
                 run_started_at,
+                model,
                 reasoning_effort,
             )
         except CodexThreadResumeError as exc:
@@ -637,6 +653,7 @@ class CodexAppServerProvider:
                 cancel_event,
                 store,
                 time.perf_counter(),
+                model,
                 reasoning_effort,
             )
 
@@ -650,6 +667,7 @@ class CodexAppServerProvider:
         cancel_event: threading.Event,
         store,
         run_started_at: float,
+        model: str | None = None,
         reasoning_effort: str | None = None,
     ) -> None:
         codex_state = dict(meta.codex_state) if meta.codex_state else {}
@@ -675,7 +693,7 @@ class CodexAppServerProvider:
                 self._show_verbose_status(ui, "Starting Codex thread…")
                 result = await self.client.thread_start(
                     cwd=str(workspace),
-                    model=self.model,
+                    model=model or self.model,
                     approval_policy=self.approval_policy,
                     sandbox=self.sandbox,
                     developer_instructions=build_developer_instructions(),
@@ -702,6 +720,7 @@ class CodexAppServerProvider:
                     approval_policy=self.approval_policy,
                     sandbox=self.sandbox,
                     writable_roots=self.allowed_roots,
+                    model=model or self.model,
                     effort=reasoning_effort or self.reasoning_effort,
                 )
                 turn_id = extract_turn_id_from_result(turn_result)
@@ -1086,6 +1105,15 @@ class CodexAppServerRuntime:
             self._provider.run(**run_kwargs), self._loop
         )
         future.result()
+
+    def list_models(self) -> dict[str, Any]:
+        self.start()
+        if self._loop is None or self._provider is None:
+            raise CodexAppServerRunError("Codex runtime did not initialize.")
+        future = asyncio.run_coroutine_threadsafe(
+            self._provider.client.model_list(), self._loop
+        )
+        return future.result(timeout=60)
 
     def stop(self) -> None:
         with self._start_lock:

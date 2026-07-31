@@ -1,5 +1,6 @@
 import { useApp } from '../../context/AppContext'
 import useApi from '../../hooks/useApi'
+import ModelSelector from './ModelSelector'
 
 export default function ComposerToolbar({ className = '' }) {
   const { state } = useApp()
@@ -7,11 +8,6 @@ export default function ComposerToolbar({ className = '' }) {
 
   const sid = state.currentSessionId
   const indicator = state.isRunning ? 'running' : 'idle'
-  const modelLabel = state.currentProvider === 'codex-app-server'
-    ? 'Codex App Server'
-    : state.currentProvider === 'claude-agent'
-      ? 'Claude'
-      : (state.model || 'Native')
 
   function toggleApproval() {
     const next = state.approvalMode === 'auto_approve' ? 'shell_only' : 'auto_approve'
@@ -26,22 +22,6 @@ export default function ComposerToolbar({ className = '' }) {
     sendSilentCommand(sid, '/clear')
   }
 
-  // Only offer providers the backend can actually accept right now, so the
-  // cycle never lands on a switch /model would reject.
-  const providerCycle = [
-    ...(state.nativeEnabled ? [{ id: 'native', command: 'native' }] : []),
-    ...(state.codexAppServerEnabled ? [{ id: 'codex-app-server', command: 'codex' }] : []),
-    ...(state.claudeAgentEnabled ? [{ id: 'claude-agent', command: 'claude' }] : []),
-  ]
-  const canSwitchModel = providerCycle.length > 1
-
-  function toggleModel() {
-    if (!canSwitchModel) return
-    const current = providerCycle.findIndex((entry) => entry.id === state.currentProvider)
-    const next = providerCycle[(current + 1) % providerCycle.length]
-    sendSilentCommand(sid, `/model ${next.command}`)
-  }
-
   return (
     <div className={`flex items-center gap-x-4 gap-y-2 text-[12px] text-faint flex-wrap ${className}`}>
       <div className="flex items-center gap-1.5">
@@ -51,14 +31,7 @@ export default function ComposerToolbar({ className = '' }) {
         <span>{indicator}</span>
       </div>
 
-      <button
-        onClick={toggleModel}
-        disabled={!canSwitchModel || state.isRunning}
-        className="hover:text-accent transition-colors disabled:opacity-40"
-        title={canSwitchModel ? 'Switch provider' : 'No other provider is available'}
-      >
-        {modelLabel}
-      </button>
+      <ModelSelector />
 
       <button onClick={toggleApproval} className="hover:text-accent transition-colors" title="Toggle approval mode">
         {state.approvalMode || '—'}
