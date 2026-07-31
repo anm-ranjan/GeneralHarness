@@ -198,6 +198,88 @@ change needs a restart.
 | `claude_agent` | Claude provider: `enabled`, `binary`, `model`, `permission_mode`, `timeout_seconds`, `max_turns`. |
 | `desktop` | Electron shell: `enabled`, `backend_url`, backend reuse/fallback, origin gating, GPU workaround. |
 
+### Fleet host switching
+
+A fleet lets one web or Electron UI switch between independent MyHarness
+backends. Each machine keeps its own projects, tasks, sessions, credentials,
+and provider processes; switching replaces the whole workspace rather than
+merging data between machines.
+
+Install and configure MyHarness on every machine first. Keep each backend on
+loopback because the API has no authentication:
+
+```yaml
+server:
+  host: 127.0.0.1
+  port: 8420
+```
+
+The browser connects directly to every URL in `fleet.hosts`. A safe setup uses
+an SSH local forward for each remote backend while the local backend remains at
+`127.0.0.1:8420`. For a two-machine fleet, run this on the first machine:
+
+```bash
+ssh -N \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -L 8421:127.0.0.1:8420 user@second-machine.local
+```
+
+Run the reciprocal command on the second machine, changing the SSH destination
+to the first machine. Configure key-based SSH authentication so the tunnels do
+not require interactive passwords, and enable the SSH server on each machine
+that accepts a tunnel. The setup wizard can generate
+`scripts/fleet-tunnels.sh`, which supervises the configured forwards and
+restarts them after network interruptions; verify that each generated entry
+names the remote machine rather than the machine running the script.
+
+Use the same stable ids and labels everywhere, but define URLs from the browser
+running on that particular machine. Loopback URLs therefore swap between the
+two configurations:
+
+```yaml
+# First machine
+fleet:
+  enabled: true
+  self: first
+  poll_seconds: 10
+  hosts:
+    - id: first
+      label: First machine
+      url: http://127.0.0.1:8420
+    - id: second
+      label: Second machine
+      url: http://127.0.0.1:8421
+```
+
+```yaml
+# Second machine
+fleet:
+  enabled: true
+  self: second
+  poll_seconds: 10
+  hosts:
+    - id: first
+      label: First machine
+      url: http://127.0.0.1:8421
+    - id: second
+      label: Second machine
+      url: http://127.0.0.1:8420
+```
+
+For three or more machines, reserve a different local forwarded port for each
+remote host on every viewing machine. Start all backends and tunnels before
+opening the client; the host switcher reports an unreachable peer when its
+backend or forward is down.
+
+Electron normally reuses a healthy backend at `desktop.backend_url` when
+`desktop.prefer_existing_backend` is true. Set
+`desktop.start_local_backend_fallback: false` if Electron must never start its
+own sidecar when that backend is unavailable. Unpackaged Electron reads the
+deployment YAML at startup; packaged applications contain an embedded YAML, so
+make this change before rebuilding and installing the package.
+
 ### Providers
 
 The native provider needs `api.base_url` and `MYHARNESS_API_KEY`. The CLI providers
