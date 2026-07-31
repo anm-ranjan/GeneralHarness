@@ -1,9 +1,9 @@
 # MyHarness
 
 MyHarness is a self-hosted harness for coding agents. It runs entirely on your
-own machine and gives one persistent workspace — projects, tasks, sessions, and
-transcripts — to whichever agent backend you prefer: an OpenAI-compatible API,
-the Codex CLI, or Claude Code.
+own infrastructure and gives one persistent workspace — projects, tasks,
+sessions, and transcripts — to whichever agent backend you prefer: an
+OpenAI-compatible API, the Codex CLI, or Claude Code.
 
 The same backend drives four clients: a React web UI, an Electron desktop shell,
 a Rust terminal UI, and a plain CLI.
@@ -59,8 +59,9 @@ existing session over, carrying the completed context across.
 - Workspace panel: file tree, paged read-only previews, diffs, activity, usage
   history, and read-only git status/diff (writes are opt-in).
 - Voice dictation in the composer with three speech-to-text backends:
-  `local` (faster-whisper on this machine), `remote` (faster-whisper on an SSH
-  compute host), and `api` (any OpenAI-compatible `/audio/transcriptions`).
+  `local` (faster-whisper on the backend host), `remote` (faster-whisper on an
+  SSH compute host), and `api` (any OpenAI-compatible
+  `/audio/transcriptions`).
 
 **Clients**
 
@@ -73,7 +74,7 @@ existing session over, carrying the completed context across.
   helpers and install an AppImage-specific AppArmor profile; it never disables
   Chromium's sandbox.
 - **Rust TUI** — `tui-rs/`, a ratatui client that speaks only the public REST and
-  WebSocket API, so it can attach to a backend on another machine.
+  WebSocket API, so it can attach to a backend on a remote host.
 - **CLI** — `./run.sh --cli`, standalone or attached to a running backend with
   `--backend-url`.
 
@@ -201,11 +202,11 @@ change needs a restart.
 ### Fleet host switching
 
 A fleet lets one web or Electron UI switch between independent MyHarness
-backends. Each machine keeps its own projects, tasks, sessions, credentials,
+backends. Each host keeps its own projects, tasks, sessions, credentials,
 and provider processes; switching replaces the whole workspace rather than
-merging data between machines.
+merging data between hosts.
 
-Install and configure MyHarness on every machine first. Keep each backend on
+Install and configure MyHarness on every host first. Keep each backend on
 loopback because the API has no authentication:
 
 ```yaml
@@ -216,60 +217,60 @@ server:
 
 The browser connects directly to every URL in `fleet.hosts`. A safe setup uses
 an SSH local forward for each remote backend while the local backend remains at
-`127.0.0.1:8420`. For a two-machine fleet, run this on the first machine:
+`127.0.0.1:8420`. For a two-host fleet, run this on host A:
 
 ```bash
 ssh -N \
   -o ExitOnForwardFailure=yes \
   -o ServerAliveInterval=30 \
   -o ServerAliveCountMax=3 \
-  -L 8421:127.0.0.1:8420 user@second-machine.local
+  -L 8421:127.0.0.1:8420 user@host-b.example
 ```
 
-Run the reciprocal command on the second machine, changing the SSH destination
-to the first machine. Configure key-based SSH authentication so the tunnels do
-not require interactive passwords, and enable the SSH server on each machine
+Run the reciprocal command on host B, changing the SSH destination to host A.
+Configure key-based SSH authentication so the tunnels do not require
+interactive passwords, and enable the SSH server on each host
 that accepts a tunnel. The setup wizard can generate
 `scripts/fleet-tunnels.sh`, which supervises the configured forwards and
 restarts them after network interruptions; verify that each generated entry
-names the remote machine rather than the machine running the script.
+names the remote host rather than the host running the script.
 
 Use the same stable ids and labels everywhere, but define URLs from the browser
-running on that particular machine. Loopback URLs therefore swap between the
+running on that particular host. Loopback URLs therefore swap between the
 two configurations:
 
 ```yaml
-# First machine
+# Host A
 fleet:
   enabled: true
-  self: first
+  self: host-a
   poll_seconds: 10
   hosts:
-    - id: first
-      label: First machine
+    - id: host-a
+      label: Host A
       url: http://127.0.0.1:8420
-    - id: second
-      label: Second machine
+    - id: host-b
+      label: Host B
       url: http://127.0.0.1:8421
 ```
 
 ```yaml
-# Second machine
+# Host B
 fleet:
   enabled: true
-  self: second
+  self: host-b
   poll_seconds: 10
   hosts:
-    - id: first
-      label: First machine
+    - id: host-a
+      label: Host A
       url: http://127.0.0.1:8421
-    - id: second
-      label: Second machine
+    - id: host-b
+      label: Host B
       url: http://127.0.0.1:8420
 ```
 
-For three or more machines, reserve a different local forwarded port for each
-remote host on every viewing machine. Start all backends and tunnels before
+For three or more hosts, reserve a different local forwarded port for each
+remote host on every viewing host. Start all backends and tunnels before
 opening the client; the host switcher reports an unreachable peer when its
 backend or forward is down.
 
@@ -336,8 +337,8 @@ MyHarness is designed for a trusted local network.
 - **The API has no authentication.** Anyone who can reach the port can read and
   write every directory in `permissions.allowed_paths` and run shell commands
   through the agent. The installer defaults to `0.0.0.0` only after you confirm
-  that the machine is on a trusted LAN. Firewall the configured port from
-  untrusted networks; use `127.0.0.1` for machine-local access.
+  that the host is on a trusted LAN. Firewall the configured port from
+  untrusted networks; use `127.0.0.1` for host-local access.
 - **Approval modes** decide what the agent can do unprompted:
   - `always_ask` — confirm before file writes, patches, and shell commands. Default.
   - `shell_only` — confirm before shell commands only.
