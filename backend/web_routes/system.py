@@ -3,22 +3,68 @@ browsing, local image serving, and audio transcription."""
 from __future__ import annotations
 
 import mimetypes
+import hmac
 import os
 import shutil
 import signal
 import sys
 import threading
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
 import audio_transcription
+import credential_store
 import utils
-from web_models import AudioTranscriptionRequest, BrowseDirectoryRequest
+from web_desktop import _is_desktop_request
+from web_models import AudioTranscriptionRequest, BrowseDirectoryRequest, CredentialUpdateRequest
 
 import web_app
 
 router = APIRouter()
+
+
+def _require_desktop(request: Request) -> None:
+    if not _is_desktop_request(request):
+        raise HTTPException(status_code=403, detail="Credential settings are available only in the Electron app")
+    expected = os.environ.get("MYHARNESS_DESKTOP_CREDENTIAL_TOKEN", "").strip()
+    supplied = request.headers.get("x-myharness-desktop-credential", "").strip()
+    if not expected or not supplied or not hmac.compare_digest(expected, supplied):
+        raise HTTPException(status_code=403, detail="Credential settings require the local Electron backend")
+
+
+def _credential_field_status(name: str, stored: dict[str, str], yaml_value: str) -> dict:
+    environment_value = os.environ.get(name, "").strip()
+    if environment_value:
+        source = "environment"
+    elif stored.get(name):
+        source = "credential"
+    elif yaml_value:
+        source = "yaml"
+    else:
+        source = "missing"
+    return {
+        "configured": source != "missing",
+        "stored": bool(stored.get(name)),
+        "source": source,
+        "environment_override": bool(environment_value),
+    }
+
+
+def _credential_settings_payload() -> dict:
+    try:
+        stored = credential_store.load_credentials()
+    except credential_store.CredentialStoreError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read encrypted credentials: {exc}") from exc
+    return {
+        "host_id": utils.FLEET_SELF_ID,
+        "native_api_key": _credential_field_status(
+            credential_store.NATIVE_API_KEY, stored, utils.CONFIG_API_KEY,
+        ),
+        "stt_api_key": _credential_field_status(
+            credential_store.STT_API_KEY, stored, utils.CONFIG_AUDIO_TRANSCRIPTION_API_KEY,
+        ),
+    }
 
 
 @router.get("/api/health")
@@ -46,6 +92,32 @@ def health():
         "git_writes_enabled": utils.GIT_WRITES_ENABLED,
         "audio": audio_transcription.public_config(audio_config),
     }
+
+
+@router.get("/api/desktop/credentials")
+def get_credentials(request: Request):
+    _require_desktop(request)
+    return _credential_settings_payload()
+
+
+@router.put("/api/desktop/credentials")
+def update_credentials(request: Request, req: CredentialUpdateRequest):
+    _require_desktop(request)
+    replacements = {}
+    if req.native_api_key is not None and req.native_api_key.strip():
+        replacements[credential_store.NATIVE_API_KEY] = req.native_api_key
+    if req.stt_api_key is not None and req.stt_api_key.strip():
+        replacements[credential_store.STT_API_KEY] = req.stt_api_key
+    removals = []
+    if req.remove_native_api_key:
+        removals.append(credential_store.NATIVE_API_KEY)
+    if req.remove_stt_api_key:
+        removals.append(credential_store.STT_API_KEY)
+    try:
+        credential_store.update_credentials(replacements, removals)
+    except credential_store.CredentialStoreError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not update encrypted credentials: {exc}") from exc
+    return _credential_settings_payload()
 
 
 @router.get("/api/fleet")

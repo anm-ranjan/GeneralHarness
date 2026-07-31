@@ -176,7 +176,7 @@ def _claude_agent_available() -> bool:
 
 
 def _native_available() -> bool:
-    return utils.NATIVE_ENABLED
+    return utils.native_enabled()
 
 
 # ── app ────────────────────────────────────────────────────────────
@@ -248,6 +248,7 @@ from web_models import (  # noqa: F401
     AudioTranscriptionRequest,
     ApprovalResponse,
     BrowseDirectoryRequest,
+    CredentialUpdateRequest,
     CreateChatRequest,
     CreateProjectRequest,
     CreateSessionRequest,
@@ -296,11 +297,13 @@ from web_routes.system import (  # noqa: F401
     codex_status,
     fleet,
     fleet_status,
+    get_credentials,
     get_local_image,
     get_project,
     health,
     shutdown_server,
     transcribe_audio,
+    update_credentials,
 )
 from web_routes.sessions import (  # noqa: F401
     _ImportSessionRequest,

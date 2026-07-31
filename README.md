@@ -100,9 +100,10 @@ The interactive installer asks for everything it needs and does the rest:
 1. A display name, and generates ASCII art for the splash screen.
 2. Whether to enable Codex and Claude. It installs missing CLIs, runs their
    subscription login flows, and enables them only after authentication passes.
-3. Native base URL, model, timeout, and iteration limit. Native is enabled only
-   when `MYHARNESS_API_KEY` is already exported; the key is never written.
-4. Voice dictation backend, model, language, device, timeout, upload limit, and
+3. Native and STT API keys. Blank answers keep them disabled or preserve existing
+   values; entered keys go into this host's encrypted credential file.
+4. Native base URL, model, timeout and iteration limit, followed by the voice
+   dictation backend, model, language, device, timeout, upload limit, and
    either direct SSH or API configuration.
 5. Browser UI, an installable Electron package for the current OS, and the Rust TUI.
 6. Trusted-LAN bind address, port, allowed workspaces, approvals, data directory,
@@ -155,7 +156,7 @@ python3 -m venv .venv
 
 cp backend/agent/agent_config.example.yaml backend/agent/agent_config.yaml
 # edit it: models.*, permissions.allowed_paths, provider settings
-export MYHARNESS_API_KEY="..."       # only when using Native
+# run npm run setup or use Electron Settings to create encrypted API credentials
 
 (cd frontend && npm ci --legacy-peer-deps && npm run build)
 (cd electron && npm ci)      # only for the desktop shell
@@ -283,8 +284,9 @@ make this change before rebuilding and installing the package.
 
 ### Providers
 
-The native provider needs `api.base_url` and `MYHARNESS_API_KEY`. The CLI providers
-need no key at all when the CLI is already logged in:
+The native provider needs `api.base_url` and a Native key in this host's encrypted
+credential file. `MYHARNESS_API_KEY` remains a higher-priority environment override.
+The CLI providers need no key when the CLI is already logged in:
 
 ```bash
 npm install -g @openai/codex && codex login
@@ -318,8 +320,9 @@ audio:
 
 | Variable | Overrides |
 |----------|-----------|
-| `MYHARNESS_API_KEY` | Native-provider secret; required for Native availability |
-| `MYHARNESS_STT_API_KEY` | API transcription secret |
+| `MYHARNESS_API_KEY` | Native-provider secret; overrides the encrypted host credential |
+| `MYHARNESS_STT_API_KEY` | API transcription secret; overrides the encrypted host credential |
+| `MYHARNESS_CREDENTIALS_DIR` | encrypted credential directory (default `~/.myharness`) |
 | `MYHARNESS_WEB_HOST`, `MYHARNESS_WEB_PORT` | `server.host`, `server.port` |
 | `MYHARNESS_APPROVAL_MODE` | `permissions.approval_mode` |
 | `MYHARNESS_VERBOSE_TOOLS` | `ui.verbose_tools` |

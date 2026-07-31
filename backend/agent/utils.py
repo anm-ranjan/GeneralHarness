@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 
 import requests
 import yaml
+import credential_store
 import skill_registry
 
 try:
@@ -103,9 +104,10 @@ BASE_URL = nested_get(CONFIG, ["api", "base_url"], "https://openrouter.ai/api/v1
 NATIVE_CONFIG_ENABLED = str(
     nested_get(CONFIG, ["api", "enabled"], "true")
 ).lower() in ("true", "1", "yes")
-# MYHARNESS_API_KEY wins over the config file so keys can stay out of YAML.
-API_KEY = os.environ.get("MYHARNESS_API_KEY", "").strip() or nested_get(CONFIG, ["api", "api_key"], "")
-NATIVE_ENABLED = NATIVE_CONFIG_ENABLED and bool(str(API_KEY or "").strip()) and str(API_KEY).strip() != "YOUR_API_KEY_HERE"
+CONFIG_API_KEY = str(nested_get(CONFIG, ["api", "api_key"], "") or "").strip()
+# Compatibility constant for embedders and older tests. Runtime requests use
+# get_api_key(), which also sees credentials replaced from Electron Settings.
+API_KEY = os.environ.get("MYHARNESS_API_KEY", "").strip() or CONFIG_API_KEY
 NATIVE_API_TIMEOUT = config_int(CONFIG, ["api", "timeout_seconds"], 120)
 API_PROVIDER = nested_get(CONFIG, ["api", "provider"], None)
 # Token-level SSE streaming for assistant output (UIs that support deltas).
@@ -154,11 +156,43 @@ def prune_old_logs(now: float | None = None) -> int:
                 continue
     return removed
 
-HEADERS = {
-    "Authorization": f"Bearer {API_KEY}",
-    "Content-Type": "application/json",
-    "Accept": "application/json",
-}
+def _stored_credential(name: str) -> str:
+    try:
+        return credential_store.load_credentials().get(name, "")
+    except credential_store.CredentialStoreError:
+        return ""
+
+
+def get_api_key() -> str:
+    return (
+        os.environ.get("MYHARNESS_API_KEY", "").strip()
+        or _stored_credential(credential_store.NATIVE_API_KEY)
+        or CONFIG_API_KEY
+    )
+
+
+def native_enabled() -> bool:
+    key = get_api_key()
+    stored_key = _stored_credential(credential_store.NATIVE_API_KEY)
+    # Saving a Native key from Settings is itself an enable action, including
+    # for installations whose original setup completed with api.enabled=false.
+    enabled = NATIVE_CONFIG_ENABLED or bool(stored_key)
+    return enabled and bool(key) and key not in {"YOUR_API_KEY_HERE", "ll"}
+
+
+def api_headers() -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {get_api_key()}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+
+# Snapshot retained for compatibility and startup validation; live requests
+# deliberately call the getters above so Settings changes apply immediately.
+API_KEY = get_api_key()
+NATIVE_ENABLED = native_enabled()
+HEADERS = api_headers()
 
 
 def build_openrouter_provider_preferences(
@@ -268,10 +302,20 @@ AUDIO_TRANSCRIPTION_API_BASE_URL = str(
     nested_get(CONFIG, ["audio", "transcription", "api_base_url"], "") or ""
 ).strip()
 # MYHARNESS_STT_API_KEY wins over the config file so keys can stay out of YAML.
+CONFIG_AUDIO_TRANSCRIPTION_API_KEY = str(
+    nested_get(CONFIG, ["audio", "transcription", "api_key"], "") or ""
+).strip()
 AUDIO_TRANSCRIPTION_API_KEY = (
-    os.environ.get("MYHARNESS_STT_API_KEY", "").strip()
-    or str(nested_get(CONFIG, ["audio", "transcription", "api_key"], "") or "").strip()
+    os.environ.get("MYHARNESS_STT_API_KEY", "").strip() or CONFIG_AUDIO_TRANSCRIPTION_API_KEY
 )
+
+
+def get_stt_api_key() -> str:
+    return (
+        os.environ.get("MYHARNESS_STT_API_KEY", "").strip()
+        or _stored_credential(credential_store.STT_API_KEY)
+        or CONFIG_AUDIO_TRANSCRIPTION_API_KEY
+    )
 AUDIO_TRANSCRIPTION_TIMEOUT = config_int(CONFIG, ["audio", "transcription", "timeout_seconds"], 1800)
 AUDIO_MAX_UPLOAD_MB = config_int(CONFIG, ["audio", "transcription", "max_upload_mb"], 500)
 
@@ -387,12 +431,14 @@ def validate_startup_config(host: str = "", port: int = 0) -> list:
     warnings = []
     resolved_host = (host or SERVER_HOST or "").strip()
 
-    if not str(API_KEY or "").strip() or str(API_KEY).strip() in {"YOUR_API_KEY_HERE", "ll"}:
+    api_key = str(API_KEY or "").strip()
+    if not api_key or api_key in {"YOUR_API_KEY_HERE", "ll"}:
         if not (CODEX_APP_SERVER_ENABLED or CLAUDE_AGENT_ENABLED):
             warnings.append(
-                "No api.api_key is set and neither codex_app_server nor claude_agent is "
-                "enabled, so no agent provider can run. Set api.api_key in "
-                "backend/agent/agent_config.yaml or export MYHARNESS_API_KEY."
+                "No api.api_key or encrypted Native credential is set and neither "
+                "codex_app_server nor claude_agent is "
+                "enabled, so no agent provider can run. Configure the Native API key "
+                "in Electron Settings, the encrypted credential store, or MYHARNESS_API_KEY."
             )
 
     # Validate the list the agent actually enforces, not the raw file: an

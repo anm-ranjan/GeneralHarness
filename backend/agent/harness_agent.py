@@ -314,7 +314,7 @@ def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int):
     try:
         response = requests.post(
             f"{utils.BASE_URL}/chat/completions",
-            headers=utils.HEADERS,
+            headers=utils.api_headers(),
             json=stream_payload,
             timeout=utils.NATIVE_API_TIMEOUT,
             stream=True,
@@ -411,7 +411,7 @@ def call_api(messages: list, tools: list = None, model: str = None, ui=None, can
     try:
         response = requests.post(
             f"{utils.BASE_URL}/chat/completions",
-            headers=utils.HEADERS,
+            headers=utils.api_headers(),
             json=payload,
             timeout=utils.NATIVE_API_TIMEOUT,
         )

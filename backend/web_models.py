@@ -143,6 +143,13 @@ class AudioTranscriptionRequest(BaseModel):
     name: str = "recording.webm"
 
 
+class CredentialUpdateRequest(BaseModel):
+    native_api_key: str | None = None
+    stt_api_key: str | None = None
+    remove_native_api_key: bool = False
+    remove_stt_api_key: bool = False
+
+
 class RenameProjectRequest(BaseModel):
     name: str
 

@@ -1,8 +1,8 @@
 api:
-  # Native is selectable only when enabled and MYHARNESS_API_KEY is present.
+  # Native is selectable when enabled and a host credential or environment override is present.
   enabled: true
   base_url: https://openrouter.ai/api/v1
-  # Kept for backward compatibility; fresh installs use MYHARNESS_API_KEY.
+  # Legacy fallback. Fresh installs use ~/.myharness/credentials.enc.
   api_key: ""
   timeout_seconds: 120
   streaming: true          # stream assistant tokens live in the web UI
@@ -139,7 +139,7 @@ audio:
     # api mode only. Root of an OpenAI-compatible API, e.g. https://api.openai.com/v1
     # ("/audio/transcriptions" is appended).
     api_base_url: ""
-    # Kept for backward compatibility; fresh installs use MYHARNESS_STT_API_KEY.
+    # Legacy fallback. Fresh installs use ~/.myharness/credentials.enc.
     api_key: ""
     # local/remote: a faster-whisper size (tiny/base/small/medium/large-v3).
     # api: the remote model id, e.g. whisper-1.

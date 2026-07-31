@@ -116,7 +116,7 @@ async def create_session(req: CreateSessionRequest):
     if req.provider not in {"native", "codex-app-server", "claude-agent"}:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {req.provider}")
     if req.provider == "native" and not web_app._native_available():
-        raise HTTPException(status_code=400, detail="The Native provider is not available; set MYHARNESS_API_KEY")
+        raise HTTPException(status_code=400, detail="The Native provider is not available; configure its API key in Electron Settings")
     if req.provider == "codex-app-server" and not web_app._codex_app_server_available():
         raise HTTPException(status_code=400, detail="Codex app-server is not available")
     if req.provider == "claude-agent" and not web_app._claude_agent_available():
@@ -133,7 +133,7 @@ async def create_chat(req: CreateChatRequest):
     if req.provider not in {"native", "codex-app-server", "claude-agent"}:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {req.provider}")
     if req.provider == "native" and not web_app._native_available():
-        raise HTTPException(status_code=400, detail="The Native provider is not available; set MYHARNESS_API_KEY")
+        raise HTTPException(status_code=400, detail="The Native provider is not available; configure its API key in Electron Settings")
     if req.provider == "codex-app-server" and not web_app._codex_app_server_available():
         raise HTTPException(status_code=400, detail="Codex app-server is not available")
     if req.provider == "claude-agent" and not web_app._claude_agent_available():

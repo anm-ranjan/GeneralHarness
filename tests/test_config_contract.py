@@ -28,6 +28,7 @@ LOCAL_CONFIG = AGENT / "agent_config.yaml"
 UTILS_SOURCE = (AGENT / "utils.py").read_text(encoding="utf-8")
 
 import utils  # noqa: E402
+import credential_store  # noqa: E402
 
 
 def leaf_paths(node, prefix=()):
@@ -112,7 +113,7 @@ def run_utils_probe(body, env_extra=None, config_text=None):
         agent_copy = Path(tmp) / "backend" / "agent"
         agent_copy.mkdir(parents=True)
         # utils.py resolves REPO_ROOT from its own location, so mirror the layout.
-        for name in ("utils.py", "skill_registry.py"):
+        for name in ("utils.py", "skill_registry.py", "credential_store.py"):
             (agent_copy / name).write_bytes((AGENT / name).read_bytes())
         (agent_copy / "agent_config.yaml").write_text(
             config_text if config_text is not None else EXAMPLE_CONFIG.read_text(encoding="utf-8"),
@@ -140,6 +141,23 @@ def run_utils_probe(body, env_extra=None, config_text=None):
 
 
 class EnvOverrideTests(unittest.TestCase):
+    def test_encrypted_credentials_are_loaded_dynamically(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ,
+            {
+                "MYHARNESS_CREDENTIALS_DIR": tmp,
+                "MYHARNESS_API_KEY": "",
+                "MYHARNESS_STT_API_KEY": "",
+            },
+        ):
+            credential_store.save_credentials({
+                credential_store.NATIVE_API_KEY: "sk-stored-native",
+                credential_store.STT_API_KEY: "sk-stored-stt",
+            }, tmp)
+            self.assertEqual(utils.get_api_key(), "sk-stored-native")
+            self.assertEqual(utils.get_stt_api_key(), "sk-stored-stt")
+            self.assertEqual(utils.api_headers()["Authorization"], "Bearer sk-stored-native")
+
     def test_stt_api_key_env_wins_over_yaml(self):
         config = EXAMPLE_CONFIG.read_text(encoding="utf-8").replace(
             '    api_key: ""', '    api_key: "sk-from-yaml"', 1

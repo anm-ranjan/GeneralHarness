@@ -2,6 +2,7 @@
 
 const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, shell } = require("electron");
 const childProcess = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -25,6 +26,7 @@ let backendMode = "unknown";
 let activeBackendUrl = DEFAULT_BACKEND_URL;
 let isQuitting = false;
 let displayName = process.env.MYHARNESS_PRODUCT_NAME || "MyHarness";
+const desktopCredentialToken = crypto.randomBytes(32).toString("hex");
 const TRAY_ICON_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAKklEQVR4AWP4//8/AyUYTFhYGJqYmP4TjBqMGoQajBqMGoQajBoAAHkCErL0fR93AAAAAElFTkSuQmCC";
 
 function logLine(level, args) {
@@ -202,6 +204,7 @@ function spawnLocalBackend(baseUrl) {
     MYHARNESS_WEB_PORT: url.port || "8420",
     MYHARNESS_WEB_DATA_DIR: process.env.MYHARNESS_WEB_DATA_DIR || path.join(repoRoot, "data"),
     MYHARNESS_WEB_STATIC_DIR: process.env.MYHARNESS_WEB_STATIC_DIR || path.join(repoRoot, "frontend", "dist"),
+    MYHARNESS_DESKTOP_CREDENTIAL_TOKEN: desktopCredentialToken,
   };
   const python = selectPython();
   console.log(`Provider executable PATH: ${env.PATH}`);
@@ -332,6 +335,7 @@ function addDesktopHeader(session, baseUrl) {
       requestHeaders: {
         ...details.requestHeaders,
         "X-MyHarness-Desktop": "1",
+        "X-MyHarness-Desktop-Credential": desktopCredentialToken,
       },
     });
   });
@@ -431,13 +435,15 @@ function createMainWindow() {
   mainWindow.webContents.on("did-finish-load", () => {
     console.log(`Window loaded ${mainWindow?.webContents.getURL() || "closed"}`);
   });
-  console.log(`Loading URL ${activeBackendUrl}`);
-  // Asset caching is kept for fast startup; the forceAssetMimeTypes header
-  // rewrite corrects the Content-Type on every response, so a stale text/plain
-  // MIME can no longer cause a black renderer.
-  mainWindow.loadURL(activeBackendUrl, { extraHeaders: "X-MyHarness-Desktop: 1\n" })
+  const launchUrl = new URL(activeBackendUrl);
+  // The backend URL and app version can stay unchanged across local rebuilds.
+  // A per-launch query forces Chromium to fetch the current index.html while
+  // preserving caching for Vite's content-hashed JS and CSS assets.
+  launchUrl.searchParams.set("desktop_launch", String(Date.now()));
+  console.log(`Loading URL ${launchUrl}`);
+  mainWindow.loadURL(launchUrl.toString(), { extraHeaders: "X-MyHarness-Desktop: 1\n" })
     .catch((error) => {
-      console.error(`loadURL failed for ${activeBackendUrl}`, error);
+      console.error(`loadURL failed for ${launchUrl}`, error);
     });
 }
 

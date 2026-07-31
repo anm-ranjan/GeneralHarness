@@ -5,6 +5,7 @@ import { isSlashCommand, SUGGESTED_SLASH_COMMANDS } from '../../constants'
 import ComposerToolbar from './ComposerToolbar'
 import { api } from '../../api'
 import { hostStorageKey } from '../../fleet'
+import { audioBlobToWav } from '../../audioWav'
 
 export default function Composer() {
   const { state, dispatch } = useApp()
@@ -288,12 +289,15 @@ export default function Composer() {
     setTranscribing(true)
     setAudioError('')
     try {
-      const data = await blobToDataUrl(blob)
+      const uploadBlob = state.audioProcessor === 'api' ? await audioBlobToWav(blob) : blob
+      const mime = uploadBlob.type || 'audio/webm'
+      const extension = audioExtension(mime)
+      const data = await blobToDataUrl(uploadBlob)
       const result = await api('POST', '/api/audio/transcribe', {
         session_id: state.currentSessionId,
         data,
-        mime: blob.type || 'audio/webm',
-        name: 'composer-recording.webm',
+        mime,
+        name: `composer-recording.${extension}`,
       })
       insertTranscription(result?.text || '')
     } catch (err) {
@@ -474,6 +478,13 @@ function preferredAudioMimeType() {
     'audio/mp4',
   ]
   return candidates.find(type => MediaRecorder.isTypeSupported?.(type)) || ''
+}
+
+function audioExtension(mime) {
+  if (mime === 'audio/wav' || mime === 'audio/x-wav') return 'wav'
+  if (mime === 'audio/mp4' || mime === 'audio/x-m4a') return 'm4a'
+  if (mime === 'audio/mpeg' || mime === 'audio/mp3') return 'mp3'
+  return 'webm'
 }
 
 function blobToDataUrl(blob) {

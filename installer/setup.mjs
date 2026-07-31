@@ -52,6 +52,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const AGENT_DIR = path.join(REPO_ROOT, 'backend', 'agent');
 const EXAMPLE_CONFIG = path.join(AGENT_DIR, 'agent_config.example.yaml');
 const TARGET_CONFIG = path.join(AGENT_DIR, 'agent_config.yaml');
+const CREDENTIAL_HELPER = path.join(AGENT_DIR, 'credential_store.py');
 const IS_WINDOWS = process.platform === 'win32';
 const IS_LINUX = process.platform === 'linux';
 
@@ -460,6 +461,11 @@ async function text(message, initial = '') {
   return String(value ?? '').trim();
 }
 
+async function password(message) {
+  const { value } = await ask({ type: 'password', name: 'value', message });
+  return String(value ?? '').trim();
+}
+
 async function select(message, choices, initial = 0) {
   const { value } = await ask({ type: 'select', name: 'value', message, choices, initial });
   return value;
@@ -587,15 +593,15 @@ async function stepCliProvider(spec) {
   return settings;
 }
 
-async function stepNativeProvider() {
+async function stepNativeProvider(credentials = {}) {
   heading('Native provider (OpenAI-compatible API)');
-  const enabled = Boolean((process.env.MYHARNESS_API_KEY || '').trim());
-  info('Native is enabled only when MYHARNESS_API_KEY is exported; secrets are never written to YAML.');
+  const enabled = Boolean(credentials.nativeConfigured || (process.env.MYHARNESS_API_KEY || '').trim());
+  info('Native is available when this host has an encrypted credential or MYHARNESS_API_KEY override.');
   if (!enabled) {
-    warn('MYHARNESS_API_KEY is not set. Native will be skipped for this installation.');
-    notes.push('To enable Native later, export MYHARNESS_API_KEY and set api.enabled: true.');
+    warn('No Native API key was entered. Native will remain unavailable.');
+    notes.push('Configure the Native API key later in Electron Settings.');
   } else {
-    ok('MYHARNESS_API_KEY is set in this environment.');
+    ok('Native API credentials are configured for this host.');
   }
   const baseUrl = (await text('API base URL', 'https://openrouter.ai/api/v1')) || 'https://openrouter.ai/api/v1';
   const model = (await text('Default model id', 'openai/gpt-5.2')) || 'openai/gpt-5.2';
@@ -604,7 +610,7 @@ async function stepNativeProvider() {
   return { enabled, baseUrl, apiKey: '', model, timeout, maxIterations };
 }
 
-async function stepAudio(pythonInfo) {
+async function stepAudio(pythonInfo, credentials = {}) {
   heading('Voice dictation (speech to text)');
   const enabled = await confirm('Enable voice dictation in the web UI?', false);
   if (!enabled) {
@@ -670,11 +676,11 @@ async function stepAudio(pythonInfo) {
   } else {
     audio.apiBaseUrl = (await text('STT API base URL', 'https://api.openai.com/v1')) || 'https://api.openai.com/v1';
     audio.model = (await text('STT model id', 'whisper-1')) || 'whisper-1';
-    if (!(process.env.MYHARNESS_STT_API_KEY || '').trim()) {
-      warn('MYHARNESS_STT_API_KEY is not set. API dictation will remain unavailable until it is exported.');
-      notes.push('Export MYHARNESS_STT_API_KEY before using API voice dictation.');
+    if (!(credentials.sttConfigured || (process.env.MYHARNESS_STT_API_KEY || '').trim())) {
+      warn('No STT API key was entered. API dictation remains unavailable until it is configured.');
+      notes.push('Configure the STT API key later in Electron Settings.');
     } else {
-      ok('MYHARNESS_STT_API_KEY is set in this environment.');
+      ok('STT API credentials are configured for this host.');
     }
   }
   audio.language = await text('Language code (blank enables automatic detection)', '');
@@ -1134,6 +1140,62 @@ async function stepPythonEnv() {
   return { venvDir, venvPython, pip, usable };
 }
 
+function invokeCredentialStore(pythonInfo, payload = null, spawn = spawnSync) {
+  if (!pythonInfo?.venvPython || !existsSync(CREDENTIAL_HELPER)) {
+    return { ok: false, status: {} };
+  }
+  const command = payload ? 'update' : 'status';
+  const result = spawn(pythonInfo.venvPython, [CREDENTIAL_HELPER, command], {
+    encoding: 'utf8',
+    input: payload ? JSON.stringify(payload) : undefined,
+    shell: false,
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0) return { ok: false, status: {} };
+  try {
+    return { ok: true, status: JSON.parse(String(result.stdout || '{}')) };
+  } catch {
+    return { ok: false, status: {} };
+  }
+}
+
+async function stepCredentials(pythonInfo) {
+  heading('API credentials');
+  info('Keys are encrypted in this host\'s credential file and never written to YAML.');
+  info('Leave a field blank to keep an existing value or configure it later in Electron Settings.');
+
+  const current = invokeCredentialStore(pythonInfo).status;
+  const nativeKey = await password(
+    current.MYHARNESS_API_KEY ? 'Native API key (blank keeps ***)' : 'Native API key (blank skips)',
+  );
+  const sttKey = await password(
+    current.MYHARNESS_STT_API_KEY ? 'STT API key (blank keeps ***)' : 'STT API key (blank skips)',
+  );
+  const replacements = {};
+  if (nativeKey) replacements.MYHARNESS_API_KEY = nativeKey;
+  if (sttKey) replacements.MYHARNESS_STT_API_KEY = sttKey;
+
+  let stored = current;
+  if (Object.keys(replacements).length) {
+    const updated = invokeCredentialStore(pythonInfo, { set: replacements });
+    if (updated.ok) {
+      stored = updated.status;
+      ok('Encrypted credentials saved for this host.');
+    } else {
+      fail('Could not save encrypted credentials. Configure them later in Electron Settings.');
+    }
+  } else if (current.MYHARNESS_API_KEY || current.MYHARNESS_STT_API_KEY) {
+    ok('Existing encrypted credentials kept unchanged.');
+  } else {
+    info('No API credentials were saved.');
+  }
+
+  return {
+    nativeConfigured: Boolean(stored.MYHARNESS_API_KEY || (process.env.MYHARNESS_API_KEY || '').trim()),
+    sttConfigured: Boolean(stored.MYHARNESS_STT_API_KEY || (process.env.MYHARNESS_STT_API_KEY || '').trim()),
+  };
+}
+
 /** Apply the answers to the template text and return the finished YAML. */
 function buildConfig(answers, templateText) {
   const editor = new ConfigEditor(templateText);
@@ -1239,7 +1301,7 @@ function summary(answers) {
     console.log(`   ${bold('Fleet')}    this machine is "${answers.fleet.self}"; switch to ${others.map((h) => h.label).join(', ')} from the sidebar`);
   }
   console.log(`   ${bold('Python')}   ./.venv (run.sh and Electron pick this up automatically)`);
-  console.log(`   ${bold('Secrets')}  API keys are not written to YAML; export MYHARNESS_API_KEY and MYHARNESS_STT_API_KEY.`);
+  console.log(`   ${bold('Secrets')}  API keys are stored in this host's encrypted credential file and can be updated in Electron Settings.`);
 
   if (notes.length) {
     console.log('');
@@ -1289,12 +1351,13 @@ async function main() {
     docs: 'https://code.claude.com/docs/en/authentication',
   });
 
-  const native = await stepNativeProvider();
+  const pythonInfo = await stepPythonEnv();
+  const credentials = await stepCredentials(pythonInfo);
+  const native = await stepNativeProvider(credentials);
   if (!native.enabled && !codex.enabled && !claude.enabled) {
     warn('No authenticated provider is enabled. Setup will finish, but agent sessions cannot run until one is configured.');
   }
-  const pythonInfo = await stepPythonEnv();
-  const audio = await stepAudio(pythonInfo);
+  const audio = await stepAudio(pythonInfo, credentials);
   const frontends = await stepFrontends();
   const server = await stepServerAndPermissions();
   const fleet = await stepFleet(server);
@@ -1325,6 +1388,7 @@ export {
   stepFleet,
   suggestHostId,
   backendImportCheckArgs,
+  invokeCredentialStore,
   fleetTunnelScript,
   REQUIRED_BACKEND_MODULES,
   findKey,

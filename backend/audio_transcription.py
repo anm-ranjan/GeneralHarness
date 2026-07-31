@@ -47,6 +47,8 @@ class AudioConfig:
 
 
 def config_from_utils(utils_module) -> AudioConfig:
+    key_getter = getattr(utils_module, "get_stt_api_key", None)
+    api_key = key_getter() if callable(key_getter) else getattr(utils_module, "AUDIO_TRANSCRIPTION_API_KEY", "")
     return AudioConfig(
         enabled=bool(getattr(utils_module, "AUDIO_ENABLED", False)),
         processor=str(getattr(utils_module, "AUDIO_TRANSCRIPTION_PROCESSOR", "local") or "local").lower(),
@@ -56,7 +58,7 @@ def config_from_utils(utils_module) -> AudioConfig:
         timeout_seconds=int(getattr(utils_module, "AUDIO_TRANSCRIPTION_TIMEOUT", 1800) or 1800),
         max_upload_mb=int(getattr(utils_module, "AUDIO_MAX_UPLOAD_MB", 500) or 500),
         api_base_url=str(getattr(utils_module, "AUDIO_TRANSCRIPTION_API_BASE_URL", "") or ""),
-        api_key=str(getattr(utils_module, "AUDIO_TRANSCRIPTION_API_KEY", "") or ""),
+        api_key=str(api_key or ""),
         username=str(getattr(utils_module, "AUDIO_TRANSCRIPTION_USERNAME", "") or ""),
         key_file=str(getattr(utils_module, "AUDIO_TRANSCRIPTION_KEY_FILE", "") or ""),
         language=str(getattr(utils_module, "AUDIO_TRANSCRIPTION_LANGUAGE", "") or ""),
@@ -211,7 +213,7 @@ def _transcribe_api(input_path: Path, name: str, mime: str, config: AudioConfig)
     if not config.api_key:
         raise HTTPException(
             status_code=500,
-            detail="No STT API key configured (set audio.transcription.api_key or MYHARNESS_STT_API_KEY)",
+            detail="No STT API key configured (use Electron Settings or MYHARNESS_STT_API_KEY)",
         )
 
     url = f"{base_url}/audio/transcriptions"

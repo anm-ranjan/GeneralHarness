@@ -105,7 +105,7 @@ def _message_block_detail(meta, text: str, workspace_root: str, image_count: int
     if meta.provider == CLAUDE_PROVIDER_ID and not web_app._claude_agent_available():
         return "The Claude provider is unavailable. Run /model native to migrate this session before sending messages."
     if meta.provider == "native" and not web_app._native_available():
-        return "The Native provider is unavailable because MYHARNESS_API_KEY is not set. Run /model codex or /model claude."
+        return "The Native provider has no API credential. Configure it in Electron Settings, or run /model codex or /model claude."
     if meta.provider == "codex-app-server":
         external_refs = web_helpers._codex_external_path_refs(text, workspace_root)
         if external_refs:
@@ -571,7 +571,7 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
             _emit_session_event(
                 session_id,
                 EventType.ERROR,
-                {"text": "The Native provider is disabled or MYHARNESS_API_KEY is not set."},
+                {"text": "The Native provider is disabled or has no configured API credential."},
             )
             _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
             return True

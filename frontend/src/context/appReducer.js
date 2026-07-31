@@ -47,6 +47,7 @@ export const initialState = {
   showSettings: false,
   gitWritesEnabled: false,
   audioEnabled: false,
+  audioProcessor: 'local',
   audioMaxUploadMb: 500,
 
   silentCommand: false,
@@ -179,6 +180,7 @@ export function reducer(state, action) {
         desktopBackendUrl: action.payload.desktop_backend_url || '',
         gitWritesEnabled: !!action.payload.git_writes_enabled,
         audioEnabled: !!action.payload.audio?.enabled,
+        audioProcessor: action.payload.audio?.processor || 'local',
         audioMaxUploadMb: action.payload.audio?.max_upload_mb || state.audioMaxUploadMb,
       })
     }

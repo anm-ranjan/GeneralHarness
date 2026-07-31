@@ -1,7 +1,10 @@
 import sys
+import os
+import tempfile
 import unittest
 import mimetypes
 from pathlib import Path
+from unittest import mock
 
 from fastapi import HTTPException
 from starlette.requests import Request
@@ -100,6 +103,46 @@ class DesktopConfigTests(unittest.TestCase):
             )
         finally:
             utils.DESKTOP_ELECTRON_ONLY = original
+
+    def test_credential_routes_are_desktop_only_and_never_return_plaintext(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ,
+            {
+                "MYHARNESS_CREDENTIALS_DIR": tmp,
+                "MYHARNESS_API_KEY": "",
+                "MYHARNESS_STT_API_KEY": "",
+                "MYHARNESS_DESKTOP_CREDENTIAL_TOKEN": "desktop-test-token",
+            },
+        ):
+            original_native_enabled = utils.NATIVE_CONFIG_ENABLED
+            utils.NATIVE_CONFIG_ENABLED = False
+            self.addCleanup(setattr, utils, "NATIVE_CONFIG_ENABLED", original_native_enabled)
+            with self.assertRaises(HTTPException) as rejected:
+                web_app.get_credentials(request_with_headers())
+            self.assertEqual(rejected.exception.status_code, 403)
+
+            secret = "sk-settings-secret"
+            result = web_app.update_credentials(
+                request_with_headers({
+                    "X-MyHarness-Desktop": "1",
+                    "X-MyHarness-Desktop-Credential": "desktop-test-token",
+                }),
+                web_app.CredentialUpdateRequest(native_api_key=secret),
+            )
+            self.assertTrue(result["native_api_key"]["configured"])
+            self.assertTrue(result["native_api_key"]["stored"])
+            self.assertEqual(result["native_api_key"]["source"], "credential")
+            self.assertNotIn(secret, repr(result))
+            self.assertTrue(web_app._native_available())
+
+            removed = web_app.update_credentials(
+                request_with_headers({
+                    "X-MyHarness-Desktop": "1",
+                    "X-MyHarness-Desktop-Credential": "desktop-test-token",
+                }),
+                web_app.CredentialUpdateRequest(remove_native_api_key=True),
+            )
+            self.assertFalse(removed["native_api_key"]["stored"])
 
     def test_electron_enables_microphone_for_configured_backend_origin(self):
         source = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")

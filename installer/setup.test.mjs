@@ -23,6 +23,7 @@ import {
   stepFleet,
   suggestHostId,
   backendImportCheckArgs,
+  invokeCredentialStore,
   fleetTunnelScript,
   REQUIRED_BACKEND_MODULES,
   ConfigEditor,
@@ -37,6 +38,30 @@ import {
 } from './setup.mjs';
 
 const TEMPLATE = readFileSync(EXAMPLE_CONFIG, 'utf8');
+
+test('credential helper sends secrets through stdin instead of command arguments', () => {
+  const secret = 'sk-stdin-only';
+  let invocation;
+  const fakeSpawn = (command, args, options) => {
+    invocation = { command, args, options };
+    return {
+      status: 0,
+      stdout: JSON.stringify({ MYHARNESS_API_KEY: true, MYHARNESS_STT_API_KEY: false }),
+      stderr: '',
+    };
+  };
+  const result = invokeCredentialStore(
+    { venvPython: '/example/python' },
+    { set: { MYHARNESS_API_KEY: secret } },
+    fakeSpawn,
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(invocation.command, '/example/python');
+  assert.equal(invocation.args.includes(secret), false);
+  assert.equal(invocation.options.input.includes(secret), true);
+  assert.equal(invocation.options.shell, false);
+});
 
 // ── a tiny YAML reader, so the test does not trust the writer's own parser ──
 

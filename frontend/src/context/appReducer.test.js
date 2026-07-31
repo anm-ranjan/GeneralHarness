@@ -29,8 +29,9 @@ test('BATCH matches action-by-action dispatch', () => {
   const stepwise = actions.reduce(reducer, initialState)
   const batched = reducer(initialState, { type: 'BATCH', payload: actions })
 
-  // _id carries a timestamp/random suffix, so compare structure without it.
-  const strip = items => items.map(({ _id, ...rest }) => rest)
+  // Generated ids and work-group start times can differ by a millisecond even
+  // though the two state transitions are otherwise identical.
+  const strip = items => items.map(({ _id, startTime, ...rest }) => rest)
   assert.deepEqual(strip(batched.stageItems), strip(stepwise.stageItems))
 })
 
@@ -57,6 +58,17 @@ test('SET_HEALTH still produces new state when a field changes', () => {
 
   assert.notEqual(second, first)
   assert.equal(second.model, 'b')
+})
+
+test('SET_HEALTH exposes the audio processor to the recorder', () => {
+  const next = reducer(initialState, {
+    type: 'SET_HEALTH',
+    payload: { audio: { enabled: true, processor: 'api', max_upload_mb: 25 } },
+  })
+
+  assert.equal(next.audioEnabled, true)
+  assert.equal(next.audioProcessor, 'api')
+  assert.equal(next.audioMaxUploadMb, 25)
 })
 
 test('no-op toggles preserve state identity', () => {

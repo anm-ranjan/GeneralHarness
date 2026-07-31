@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp } from '../../context/AppContext'
 import ThemeSwatch from './ThemeSwatch'
+import CredentialSettings from './CredentialSettings'
 import {
   DEFAULT_SPEC, FONT_PRESETS, GLASS_PRESETS, PALETTES, RADIUS_PRESETS,
   applySpec, auditTokens, completePalette, exportPalette, findPalette,
@@ -45,6 +46,7 @@ export default function SettingsModal() {
   const [importOpen, setImportOpen] = useState(false)
   const [importText, setImportText] = useState('')
   const [notice, setNotice] = useState(null)
+  const [section, setSection] = useState('appearance')
 
   // Live preview: every edit paints the running app, but nothing is persisted
   // until Done, so Cancel can put the old theme back.
@@ -169,8 +171,26 @@ export default function SettingsModal() {
     >
       <div className="solid-surface border border-line rounded-lg w-[860px] max-w-full max-h-[86vh] flex flex-col shadow-2xl">
         <div className="flex items-center gap-3 px-5 py-3 border-b border-line">
-          <h3 className="text-[15px] font-semibold text-text-bright">Appearance</h3>
-          <span className="text-[12px] text-faint">Applies to this browser or desktop app</span>
+          <h3 className="text-[15px] font-semibold text-text-bright">Settings</h3>
+          <div className="flex gap-1 rounded-md border border-line bg-surface p-0.5">
+            {[
+              ['appearance', 'Appearance'],
+              ['credentials', 'Credentials'],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => setSection(id)}
+                className={`rounded px-2.5 py-1 text-[11px] transition-colors ${
+                  section === id ? 'bg-accent-soft text-accent' : 'text-muted hover:text-text-bright'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <span className="text-[12px] text-faint">
+            {section === 'appearance' ? 'Applies to this browser or desktop app' : 'Host-local encrypted values'}
+          </span>
           <button
             onClick={() => close(false)}
             className="ml-auto px-2 text-muted hover:text-text-bright text-[16px] leading-none"
@@ -181,6 +201,7 @@ export default function SettingsModal() {
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+          {section === 'credentials' ? <CredentialSettings /> : <>
           {/* ── Theme grid ── */}
           <div className="flex items-center gap-2">
             <input
@@ -331,9 +352,11 @@ export default function SettingsModal() {
           )}
 
           {notice && <p className="text-[12px] text-accent">{notice}</p>}
+          </>}
         </div>
 
         <div className="flex items-center gap-2 px-5 py-3 border-t border-line">
+          {section === 'appearance' && <>
           <button onClick={saveAsCustom} className="px-3 py-1 text-[12px] text-muted border border-line rounded hover:text-accent hover:border-accent/30">
             Save as theme
           </button>
@@ -349,12 +372,13 @@ export default function SettingsModal() {
           >
             Reset to default
           </button>
+          </>}
           <div className="ml-auto flex gap-2">
             <button onClick={() => close(false)} className="px-3 py-1 text-[12px] text-muted border border-line rounded hover:bg-surface">
               Cancel
             </button>
             <button onClick={() => close(true)} className="px-4 py-1 text-[12px] font-medium text-accent border border-accent/40 rounded hover:bg-accent-soft">
-              Done
+              {section === 'appearance' ? 'Done' : 'Close'}
             </button>
           </div>
         </div>
