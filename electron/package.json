@@ -28,7 +28,8 @@
     "productName": "MyHarness",
     "files": [
       "main.js",
-      "app-preload.js"
+      "app-preload.js",
+      "executable-path.cjs"
     ],
     "extraResources": [
       {

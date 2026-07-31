@@ -3,8 +3,10 @@
 const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, shell } = require("electron");
 const childProcess = require("child_process");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const util = require("util");
+const { buildExecutablePath } = require("./executable-path.cjs");
 
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8420";
 
@@ -158,10 +160,29 @@ function pythonCandidates() {
   return [configured, repoVenv, ...systemCandidates].filter(Boolean);
 }
 
+let cachedExecutablePath = null;
+
+function executablePath() {
+  if (cachedExecutablePath === null) {
+    cachedExecutablePath = buildExecutablePath({
+      platform: process.platform,
+      env: process.env,
+      homedir: os.homedir(),
+      spawnSync: childProcess.spawnSync,
+      existsSync: fs.existsSync,
+    });
+  }
+  return cachedExecutablePath;
+}
+
 function commandExists(command) {
   if (path.isAbsolute(command)) return fs.existsSync(command);
   const checker = process.platform === "win32" ? "where" : "which";
-  const result = childProcess.spawnSync(checker, [command], { stdio: "ignore", windowsHide: true });
+  const result = childProcess.spawnSync(checker, [command], {
+    env: { ...process.env, PATH: executablePath() },
+    stdio: "ignore",
+    windowsHide: true,
+  });
   return result.status === 0;
 }
 
@@ -176,12 +197,14 @@ function spawnLocalBackend(baseUrl) {
   const url = new URL(baseUrl);
   const env = {
     ...process.env,
+    PATH: executablePath(),
     MYHARNESS_WEB_HOST: url.hostname || "127.0.0.1",
     MYHARNESS_WEB_PORT: url.port || "8420",
     MYHARNESS_WEB_DATA_DIR: process.env.MYHARNESS_WEB_DATA_DIR || path.join(repoRoot, "data"),
     MYHARNESS_WEB_STATIC_DIR: process.env.MYHARNESS_WEB_STATIC_DIR || path.join(repoRoot, "frontend", "dist"),
   };
   const python = selectPython();
+  console.log(`Provider executable PATH: ${env.PATH}`);
   console.log(`Starting backend sidecar with ${python} on ${url.hostname}:${url.port || "8420"}`);
   const backendCwd = path.join(repoRoot, "backend");
   backendStartupError = null;
