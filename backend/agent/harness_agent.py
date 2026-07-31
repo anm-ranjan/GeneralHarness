@@ -343,7 +343,10 @@ def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int):
     streamer = _DeltaStreamer(ui)
 
     def cancellable_lines():
-        for line in response.iter_lines(decode_unicode=True):
+        # Requests otherwise decodes text/event-stream as ISO-8859-1 when the
+        # provider omits a charset. Keep bytes here; the SSE assembler decodes
+        # them explicitly as UTF-8.
+        for line in response.iter_lines(decode_unicode=False):
             if cancel_event is not None and cancel_event.is_set():
                 return
             yield line

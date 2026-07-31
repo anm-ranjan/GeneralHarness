@@ -86,6 +86,10 @@ export function renderMarkdown(text, workspaceRoot) {
   let quoteLines = []
 
   const inline = t => renderInline(t, workspaceRoot)
+  const isTableDelimiter = value => {
+    const cells = String(value || '').trim().replace(/^\||\|$/g, '').split('|')
+    return cells.length >= 2 && cells.every(cell => /^:?-{3,}:?$/.test(cell.trim()))
+  }
   const flushParagraph = () => {
     if (!paragraph.length) return
     html += `<p>${inline(paragraph.join(' '))}</p>`
@@ -127,7 +131,8 @@ export function renderMarkdown(text, workspaceRoot) {
     quoteLines = []
   }
 
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex]
     if (line.trim().startsWith('```')) {
       if (inCode) {
         flushCode()
@@ -145,7 +150,8 @@ export function renderMarkdown(text, workspaceRoot) {
 
     const trimmed = line.trim()
 
-    if (trimmed.includes('|') && (trimmed.startsWith('|') || /^\S.*\|.*\S/.test(trimmed))) {
+    const startsTable = trimmed.includes('|') && isTableDelimiter(lines[lineIndex + 1])
+    if ((inTable && trimmed.includes('|')) || startsTable) {
       if (!inTable) { flushParagraph(); closeList(); inTable = true }
       tableRows.push(trimmed)
       continue

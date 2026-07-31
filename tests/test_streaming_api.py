@@ -86,6 +86,14 @@ class AssembleStreamedResponseTests(unittest.TestCase):
         self.assertEqual(usage, {})
         self.assertIsNone(model)
 
+    def test_decodes_utf8_sse_bytes(self):
+        line = _content_chunk("2B||!2B — local-first").encode("utf-8")
+        message, _finish_reason, _usage, _model = agent._assemble_streamed_response(
+            [line, b"data: [DONE]"],
+            None,
+        )
+        self.assertEqual(message["content"], "2B||!2B — local-first")
+
 
 class DeltaStreamerTests(unittest.TestCase):
     def test_filters_think_blocks_including_split_tags(self):

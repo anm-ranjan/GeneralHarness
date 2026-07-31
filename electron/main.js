@@ -195,14 +195,35 @@ function selectPython() {
   throw new Error("No Python interpreter was found. Set MYHARNESS_PYTHON or install Python 3.10+.");
 }
 
+function defaultBackendDataDir() {
+  if (!app.isPackaged) return path.join(repoRoot, "data");
+  return path.join(app.getPath("userData"), "data");
+}
+
+function migratePackagedData(dataDir) {
+  if (!app.isPackaged || fs.existsSync(path.join(dataDir, "project_index.json"))) return;
+  const legacyDataDir = path.join(repoRoot, "data");
+  if (!fs.existsSync(legacyDataDir)) return;
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.cpSync(legacyDataDir, dataDir, { recursive: true, force: false, errorOnExist: false });
+    console.log(`Migrated packaged session data to ${dataDir}`);
+  } catch (error) {
+    console.warn(`Could not migrate packaged session data to ${dataDir}`, error);
+  }
+}
+
 function spawnLocalBackend(baseUrl) {
   const url = new URL(baseUrl);
+  const configuredDataDir = process.env.MYHARNESS_WEB_DATA_DIR;
+  const dataDir = configuredDataDir || defaultBackendDataDir();
+  if (!configuredDataDir) migratePackagedData(dataDir);
   const env = {
     ...process.env,
     PATH: executablePath(),
     MYHARNESS_WEB_HOST: url.hostname || "127.0.0.1",
     MYHARNESS_WEB_PORT: url.port || "8420",
-    MYHARNESS_WEB_DATA_DIR: process.env.MYHARNESS_WEB_DATA_DIR || path.join(repoRoot, "data"),
+    MYHARNESS_WEB_DATA_DIR: dataDir,
     MYHARNESS_WEB_STATIC_DIR: process.env.MYHARNESS_WEB_STATIC_DIR || path.join(repoRoot, "frontend", "dist"),
     MYHARNESS_DESKTOP_CREDENTIAL_TOKEN: desktopCredentialToken,
   };

@@ -157,6 +157,12 @@ class DesktopConfigTests(unittest.TestCase):
         self.assertIn("Skipping backend shutdown", source)
         self.assertIn('new URL("/api/shutdown", activeBackendUrl)', source)
 
+    def test_packaged_electron_keeps_runtime_data_outside_the_app_bundle(self):
+        source = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
+        self.assertIn('app.getPath("userData")', source)
+        self.assertIn("migratePackagedData(dataDir)", source)
+        self.assertIn("fs.cpSync(legacyDataDir, dataDir", source)
+
 
 if __name__ == "__main__":
     unittest.main()

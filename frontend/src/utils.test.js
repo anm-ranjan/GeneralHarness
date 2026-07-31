@@ -67,6 +67,19 @@ test('renderMarkdown renders horizontal rules', () => {
   assert.equal(renderMarkdown('above\n\n---\n\nbelow', ''), '<p>above</p><hr><p>below</p>')
 })
 
+test('renderMarkdown leaves ordinary pipe characters in prose', () => {
+  const html = renderMarkdown("I'm **Atlas** in 2B||!2B — a local-first workspace.", '')
+  assert.equal(html, '<p>I&#39;m <strong>Atlas</strong> in 2B||!2B — a local-first workspace.</p>')
+})
+
+test('renderMarkdown recognizes tables only when followed by a delimiter row', () => {
+  const html = renderMarkdown('| Name | State |\n| --- | :---: |\n| Atlas | Ready |', '')
+  assert.equal(
+    html,
+    '<table><tr><th>Name</th><th>State</th></tr><tr><td>Atlas</td><td>Ready</td></tr></table>',
+  )
+})
+
 test('renderMarkdown renders nested lists', () => {
   const html = renderMarkdown('- top\n  - child\n- top two', '')
   assert.equal(html, '<ul><li>top<ul><li>child</li></ul></li><li>top two</li></ul>')

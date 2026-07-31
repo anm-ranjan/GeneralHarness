@@ -130,6 +130,8 @@ def run_utils_probe(body, env_extra=None, config_text=None):
         env = dict(os.environ)
         env.pop("MYHARNESS_API_KEY", None)
         env.pop("MYHARNESS_STT_API_KEY", None)
+        # Probes must never inherit credentials from the developer's host.
+        env["MYHARNESS_CREDENTIALS_DIR"] = str(Path(tmp) / "empty-credentials")
         env.update(env_extra or {})
         result = subprocess.run(
             [sys.executable, "-c", script],
