@@ -550,7 +550,8 @@ test('stepFleet collects this machine and its peers', async () => {
     12,                       // poll seconds
   ]);
 
-  const fleet = await stepFleet({ host: '0.0.0.0', port: 8420 });
+  const scriptRoot = mkdtempSync(path.join(tmpdir(), 'mh-fleet-'));
+  const fleet = await stepFleet({ host: '0.0.0.0', port: 8420 }, scriptRoot);
 
   assert.equal(fleet.enabled, true);
   assert.equal(fleet.self, 'mac');
@@ -559,6 +560,7 @@ test('stepFleet collects this machine and its peers', async () => {
     { id: 'mac', label: 'MacBook', url: 'http://127.0.0.1:8420' },
     { id: 'jarvis', label: 'Jarvis', url: 'http://127.0.0.1:8421' },
   ]);
+  assert.ok(existsSync(path.join(scriptRoot, 'scripts', 'fleet-tunnels.sh')));
 });
 
 test('a fleet of one machine is refused, since there is nothing to switch to', async () => {

@@ -971,7 +971,7 @@ function fleetTunnelScript(tunnels) {
 }
 
 /** Write the tunnel launcher, returning its path (or '' when none is needed). */
-function writeFleetTunnelScript(tunnels) {
+function writeFleetTunnelScript(tunnels, repoRoot = REPO_ROOT) {
   if (!tunnels.length) return '';
   if (IS_WINDOWS) {
     // No bash to run it with; the hosts are still configured, so leave the
@@ -984,7 +984,7 @@ function writeFleetTunnelScript(tunnels) {
     }
     return '';
   }
-  const scriptDir = path.join(REPO_ROOT, 'scripts');
+  const scriptDir = path.join(repoRoot, 'scripts');
   const scriptPath = path.join(scriptDir, 'fleet-tunnels.sh');
   try {
     mkdirSync(scriptDir, { recursive: true });
@@ -1044,7 +1044,7 @@ async function askHostUrl(message, initial) {
  * browser connects to each backend directly, the expected deployment is an SSH
  * tunnel per remote machine, which keeps every backend bound to loopback.
  */
-async function stepFleet(server) {
+async function stepFleet(server, scriptRoot = REPO_ROOT) {
   heading('Fleet (optional)');
   info('Run the app on more than one machine and switch between them in the UI.');
   info('Each machine keeps its own projects, labels, and threads; switching swaps the workspace.');
@@ -1111,7 +1111,7 @@ async function stepFleet(server) {
     + 'verbatim, changing only fleet.self. Mismatched ids are flagged in the host switcher.',
   );
 
-  const tunnelScript = writeFleetTunnelScript(tunnels);
+  const tunnelScript = writeFleetTunnelScript(tunnels, scriptRoot);
   if (tunnelScript) {
     notes.push(`Run ${tunnelScript} to open the SSH tunnels, and leave it running while you switch hosts.`);
   }
