@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   describeHostStatus,
+  findSelfHost,
   hostNeedsAttention,
   hostIdMismatch,
   hostStatus,
@@ -14,8 +15,8 @@ import {
 
 const FLEET = {
   hosts: [
-    { id: 'mac', label: 'MacBook', url: 'http://127.0.0.1:8420/', self: true },
-    { id: 'jarvis', label: 'Jarvis', url: 'http://127.0.0.1:8421' },
+    { id: 'laptop', label: 'Laptop', url: 'http://127.0.0.1:8420/', self: true },
+    { id: 'workstation', label: 'Workstation', url: 'http://127.0.0.1:8421' },
   ],
 }
 
@@ -30,19 +31,19 @@ test('normalizeFleet keeps well-formed hosts and strips trailing slashes', () =>
 test('normalizeFleet drops entries missing an id or url, and duplicates', () => {
   const hosts = normalizeFleet({
     hosts: [
-      { id: 'mac', url: 'http://a' },
-      { id: 'mac', url: 'http://dup' },
+      { id: 'laptop', url: 'http://a' },
+      { id: 'laptop', url: 'http://dup' },
       { id: '', url: 'http://b' },
       { id: 'nourl' },
-      { id: 'jarvis', url: 'http://c' },
+      { id: 'workstation', url: 'http://c' },
     ],
   })
-  assert.deepEqual(hosts.map(h => h.id), ['mac', 'jarvis'])
+  assert.deepEqual(hosts.map(h => h.id), ['laptop', 'workstation'])
   assert.equal(hosts[0].url, 'http://a')
 })
 
 test('normalizeFleet treats a lone host as no fleet at all', () => {
-  assert.deepEqual(normalizeFleet({ hosts: [{ id: 'mac', url: 'http://a' }] }), [])
+  assert.deepEqual(normalizeFleet({ hosts: [{ id: 'laptop', url: 'http://a' }] }), [])
   assert.deepEqual(normalizeFleet({ hosts: [] }), [])
   assert.deepEqual(normalizeFleet(null), [])
   assert.deepEqual(normalizeFleet({ hosts: 'nonsense' }), [])
@@ -50,29 +51,48 @@ test('normalizeFleet treats a lone host as no fleet at all', () => {
 
 test('normalizeFleet falls back to the id when a label is missing', () => {
   const [host] = normalizeFleet({
-    hosts: [{ id: 'jarvis', url: 'http://a' }, { id: 'mac', url: 'http://b' }],
+    hosts: [{ id: 'workstation', url: 'http://a' }, { id: 'laptop', url: 'http://b' }],
   })
-  assert.equal(host.label, 'jarvis')
+  assert.equal(host.label, 'workstation')
 })
 
 test('resolveActiveHost prefers the saved host', () => {
   const hosts = normalizeFleet(FLEET)
-  assert.equal(resolveActiveHost(hosts, 'jarvis').id, 'jarvis')
+  assert.equal(resolveActiveHost(hosts, 'workstation').id, 'workstation')
 })
 
 test('resolveActiveHost falls back to self when the saved host is gone', () => {
   const hosts = normalizeFleet(FLEET)
-  assert.equal(resolveActiveHost(hosts, 'retired-box').id, 'mac')
-  assert.equal(resolveActiveHost(hosts, '').id, 'mac')
+  assert.equal(resolveActiveHost(hosts, 'retired-box').id, 'laptop')
+  assert.equal(resolveActiveHost(hosts, '').id, 'laptop')
 })
 
 test('resolveActiveHost returns null without a fleet', () => {
-  assert.equal(resolveActiveHost([], 'mac'), null)
+  assert.equal(resolveActiveHost([], 'laptop'), null)
+})
+
+test('findSelfHost returns the machine serving the page', () => {
+  const hosts = normalizeFleet(FLEET)
+  assert.equal(findSelfHost(hosts).id, 'laptop')
+})
+
+// Without a self entry there is no host known to answer, so the caller has to
+// leave the user where they are rather than guess at a recovery target.
+test('findSelfHost returns null when no host claims to be self', () => {
+  const hosts = normalizeFleet({
+    hosts: [
+      { id: 'workstation', label: 'Workstation', url: 'http://127.0.0.1:8421' },
+      { id: 'other', label: 'Other', url: 'http://127.0.0.1:8422' },
+    ],
+  })
+  assert.equal(findSelfHost(hosts), null)
+  assert.equal(findSelfHost([]), null)
+  assert.equal(findSelfHost(undefined), null)
 })
 
 test('hostStorageKey namespaces state per host', () => {
-  assert.equal(hostStorageKey('jarvis', 'draft:s1'), 'myharness:jarvis:draft:s1')
-  assert.notEqual(hostStorageKey('mac', 'draft:s1'), hostStorageKey('jarvis', 'draft:s1'))
+  assert.equal(hostStorageKey('workstation', 'draft:s1'), 'myharness:workstation:draft:s1')
+  assert.notEqual(hostStorageKey('laptop', 'draft:s1'), hostStorageKey('workstation', 'draft:s1'))
 })
 
 test('hostStorageKey falls back to the single-host namespace', () => {
@@ -112,11 +132,11 @@ test('hostNeedsAttention flags only reachable hosts with a blocked run', () => {
 test('summarizeOtherHosts ignores the host being viewed', () => {
   const hosts = normalizeFleet(FLEET)
   const statuses = {
-    mac: { online: true, running: 5, waitingApproval: 2 },
-    jarvis: { online: true, running: 1, waitingApproval: 3 },
+    laptop: { online: true, running: 5, waitingApproval: 2 },
+    workstation: { online: true, running: 1, waitingApproval: 3 },
   }
   assert.deepEqual(
-    summarizeOtherHosts(hosts, statuses, 'mac'),
+    summarizeOtherHosts(hosts, statuses, 'laptop'),
     { waitingApproval: 3, running: 1, offline: 0 },
   )
 })
@@ -124,7 +144,7 @@ test('summarizeOtherHosts ignores the host being viewed', () => {
 test('summarizeOtherHosts counts unpolled hosts as offline', () => {
   const hosts = normalizeFleet(FLEET)
   assert.deepEqual(
-    summarizeOtherHosts(hosts, {}, 'mac'),
+    summarizeOtherHosts(hosts, {}, 'laptop'),
     { waitingApproval: 0, running: 0, offline: 1 },
   )
 })
@@ -136,24 +156,24 @@ test('summarizeOtherHosts counts unpolled hosts as offline', () => {
 // one, since each machine works fine alone.
 
 test('hostStatus carries the id a host reports for itself', () => {
-  const status = hostStatus({ ok: true, running: 0, waiting_approval: 0, host_id: 'jarvis' })
-  assert.equal(status.reportedId, 'jarvis')
+  const status = hostStatus({ ok: true, running: 0, waiting_approval: 0, host_id: 'workstation' })
+  assert.equal(status.reportedId, 'workstation')
   assert.equal(hostStatus({ ok: false }).reportedId, '')
 })
 
 test('hostIdMismatch reports the id a host actually calls itself', () => {
-  const host = { id: 'Jarvis', label: 'Jarvis', url: 'http://a' }
-  const status = hostStatus({ ok: true, host_id: 'jarvis' })
-  assert.equal(hostIdMismatch(host, status), 'jarvis')
+  const host = { id: 'Workstation', label: 'Workstation', url: 'http://a' }
+  const status = hostStatus({ ok: true, host_id: 'workstation' })
+  assert.equal(hostIdMismatch(host, status), 'workstation')
 })
 
 test('hostIdMismatch stays quiet when the ids agree', () => {
-  const host = { id: 'jarvis', label: 'Jarvis', url: 'http://a' }
-  assert.equal(hostIdMismatch(host, hostStatus({ ok: true, host_id: 'jarvis' })), '')
+  const host = { id: 'workstation', label: 'Workstation', url: 'http://a' }
+  assert.equal(hostIdMismatch(host, hostStatus({ ok: true, host_id: 'workstation' })), '')
 })
 
 test('hostIdMismatch stays quiet when there is nothing to compare', () => {
-  const host = { id: 'jarvis', label: 'Jarvis', url: 'http://a' }
+  const host = { id: 'workstation', label: 'Workstation', url: 'http://a' }
   // A peer with no fleet configured, or one predating the check, reports ''.
   assert.equal(hostIdMismatch(host, hostStatus({ ok: true })), '')
   assert.equal(hostIdMismatch(host, hostStatus({ ok: true, host_id: '   ' })), '')

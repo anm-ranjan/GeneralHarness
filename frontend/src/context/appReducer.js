@@ -22,6 +22,9 @@ export const initialState = {
   approvalMode: '',
   verbose: false,
   serverOnline: false,
+  // Label of a host the app was moved off because it could not be reached on
+  // load. Purely a notice: '' whenever the active host was chosen deliberately.
+  hostFallbackFrom: '',
   desktopEnabled: false,
   electronOnly: false,
   desktopBackendUrl: '',
@@ -238,6 +241,14 @@ export function reducer(state, action) {
     // stops the switcher claiming it is still working on it.
     case 'HOST_SWITCH_FAILED':
       return patched(state, { hostSwitching: false })
+
+    // Dispatched after the SWITCH_HOST that recovers from an unreachable saved
+    // host, since that case rebuilds from initialState and would drop it.
+    case 'HOST_UNREACHABLE_FALLBACK':
+      return patched(state, { hostFallbackFrom: action.payload.label })
+
+    case 'CLEAR_HOST_FALLBACK':
+      return patched(state, { hostFallbackFrom: '' })
 
     case 'SET_TREE': {
       const { projects, sessions } = action.payload

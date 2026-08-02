@@ -58,6 +58,18 @@ export function resolveActiveHost(hosts, savedId) {
 }
 
 /**
+ * The host entry describing this machine, or null when the registry names none.
+ *
+ * This is the recovery target when the host restored from storage cannot be
+ * reached. The machine that served the page is the one host known to answer,
+ * so it is the only safe place to land a session that would otherwise have
+ * nowhere to go.
+ */
+export function findSelfHost(hosts) {
+  return (hosts || []).find(host => host.self) || null
+}
+
+/**
  * Namespace a browser-storage key to one host.
  *
  * Session ids are only unique within a machine, so unprefixed keys would let

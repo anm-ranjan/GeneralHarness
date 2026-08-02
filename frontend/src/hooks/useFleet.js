@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { hostUrl, setActiveHost } from '../api'
 import {
   STATUS_TIMEOUT_MS,
+  findSelfHost,
   hostStatus,
   hostStorageKey,
   normalizeFleet,
@@ -72,7 +73,7 @@ export default function useFleet(dispatch, stateRef) {
 
     fetch('/api/fleet')
       .then(res => (res.ok ? res.json() : null))
-      .then(payload => {
+      .then(async payload => {
         if (cancelled || !payload) return
         const hosts = normalizeFleet(payload)
         if (!hosts.length) return
@@ -84,6 +85,22 @@ export default function useFleet(dispatch, stateRef) {
         setActiveHost(active)
         saveHostId(active.id)
         dispatch({ type: 'SET_FLEET', payload: { hosts, activeHostId: active.id } })
+
+        // A host restored from storage can be long gone by the next launch: a
+        // tunnel that is no longer forwarded, a machine that is asleep. Nothing
+        // else recovers from that, because the page itself was served by a host
+        // that answers fine while every API call goes to one that does not --
+        // so the UI sits on a permanent "Offline" splash that names no cause.
+        // Only the remote case is probed, leaving the common path untouched.
+        if (active.self) return
+        const status = await pollHost(active)
+        if (cancelled || status.ok) return
+        const fallback = findSelfHost(hosts)
+        if (!fallback || fallback.id === active.id) return
+        setActiveHost(fallback)
+        saveHostId(fallback.id)
+        dispatch({ type: 'SWITCH_HOST', payload: { hostId: fallback.id } })
+        dispatch({ type: 'HOST_UNREACHABLE_FALLBACK', payload: { label: active.label } })
       })
       .catch(() => {
         // An older backend has no /api/fleet; single-machine mode is correct.

@@ -32,6 +32,15 @@ export default function TopBar() {
   const backendLabel = state.desktopEnabled
     ? `Server · ${state.desktopBackendUrl || window.location.origin}${state.electronOnly ? ' · Electron only' : ''}`
     : (state.serverOnline ? 'Server is running' : 'Server is stopped')
+  // "Offline" on its own is ambiguous once a fleet is configured: the machine
+  // that cannot be reached is usually not the one serving the page, so the
+  // status chip has to name it or it points at the wrong problem.
+  const activeHost = (state.fleetHosts || []).find(host => host.id === state.activeHostId)
+  const remoteActive = !!activeHost && !activeHost.self
+  const offlineLabel = remoteActive ? `${activeHost.label} offline` : 'Offline'
+  const offlineTitle = remoteActive
+    ? `${activeHost.label} (${activeHost.url}) is not answering. Switch hosts in the sidebar, or bring its tunnel up.`
+    : backendLabel
   const desktopBackendMode = desktopStatus?.backendMode || ''
   const usesConfiguredDesktopBackend = !!desktopApi && desktopBackendMode === 'configured'
   const usesLocalDesktopBackend = !!desktopApi && desktopBackendMode === 'local'
@@ -95,16 +104,31 @@ export default function TopBar() {
             {state.isCancelling ? 'Interrupting…' : 'Cancel'}
           </button>
         )}
+        {state.hostFallbackFrom && (
+          <div
+            className="flex items-center gap-1.5 px-2.5 py-1 text-[12px] border rounded text-warn border-warn/30 bg-warn-soft"
+            title={`${state.hostFallbackFrom} did not respond on load, so this machine was opened instead.`}
+          >
+            <span>{state.hostFallbackFrom} unreachable</span>
+            <button
+              onClick={() => dispatch({ type: 'CLEAR_HOST_FALLBACK' })}
+              className="text-faint hover:text-text-bright"
+              title="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        )}
         <div
           className={`flex items-center gap-1.5 px-2.5 py-1 text-[12px] border rounded ${
             state.serverOnline
               ? 'text-ok border-ok/30 bg-ok-soft'
               : 'text-danger border-danger/30 bg-danger-soft'
           }`}
-          title={backendLabel}
+          title={state.serverOnline ? backendLabel : offlineTitle}
         >
           <span className={`h-1.5 w-1.5 rounded-full ${state.serverOnline ? 'bg-ok' : 'bg-danger'}`} />
-          <span>{state.serverOnline ? (state.desktopEnabled ? 'Desktop' : 'Server') : 'Offline'}</span>
+          <span>{state.serverOnline ? (state.desktopEnabled ? 'Desktop' : 'Server') : offlineLabel}</span>
         </div>
         <button
           onClick={() => dispatch({
