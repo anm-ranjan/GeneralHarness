@@ -635,12 +635,25 @@ async function stepCliProvider(spec) {
     ]);
   } else {
     settings.maxTurns = await integer('Claude maximum turns (0 means SDK default)', 0, 0, 10000);
+    info('"derive from Harness approval mode" is the only choice that lets the app approval toggle reach Claude.');
     settings.permissionMode = await select('Claude permission mode', [
       { title: 'derive from Harness approval mode', value: '' },
       { title: 'default', value: 'default' },
       { title: 'acceptEdits', value: 'acceptEdits' },
+      { title: 'bypassPermissions', value: 'bypassPermissions' },
       { title: 'plan', value: 'plan' },
     ]);
+    if (settings.permissionMode) {
+      warn(
+        `claude_agent.permission_mode is pinned to ${settings.permissionMode}; it overrides the ` +
+        'Harness approval mode, so auto_approve will not stop Claude from asking.',
+      );
+      notes.push(
+        `Claude permission mode is pinned to ${settings.permissionMode}. The approval toggle in the app ` +
+        'is ignored for Claude sessions. acceptEdits still prompts for every Bash command; clear ' +
+        'claude_agent.permission_mode to let auto_approve map to bypassPermissions.',
+      );
+    }
   }
   return settings;
 }

@@ -173,7 +173,11 @@ claude_agent:
   # Model override; null uses your Claude Code default.
   model: null
   # Permission mode override: default | acceptEdits | bypassPermissions | plan.
-  # Empty derives it from the harness approval mode.
+  # Empty derives it from the harness approval mode (auto_approve ->
+  # bypassPermissions, shell_only -> acceptEdits, always_ask -> default).
+  # Any non-empty value wins unconditionally and the approval mode chosen in the
+  # app is ignored for Claude sessions -- acceptEdits in particular auto-allows
+  # edits but still asks before every Bash command.
   permission_mode: ""
   timeout_seconds: 1800
   # 0 uses the SDK default (unlimited turns within a run).
