@@ -318,3 +318,23 @@ For frontend behavior changes, run the app and check it in a browser:
 ```bash
 ./run.sh --dev   # frontend http://localhost:5173, backend http://127.0.0.1:8420
 ```
+
+## Jarvis Linux builds
+
+The build and deployment checkout on Jarvis is:
+
+```text
+/home/animesh/Applications/Harness_2BOrNot2B
+```
+
+For a fresh Jarvis build, sync the current development source into that
+directory and build there. Old files and folders may be removed during the
+sync, but always preserve `data/`, machine-local configuration, credentials,
+virtual environments, and installed dependencies. Do not create or retain
+Jarvis build output in this development checkout.
+
+After producing the Linux `.deb`, read its exact package name with
+`dpkg-deb -f <package.deb> Package`. Remove the installed version with
+`sudo dpkg -r <package-name>`, then install the fresh package with
+`sudo dpkg -i <package.deb>`. Do not guess the Debian package name or remove a
+package until it has been resolved from the newly built artifact.
