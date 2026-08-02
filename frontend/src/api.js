@@ -125,7 +125,7 @@ async function downloadBlob(path, fallbackName, failureLabel) {
 export async function downloadSessionBackup(sessionId) {
   await downloadBlob(
     `/api/sessions/${encodeURIComponent(sessionId)}/backup`,
-    'session.myharness.zip',
+    'thread.myharness.zip',
     'Backup',
   )
 }
@@ -147,7 +147,7 @@ export async function importSessionBackup(file, projectId, taskId) {
 export async function downloadSessionExport(sessionId, format = 'md') {
   await downloadBlob(
     `/api/sessions/${encodeURIComponent(sessionId)}/export?format=${format}`,
-    `session.${format}`,
+    `thread.${format}`,
     'Export',
   )
 }

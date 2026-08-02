@@ -8,7 +8,6 @@ import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Response
-from fastapi.responses import FileResponse
 
 import base64
 
@@ -164,9 +163,18 @@ def rename_project(project_id: str, req: RenameProjectRequest):
 @router.patch("/api/projects/{project_id}/tasks/{task_id}")
 def rename_task(project_id: str, task_id: str, req: RenameTaskRequest):
     try:
-        task = web_app._store.rename_task(project_id, task_id, req.name)
+        if req.name is None and req.color is None:
+            raise ValueError("A label name or color is required")
+        task = (
+            web_app._store.rename_task(project_id, task_id, req.name)
+            if req.name is not None
+            else web_app._store._task_info(project_id, task_id)
+        )
+        if req.color is not None:
+            task = web_app._store.set_task_color(project_id, task_id, req.color)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        status = 400 if "color" in str(e).lower() or "required" in str(e).lower() else 404
+        raise HTTPException(status_code=status, detail=str(e))
     return task.model_dump(mode="json")
 
 
@@ -251,13 +259,14 @@ def get_session_attachment(session_id: str, filename: str):
     if web_app._store.load_session(session_id) is None:
         raise HTTPException(status_code=404, detail="Session not found")
     safe_name = os.path.basename(filename)
-    path = Path(web_app._DATA_DIR) / "attachments" / session_id / safe_name
-    if not path.is_file():
+    stored = web_app._store.read_attachment(session_id, safe_name)
+    if stored is None:
         raise HTTPException(status_code=404, detail="Attachment not found")
-    media_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+    content, stored_mime = stored
+    media_type = stored_mime or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
     disposition = "inline" if media_type.startswith("image/") or media_type.startswith("text/") else "attachment"
-    return FileResponse(
-        str(path),
+    return Response(
+        content=content,
         media_type=media_type,
         headers={"Content-Disposition": f'{disposition}; filename="{safe_name}"'},
     )

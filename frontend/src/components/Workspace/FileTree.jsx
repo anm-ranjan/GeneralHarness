@@ -175,7 +175,7 @@ function TreeNode({ entry, touchedPaths, depth, root, onEntryRenamed }) {
           {nodeEntry.name}
         </span>
         {isTouched && (
-          <span className="shrink-0 h-1.5 w-1.5 rounded-full bg-accent" title="Modified in this session" />
+          <span className="shrink-0 h-1.5 w-1.5 rounded-full bg-accent" title="Modified in this thread" />
         )}
         {!nodeEntry.is_dir && nodeEntry.size !== undefined && (
           <span className="ml-auto text-[10px] text-faint shrink-0">

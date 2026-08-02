@@ -86,6 +86,7 @@ class QueuedMessage(BaseModel):
 class TaskInfo(BaseModel):
     id: str
     name: str
+    color: str = ""
     sessions: list[str] = Field(default_factory=list)
 
 
@@ -108,7 +109,7 @@ class CreateTaskRequest(BaseModel):
 
 class CreateSessionRequest(BaseModel):
     project_id: str
-    task_id: str
+    task_id: str = ""
     title: str = ""
     provider: str = "native"
 
@@ -155,7 +156,8 @@ class RenameProjectRequest(BaseModel):
 
 
 class RenameTaskRequest(BaseModel):
-    name: str
+    name: str | None = None
+    color: str | None = None
 
 
 class RenameSessionRequest(BaseModel):

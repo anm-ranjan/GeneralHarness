@@ -47,7 +47,7 @@ export default function useRevertFile() {
       type: 'OPEN_CONFIRM',
       payload: {
         title: 'Revert file',
-        message: 'Restore this file to its state before the agent first changed it in this session?',
+        message: 'Restore this file to its state before the agent first changed it in this thread?',
         detail: filePath,
         tone: 'danger',
         confirmLabel: 'Revert',

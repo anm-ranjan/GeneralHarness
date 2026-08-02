@@ -31,7 +31,7 @@ export default function SplashScreen() {
           <p className="mx-auto mb-5 max-w-[460px] text-[13px] text-faint">
             {sessionCount > 0
               ? 'Pick up where you left off, or start a new workspace.'
-              : 'Select a session from the sidebar or start a new workspace.'}
+              : 'Select a thread from the sidebar or start a new workspace.'}
           </p>
 
           <RecentSessions />
@@ -50,7 +50,7 @@ export default function SplashScreen() {
               <div className="mt-1 text-[12px] font-medium text-text-default tabular-nums">{projectCount}</div>
             </div>
             <div className="rounded-md border border-line bg-bg/35 px-3 py-2">
-              <div className="text-[10px] uppercase tracking-[0.12em] text-faint">Sessions</div>
+              <div className="text-[10px] uppercase tracking-[0.12em] text-faint">Threads</div>
               <div className="mt-1 text-[12px] font-medium text-text-default tabular-nums">{sessionCount}</div>
             </div>
           </div>

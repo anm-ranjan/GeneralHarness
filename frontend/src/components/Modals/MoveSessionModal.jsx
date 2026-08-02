@@ -47,14 +47,14 @@ export default function MoveSessionModal({ moveRequest, projects, onClose, onMov
         className="glass-surface border border-line rounded-lg w-full max-w-[360px] overflow-hidden"
       >
         <div className="px-5 py-4 border-b border-line">
-          <h3 className="text-[15px] font-semibold text-text-bright">Move Session</h3>
+          <h3 className="text-[15px] font-semibold text-text-bright">Assign Label</h3>
           <p className="mt-1.5 text-[13px] text-muted truncate" title={moveRequest.session.title || moveRequest.session.id}>
             {moveRequest.session.title || moveRequest.session.id}
           </p>
         </div>
         <div className="px-5 py-4 space-y-3">
           <label className="block">
-            <span className="block text-[12px] font-medium text-faint mb-1.5">Task</span>
+            <span className="block text-[12px] font-medium text-faint mb-1.5">Label</span>
             <select
               value={targetTaskId}
               onChange={e => setTargetTaskId(e.target.value)}
@@ -67,7 +67,7 @@ export default function MoveSessionModal({ moveRequest, projects, onClose, onMov
             </select>
           </label>
           {targetTasks.length === 0 && (
-            <p className="text-[12px] text-faint">No other tasks in this project.</p>
+            <p className="text-[12px] text-faint">No other labels in this project.</p>
           )}
           {error && (
             <p className="text-[12px] text-danger">{error}</p>
@@ -87,7 +87,7 @@ export default function MoveSessionModal({ moveRequest, projects, onClose, onMov
             disabled={busy || !targetTaskId}
             className="px-3 py-1.5 text-[13px] font-semibold rounded-md bg-accent text-bg hover:brightness-110 transition-colors disabled:opacity-50"
           >
-            {busy ? 'Moving...' : 'Move'}
+            {busy ? 'Assigning...' : 'Assign'}
           </button>
         </div>
       </form>

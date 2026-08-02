@@ -83,7 +83,7 @@ export default function SearchModal() {
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search all session transcripts…"
+            placeholder="Search all thread transcripts…"
             className="w-full bg-transparent text-[14px] text-text-bright placeholder:text-faint outline-none"
           />
         </div>
@@ -94,7 +94,7 @@ export default function SearchModal() {
           )}
           {!query.trim() && (
             <p className="px-4 py-6 text-[13px] text-faint text-center italic">
-              Search prompts, responses, tool calls, and file paths across every session.
+              Search prompts, responses, tool calls, and file paths across every thread.
             </p>
           )}
           {grouped.map((group) => (

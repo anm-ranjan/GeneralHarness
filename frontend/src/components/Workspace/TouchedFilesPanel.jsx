@@ -17,7 +17,7 @@ export default function TouchedFilesPanel() {
   if (!touchedFiles.length) {
     return (
       <div className="p-4 text-[13px] text-muted italic">
-        No file changes yet in this session.
+        No file changes yet in this thread.
       </div>
     )
   }

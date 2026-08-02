@@ -155,17 +155,10 @@ def _attachment_url(session_id: str, filename: str) -> str:
     return f"/api/sessions/{session_id}/attachments/{filename}"
 
 
-def _session_attachment_dir(session_id: str) -> Path:
-    path = Path(web_app._DATA_DIR) / "attachments" / session_id
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
 def _save_message_attachments(session_id: str, attachments: list) -> list[dict]:
     if len(attachments) > _MAX_ATTACHMENTS_PER_MESSAGE:
         raise HTTPException(status_code=400, detail="Maximum 4 attachments per message")
     saved = []
-    target_dir = _session_attachment_dir(session_id)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     for i, attachment in enumerate(attachments):
         data = attachment.get("data") if isinstance(attachment, dict) else attachment.data
@@ -184,16 +177,15 @@ def _save_message_attachments(session_id: str, attachments: list) -> list[dict]:
         ext = _guess_extension(safe_name, mime)
         stem = Path(safe_name).stem or "attachment"
         filename = f"{stamp}_{i}_{stem}{ext}"
-        path = target_dir / filename
-        path.write_bytes(raw)
-        saved.append({
-            "name": name_hint or safe_name,
-            "mime": mime,
-            "filename": filename,
-            "path": str(path),
-            "url": _attachment_url(session_id, filename),
-            "size": len(raw),
-        })
+        stored = web_app._store.store_attachment(
+            session_id,
+            filename,
+            raw,
+            mime_type=mime,
+            role="image" if _is_supported_inline_image(mime) else "attachment",
+            display_name=name_hint or safe_name,
+        )
+        saved.append(stored)
     return saved
 
 
@@ -202,7 +194,15 @@ def _save_message_images(session_id: str, images: list) -> list[dict]:
 
 
 def _attachment_data_url(attachment: dict) -> str:
-    raw = Path(attachment["path"]).read_bytes()
+    path = attachment.get("path")
+    if path:
+        raw = Path(path).read_bytes()
+    else:
+        session_id = str(attachment.get("session_id") or "")
+        stored = web_app._store.read_attachment(session_id, attachment["filename"])
+        if stored is None:
+            raise OSError("Attachment is missing")
+        raw = stored[0]
     return f"data:{attachment['mime']};base64,{base64.b64encode(raw).decode('ascii')}"
 
 
@@ -270,8 +270,21 @@ def _codex_prompt_with_images(text: str, images: list[dict], workspace_root: str
     return _codex_prompt_with_attachments(text, images, workspace_root)
 
 
-def _event_attachments(data: dict) -> list[dict]:
-    return data.get("attachments") or data.get("images") or []
+def _event_attachments(data: dict, session_id: str = "") -> list[dict]:
+    attachments = data.get("attachments") or data.get("images") or []
+    for attachment in attachments:
+        if not isinstance(attachment, dict) or not attachment.get("filename"):
+            continue
+        owner = session_id or str(attachment.get("session_id") or "")
+        if not owner:
+            continue
+        try:
+            attachment["path"] = str(
+                web_app._store.materialize_attachment(owner, attachment["filename"])
+            )
+        except FileNotFoundError:
+            attachment.pop("path", None)
+    return attachments
 
 
 def _copy_attachments_to_codex_workspace(session_id: str, workspace_root: str) -> list[str]:
@@ -281,10 +294,15 @@ def _copy_attachments_to_codex_workspace(session_id: str, workspace_root: str) -
     for event in web_app._store.load_events(session_id):
         if event.type != EventType.USER_MESSAGE:
             continue
-        for attachment in _event_attachments(event.data):
-            source = Path(attachment.get("path", ""))
-            filename = attachment.get("filename") or source.name
-            if not filename or not source.is_file():
+        for attachment in _event_attachments(event.data, session_id):
+            filename = attachment.get("filename")
+            if not filename:
+                continue
+            try:
+                source = web_app._store.materialize_attachment(session_id, filename)
+            except FileNotFoundError:
+                source = Path(attachment.get("path", ""))
+            if not source.is_file():
                 continue
             attach_dir.mkdir(parents=True, exist_ok=True)
             target = attach_dir / filename
@@ -314,7 +332,7 @@ def _restore_session_messages(session_id: str, workspace_root: str, include_code
                 messages = agent.build_initial_messages(workspace_root, kind)
                 pending_turn = []
             elif not text.strip().startswith("/"):
-                pending_turn = [{"role": "user", "content": _native_user_content(text, _event_attachments(event.data))}]
+                pending_turn = [{"role": "user", "content": _native_user_content(text, _event_attachments(event.data, session_id))}]
         elif event.type == EventType.ASSISTANT_MESSAGE:
             markdown = event.data.get("markdown", "")
             if markdown and pending_turn:

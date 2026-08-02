@@ -54,6 +54,30 @@ def config_int(config: dict, keys: list, default: int) -> int:
     return int(nested_get(config, keys, default))
 
 
+def normalize_database_filename(value) -> str:
+    """Return a safe SQLite filename that cannot escape the data directory."""
+    filename = str(value or "myharness.sqlite3").strip()
+    lowered = filename.lower()
+    if (
+        not filename
+        or filename in (".", "..")
+        or ".." in filename
+        or "/" in filename
+        or "\\" in filename
+        or "\x00" in filename
+        or lowered.endswith(("-wal", "-shm", "-journal"))
+    ):
+        raise ValueError(
+            "storage.database_filename must be a filename only and must not use "
+            "SQLite sidecar suffixes"
+        )
+    if not lowered.endswith(".sqlite3"):
+        filename += ".sqlite3"
+    if filename == ".sqlite3":
+        raise ValueError("storage.database_filename must include a name")
+    return filename
+
+
 def normalize_allowed_paths(value) -> list:
     if isinstance(value, list):
         return [str(path).strip() for path in value if str(path).strip()]
@@ -136,6 +160,9 @@ LOG_LEVEL = str(nested_get(CONFIG, ["logging", "level"], "info") or "info").stri
 LOG_RETENTION_DAYS = config_int(CONFIG, ["logging", "retention_days"], 30)
 DATA_DIR = str(nested_get(CONFIG, ["storage", "data_dir"], "") or "").strip()
 DATA_DIR = os.path.join(REPO_ROOT, "data") if not DATA_DIR else os.path.abspath(os.path.join(REPO_ROOT, DATA_DIR))
+DATABASE_FILENAME = normalize_database_filename(
+    nested_get(CONFIG, ["storage", "database_filename"], "myharness.sqlite3")
+)
 SESSION_ID = uuid.uuid4().hex[:12]
 
 

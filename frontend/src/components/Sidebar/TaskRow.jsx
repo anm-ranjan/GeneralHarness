@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useAppDispatch } from '../../context/AppContext'
 import InlineEdit from './InlineEdit'
 import SessionItem from './SessionItem'
+import { LABEL_COLORS, labelColorStyle } from '../../labelColors'
 
 export default function TaskRow({
   task, projectId, sessions, sessionsById, currentSessionId,
@@ -20,9 +21,12 @@ export default function TaskRow({
   }
 
   return (
-    <div className={`ml-3 mb-1 border-l pl-2 transition-colors ${isActiveTask ? 'border-accent/60' : 'border-line/40'}`}>
+    <div
+      className={`label-group ml-3 mb-1 border-l pl-2 transition-colors ${isActiveTask ? 'label-group-active' : ''}`}
+      style={labelColorStyle(task.color || task.id)}
+    >
       <div
-        className={`flex items-center gap-1 group rounded-md px-1 py-0.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70 ${isActiveTask ? 'bg-accent-soft/60' : ''}`}
+        className="flex items-center gap-1 group rounded-md px-1 py-0.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70"
         tabIndex={0}
         onKeyDown={handleHeaderKeyDown}
       >
@@ -34,7 +38,7 @@ export default function TaskRow({
           />
         ) : (
           <span
-            className={`text-[12px] font-medium uppercase tracking-wider truncate cursor-default ${isActiveTask ? 'text-accent' : 'text-faint'}`}
+            className="label-chip max-w-full rounded-full px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider truncate cursor-default"
             onDoubleClick={() => setEditing(true)}
             title={task.name}
           >
@@ -43,16 +47,26 @@ export default function TaskRow({
         )}
         <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ml-auto shrink-0">
           <button
+            onClick={() => {
+              const current = LABEL_COLORS.indexOf(task.color)
+              const color = LABEL_COLORS[(current + 1 + LABEL_COLORS.length) % LABEL_COLORS.length]
+              onRenameTask(projectId, task.id, undefined, color)
+            }}
+            className="label-chip text-[11px] px-1 rounded-full"
+            title="Change label colour"
+            aria-label={`Change colour for ${task.name}`}
+          >●</button>
+          <button
             onClick={() => setEditing(true)}
             className="text-faint hover:text-accent text-[11px] px-0.5"
-            title="Rename task"
+            title="Rename label"
           >✎</button>
           <button
             onClick={() => dispatch({
               type: 'OPEN_CONFIRM',
               payload: {
-                title: 'Delete task?',
-                message: 'This removes the task and all sessions under it.',
+                title: 'Delete label?',
+                message: 'This removes the label. Its threads will move to the General label.',
                 detail: task.name,
                 confirmLabel: 'Delete',
                 tone: 'danger',
@@ -60,19 +74,19 @@ export default function TaskRow({
               },
             })}
             className="text-faint hover:text-danger text-[11px] px-0.5"
-            title="Delete task"
+            title="Delete label"
           >✕</button>
           {onImportSession && (
             <button
               onClick={() => onImportSession(projectId, task.id)}
               className="text-faint hover:text-ok text-[11px] px-0.5"
-              title="Import session backup (.zip)"
+              title="Import thread backup (.zip)"
             >⇪</button>
           )}
           <button
             onClick={() => onCreateSession(projectId, task.id)}
             className="text-faint hover:text-ok text-[11px] px-0.5"
-            title="New session"
+            title="New thread"
           >+</button>
         </div>
       </div>

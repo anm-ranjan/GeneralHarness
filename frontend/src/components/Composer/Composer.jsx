@@ -84,7 +84,7 @@ export default function Composer() {
         type: 'OPEN_CONFIRM',
         payload: {
           title: 'Migrate provider?',
-          message: 'This session uses the legacy Codex CLI provider. Your current message will stay in the composer; send it again after migration completes.',
+          message: 'This thread uses the legacy Codex CLI provider. Your current message will stay in the composer; send it again after migration completes.',
           confirmLabel: 'Migrate',
           onConfirm: () => sendSilentCommand(state.currentSessionId, '/model codex'),
         },

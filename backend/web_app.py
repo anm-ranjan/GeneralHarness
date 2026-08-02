@@ -65,9 +65,10 @@ _STATIC_DIR = os.environ.get(
     str(Path(__file__).resolve().parent.parent / "frontend" / "dist"),
 )
 
-_SCRIPTS_DIR = Path(_DATA_DIR) / "scripts"
-_CHATS_DIR = Path(_DATA_DIR) / "chats"
-_ATTACHMENTS_DIR = Path(_DATA_DIR) / "attachments"
+_WORKSPACES_DIR = Path(_DATA_DIR) / "workspaces"
+_SCRIPTS_DIR = _WORKSPACES_DIR / "_scripts"
+_CHATS_DIR = _WORKSPACES_DIR
+_MATERIALIZATIONS_DIR = Path(_DATA_DIR) / "temporary-materializations"
 
 _store: SessionStore | None = None
 _manager = SessionManager()
@@ -184,19 +185,21 @@ def _native_available() -> bool:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     global _store
-    _store = SessionStore(_DATA_DIR)
+    _store = SessionStore(_DATA_DIR, database_filename=utils.DATABASE_FILENAME)
     utils.prune_old_logs()
     _store.reset_running_sessions()
     _SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
     utils.register_allowed_path(str(_SCRIPTS_DIR))
     _CHATS_DIR.mkdir(parents=True, exist_ok=True)
     utils.register_allowed_path(str(_CHATS_DIR))
-    _ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
-    utils.register_allowed_path(str(_ATTACHMENTS_DIR))
+    _MATERIALIZATIONS_DIR.mkdir(parents=True, exist_ok=True)
+    utils.register_allowed_path(str(_MATERIALIZATIONS_DIR))
     _manager.set_event_loop(asyncio.get_event_loop())
     yield
     shutdown_codex_runtime()
     utils.kill_all_background_jobs()
+    if _store is not None:
+        _store.close()
 
 
 app = FastAPI(title=utils.APP_NAME, version="0.1.0", lifespan=_lifespan)

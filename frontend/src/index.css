@@ -29,6 +29,12 @@
   --color-danger-soft: rgba(239, 68, 68, 0.12);
   --color-info: #60a5fa;
   --color-info-soft: rgba(96, 165, 250, 0.10);
+  --color-label-1: var(--color-accent);
+  --color-label-2: var(--color-info);
+  --color-label-3: var(--color-ok);
+  --color-label-4: var(--color-warn);
+  --color-label-5: #c792ea;
+  --color-label-6: #ff9e64;
 
   --font-sans: "DM Sans", system-ui, -apple-system, sans-serif;
   --font-mono: "IBM Plex Mono", "Cascadia Code", "Liberation Mono", Menlo, monospace;
@@ -81,6 +87,17 @@ html, body, #root {
 /* ── Glass panels ─────────────────────────────── */
 
 @layer components {
+  .label-group {
+    border-color: color-mix(in srgb, var(--label-color) 38%, transparent);
+  }
+  .label-group-active {
+    background: color-mix(in srgb, var(--label-color) 8%, transparent);
+  }
+  .label-chip {
+    border: 1px solid color-mix(in srgb, var(--label-color) 32%, transparent);
+    background: color-mix(in srgb, var(--label-color) 11%, transparent);
+    color: var(--label-color);
+  }
   .model-trigger {
     display: inline-flex;
     align-items: center;

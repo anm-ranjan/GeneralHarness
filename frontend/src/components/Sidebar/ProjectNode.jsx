@@ -68,7 +68,7 @@ export default function ProjectNode({
               type: 'OPEN_CONFIRM',
               payload: {
                 title: 'Delete project?',
-                message: `This removes the project from ${state.appName} and deletes its sessions, events, and attachments.`,
+                message: `This removes the project from ${state.appName} and deletes its threads, events, and attachments.`,
                 detail: project.name,
                 confirmLabel: 'Delete',
                 tone: 'danger',
@@ -81,8 +81,13 @@ export default function ProjectNode({
           <button
             onClick={() => onCreateTask(project.id)}
             className="text-faint hover:text-ok text-[11px] px-0.5"
-            title="New task"
-          >+ task</button>
+            title="New label"
+          >+ label</button>
+          <button
+            onClick={() => onCreateSession(project.id, '')}
+            className="text-faint hover:text-ok text-[11px] px-0.5"
+            title="New thread with the General label"
+          >+ thread</button>
         </div>
       </div>
 

@@ -157,11 +157,13 @@ class DesktopConfigTests(unittest.TestCase):
         self.assertIn("Skipping backend shutdown", source)
         self.assertIn('new URL("/api/shutdown", activeBackendUrl)', source)
 
-    def test_packaged_electron_keeps_runtime_data_outside_the_app_bundle(self):
+    def test_electron_uses_the_same_configured_data_directory_as_the_backend(self):
         source = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
-        self.assertIn('app.getPath("userData")', source)
-        self.assertIn("migratePackagedData(dataDir)", source)
-        self.assertIn("fs.cpSync(legacyDataDir, dataDir", source)
+        self.assertIn("function configuredDataDir()", source)
+        self.assertIn("const dataDir = configuredDataDir()", source)
+        self.assertIn('MYHARNESS_WEB_DATA_DIR: dataDir', source)
+        self.assertNotIn('app.getPath("userData")', source)
+        self.assertNotIn("migratePackagedData", source)
 
 
 if __name__ == "__main__":

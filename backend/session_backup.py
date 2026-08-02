@@ -45,15 +45,14 @@ def export_session_backup(
             ),
         )
 
-        events_path = store._events_dir / f"{session_id}.jsonl"
-        if events_path.is_file():
-            zf.writestr("events.jsonl", events_path.read_bytes())
+        events_jsonl = store.export_events_jsonl(session_id)
+        if events_jsonl:
+            zf.writestr("events.jsonl", events_jsonl)
 
-        attachments_dir = store._data_dir / "attachments" / session_id
-        if attachments_dir.is_dir():
-            for path in sorted(attachments_dir.iterdir()):
-                if path.is_file():
-                    zf.writestr(f"attachments/{path.name}", path.read_bytes())
+        for attachment in store.list_attachments(session_id):
+            stored = store.read_attachment(session_id, attachment["filename"])
+            if stored is not None:
+                zf.writestr(f"attachments/{attachment['filename']}", stored[0])
 
         for manifest in store.load_change_manifests(session_id):
             run_id = manifest.get("run_id") or "run_unknown"
@@ -71,14 +70,17 @@ def export_session_backup(
     return buffer.getvalue()
 
 
-def _rewrite_attachment_paths(data: dict, attachments_dir: str) -> None:
+def _rewrite_attachment_paths(data: dict, store: SessionStore, session_id: str) -> None:
     for key in ("attachments", "images"):
         items = data.get(key)
         if not isinstance(items, list):
             continue
         for item in items:
             if isinstance(item, dict) and item.get("filename"):
-                item["path"] = os.path.join(attachments_dir, item["filename"])
+                try:
+                    item["path"] = str(store.materialize_attachment(session_id, item["filename"]))
+                except FileNotFoundError:
+                    item.pop("path", None)
 
 
 def import_session_backup(
@@ -133,7 +135,6 @@ def import_session_backup(
         new_meta.run_settings = run_settings
     store.update_session(new_meta)
 
-    attachments_dir = store._data_dir / "attachments" / new_id
     names = set(zf.namelist())
 
     for name in sorted(names):
@@ -142,8 +143,14 @@ def import_session_backup(
         base = os.path.basename(name)
         if not base:
             continue
-        attachments_dir.mkdir(parents=True, exist_ok=True)
-        (attachments_dir / base).write_bytes(zf.read(name))
+        store.store_attachment(
+            new_id,
+            base,
+            zf.read(name),
+            mime_type="",
+            role="attachment",
+            display_name=base,
+        )
 
     if "events.jsonl" in names:
         text = zf.read("events.jsonl").decode("utf-8", errors="replace")
@@ -156,9 +163,12 @@ def import_session_backup(
             line = line.replace(old_id, new_id)
             try:
                 raw = json.loads(line)
+                # A backup restores as a new thread, so event identities must
+                # be regenerated even though their order and payload remain.
+                raw.pop("id", None)
                 raw["session_id"] = new_id
                 if isinstance(raw.get("data"), dict):
-                    _rewrite_attachment_paths(raw["data"], str(attachments_dir))
+                    _rewrite_attachment_paths(raw["data"], store, new_id)
                 event = EventEnvelope(**raw)
             except Exception:
                 continue

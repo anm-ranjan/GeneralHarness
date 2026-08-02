@@ -33,13 +33,13 @@ export default function UsagePanel() {
   useEffect(() => { load() }, [load, state.isRunning])
 
   if (!sessionId) {
-    return <div className="p-4 text-[13px] text-muted italic">Select a session to see usage.</div>
+    return <div className="p-4 text-[13px] text-muted italic">Select a thread to see usage.</div>
   }
   if (error) {
     return <div className="p-4 text-[13px] text-danger">{error}</div>
   }
   if (!data || data.total_runs === 0) {
-    return <div className="p-4 text-[13px] text-muted italic">No runs recorded yet in this session.</div>
+    return <div className="p-4 text-[13px] text-muted italic">No runs recorded yet in this thread.</div>
   }
 
   const runs = data.runs || []

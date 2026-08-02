@@ -37,32 +37,35 @@ class SessionStoreTests(unittest.TestCase):
 
             self.assertEqual(store.list_sessions(), [])
 
-    def test_corrupt_index_is_quarantined(self):
+    def test_corrupt_legacy_index_aborts_migration_without_replacing_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             index = Path(tmp) / "project_index.json"
             index.write_text("{bad json", encoding="utf-8")
-            store = SessionStore(tmp)
+            with self.assertRaisesRegex(RuntimeError, "corrupt legacy project index"):
+                SessionStore(tmp)
 
-            self.assertEqual(store.load_project_index(), [])
-            self.assertFalse(index.exists())
-            self.assertTrue(list(Path(tmp).glob("project_index.json.corrupt.*")))
+            self.assertTrue(index.exists())
+            self.assertFalse((Path(tmp) / "myharness.sqlite3").exists())
 
     def test_recent_events_returns_tail(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = SessionStore(tmp)
+            store.ensure_project("proj", "Project", "")
+            store.ensure_task("proj", "task", "Task")
+            meta = store.create_session("proj", "task", "Events")
             for i in range(5):
                 store.append_event(EventEnvelope(
-                    session_id="ses",
+                    session_id=meta.id,
                     type=EventType.STATUS,
                     data={"text": str(i)},
                 ))
 
-            events = store.load_recent_events("ses", count=2)
+            events = store.load_recent_events(meta.id, count=2)
             self.assertEqual([e.data["text"] for e in events], ["3", "4"])
 
-            paged = store.load_events("ses", limit=2, offset=1)
+            paged = store.load_events(meta.id, limit=2, offset=1)
             self.assertEqual([e.data["text"] for e in paged], ["1", "2"])
-            self.assertEqual(store.load_recent_events("ses", count=0), [])
+            self.assertEqual(store.load_recent_events(meta.id, count=0), [])
 
     def test_session_cleanup_runs_outside_metadata_lock(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -84,18 +87,16 @@ class SessionStoreTests(unittest.TestCase):
             self.assertEqual(cleanup_calls, [(first.id, "")])
 
             cleanup_calls.clear()
-            self.assertEqual(store.delete_task("proj", "task"), [second.id])
-            self.assertEqual(cleanup_calls, [(second.id, "")])
+            self.assertEqual(store.delete_task("proj", "task"), [])
+            self.assertEqual(cleanup_calls, [])
+            self.assertEqual(store.load_session(second.id).task_id, "general")
 
             with self.assertRaisesRegex(ValueError, "Project or task not found"):
                 store.delete_session("proj", "missing", "unknown")
 
-    def test_list_sessions_skips_corrupt_session_file(self):
+    def test_update_session_rejects_unknown_session(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = SessionStore(tmp)
-            sessions = Path(tmp) / "sessions"
-            sessions.mkdir(exist_ok=True)
-            sessions.joinpath("bad.json").write_text("{bad", encoding="utf-8")
             good = SessionMeta(
                 id="good",
                 project_id="proj",
@@ -104,9 +105,8 @@ class SessionStoreTests(unittest.TestCase):
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc),
             )
-            store.update_session(good)
-
-            self.assertEqual([s.id for s in store.list_sessions()], ["good"])
+            with self.assertRaisesRegex(ValueError, "Session good not found"):
+                store.update_session(good)
 
     def test_delete_session_removes_audio_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -251,43 +251,46 @@ class SessionStoreCacheTests(unittest.TestCase):
     def test_event_offset_index_pagination_and_append_coherence(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = SessionStore(tmp)
+            store.ensure_project("proj", "Project", "")
+            store.ensure_task("proj", "task", "Task")
+            meta = store.create_session("proj", "task", "Events")
             for i in range(6):
                 store.append_event(EventEnvelope(
-                    session_id="ses",
+                    session_id=meta.id,
                     type=EventType.STATUS,
                     data={"text": str(i)},
                 ))
 
             # Cold index built from disk on first paginated read.
-            paged = store.load_events("ses", limit=2, offset=3)
+            paged = store.load_events(meta.id, limit=2, offset=3)
             self.assertEqual([e.data["text"] for e in paged], ["3", "4"])
-            self.assertEqual(store.event_count("ses"), 6)
+            self.assertEqual(store.event_count(meta.id), 6)
 
             # Appends after the index exists stay coherent without a rescan.
             store.append_event(EventEnvelope(
-                session_id="ses",
+                session_id=meta.id,
                 type=EventType.STATUS,
                 data={"text": "6"},
             ))
-            self.assertEqual(store.event_count("ses"), 7)
+            self.assertEqual(store.event_count(meta.id), 7)
             self.assertEqual(
-                [e.data["text"] for e in store.load_events("ses", offset=6)],
+                [e.data["text"] for e in store.load_events(meta.id, offset=6)],
                 ["6"],
             )
             self.assertEqual(
-                [e.data["text"] for e in store.load_recent_events("ses", count=2)],
+                [e.data["text"] for e in store.load_recent_events(meta.id, count=2)],
                 ["5", "6"],
             )
 
             # A second store instance rebuilds the same index from disk.
             fresh = SessionStore(tmp)
-            self.assertEqual(fresh.event_count("ses"), 7)
+            self.assertEqual(fresh.event_count(meta.id), 7)
             self.assertEqual(
-                [e.data["text"] for e in fresh.load_events("ses", limit=1, offset=5)],
+                [e.data["text"] for e in fresh.load_events(meta.id, limit=1, offset=5)],
                 ["5"],
             )
 
-            self.assertEqual(store.load_events("ses", offset=99), [])
+            self.assertEqual(store.load_events(meta.id, offset=99), [])
             self.assertEqual(store.load_events("missing"), [])
             self.assertEqual(store.event_count("missing"), 0)
 

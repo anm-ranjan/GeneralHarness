@@ -48,13 +48,15 @@ class RemoveQueuedMessageTests(unittest.TestCase):
                 [i["id"] for i in queue_events[-1].data["items"]], [first.id]
             )
 
-    def test_removes_saved_queue_images_from_disk(self):
+    def test_removes_saved_queue_image_blob_and_materialization(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = SessionStore(tmp)
             meta = _make_session(store)
-            image_path = Path(tmp) / "queued_image.png"
-            image_path.write_bytes(b"png-bytes")
-            queued = QueuedMessage(text="", images=[{"path": str(image_path), "filename": "queued_image.png"}])
+            image = store.store_attachment(
+                meta.id, "queued_image.png", b"png-bytes", mime_type="image/png", role="image"
+            )
+            image_path = Path(image["path"])
+            queued = QueuedMessage(text="", images=[image])
             meta.message_queue = [queued]
             store.update_session(meta)
 
@@ -62,15 +64,18 @@ class RemoveQueuedMessageTests(unittest.TestCase):
                 web_app.remove_queued_message(meta.id, queued.id)
 
             self.assertFalse(image_path.exists())
+            self.assertIsNone(store.read_attachment(meta.id, "queued_image.png"))
             self.assertEqual(store.load_session(meta.id).message_queue, [])
 
-    def test_removes_saved_queue_attachments_from_disk(self):
+    def test_removes_saved_queue_attachment_blob_and_materialization(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = SessionStore(tmp)
             meta = _make_session(store)
-            file_path = Path(tmp) / "queued_notes.pdf"
-            file_path.write_bytes(b"pdf-bytes")
-            queued = QueuedMessage(text="", attachments=[{"path": str(file_path), "filename": "queued_notes.pdf"}])
+            attachment = store.store_attachment(
+                meta.id, "queued_notes.pdf", b"pdf-bytes", mime_type="application/pdf"
+            )
+            file_path = Path(attachment["path"])
+            queued = QueuedMessage(text="", attachments=[attachment])
             meta.message_queue = [queued]
             store.update_session(meta)
 
@@ -78,6 +83,7 @@ class RemoveQueuedMessageTests(unittest.TestCase):
                 web_app.remove_queued_message(meta.id, queued.id)
 
             self.assertFalse(file_path.exists())
+            self.assertIsNone(store.read_attachment(meta.id, "queued_notes.pdf"))
             self.assertEqual(store.load_session(meta.id).message_queue, [])
 
     def test_unknown_session_and_message_return_404(self):

@@ -2,7 +2,7 @@
   "name": "myharness-electron",
   "private": true,
   "version": "0.1.0",
-  "description": "Electron desktop shell for MyHarness.",
+  "description": "Electron desktop shell for the local agent harness.",
   "main": "main.js",
   "//": "electron-builder's deb target requires homepage and author for the package metadata it generates; without them `npm run dist:linux` fails after the AppImage is already built.",
   "homepage": "https://github.com/anm-ranjan/GeneralHarness",

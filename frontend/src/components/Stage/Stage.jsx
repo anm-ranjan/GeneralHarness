@@ -70,7 +70,7 @@ export default function Stage() {
               type: 'APPEND_STAGE_ITEM',
               payload: {
                 type: 'status',
-                text: `Showing an older part of the transcript (events ${res.offset + 1}–${shownThrough} of ${res.total}). Select the session again to return to the latest.`,
+                text: `Showing an older part of the transcript (events ${res.offset + 1}–${shownThrough} of ${res.total}). Select the thread again to return to the latest.`,
               },
             })
           }

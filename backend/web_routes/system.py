@@ -285,11 +285,32 @@ def transcribe_audio(req: AudioTranscriptionRequest):
     if meta is None:
         raise HTTPException(status_code=404, detail="Session not found")
     config = audio_transcription.config_from_utils(utils)
-    return audio_transcription.transcribe_audio(
-        data_dir=web_app._DATA_DIR,
+    materializations_dir = web_app._store._materializations_dir
+    result = audio_transcription.transcribe_audio(
+        data_dir=str(materializations_dir),
         session_id=meta.id,
         audio_data=req.data,
         mime=req.mime,
         name=req.name,
         config=config,
     )
+    raw, resolved_mime = audio_transcription.decode_audio_payload(
+        req.data, req.mime, config.max_upload_mb
+    )
+    extension = audio_transcription._AUDIO_MIME_EXT.get(resolved_mime, ".bin")
+    filename = f"{result['voice_turn_id']}_input{extension}"
+    web_app._store.store_attachment(
+        meta.id,
+        filename,
+        raw,
+        mime_type=resolved_mime,
+        role="audio",
+        display_name=req.name,
+    )
+    transient_dir = materializations_dir / "audio" / meta.id / result["voice_turn_id"]
+    try:
+        if transient_dir.exists():
+            shutil.rmtree(transient_dir)
+    except OSError:
+        pass
+    return result

@@ -80,6 +80,8 @@ test("the builder config exposes only electron-builder keys", () => {
   assert.equal(config.productName, "2B-2B");
   assert.equal(config.appId, "local.2b-2b.desktop");
   assert.equal(config.artifactName, "2B-2B-${version}-${os}-${arch}.${ext}");
+  assert.equal(config.mac.extendInfo.CFBundleDisplayName, "2B|!2B");
+  assert.equal(config.linux.desktop.entry.Name, "2B|!2B");
   // An unknown key here fails electron-builder's schema validation.
   assert.equal(config.sanitizeProductName, undefined);
 });

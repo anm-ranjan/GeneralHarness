@@ -33,8 +33,11 @@ export default function useSessionTree() {
     return task
   }, [loadTree])
 
-  const renameTask = useCallback(async (projectId, taskId, name) => {
-    await api('PATCH', `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}`, { name })
+  const renameTask = useCallback(async (projectId, taskId, name, color) => {
+    const payload = {}
+    if (name !== undefined) payload.name = name
+    if (color !== undefined) payload.color = color
+    await api('PATCH', `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}`, payload)
     await loadTree()
   }, [loadTree])
 

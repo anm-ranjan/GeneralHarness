@@ -54,7 +54,7 @@ export default function ActivityLog() {
   if (!entries.length) {
     return (
       <div className="p-4 text-[13px] text-muted italic">
-        No activity yet in this session.
+        No activity yet in this thread.
       </div>
     )
   }

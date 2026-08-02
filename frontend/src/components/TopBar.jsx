@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useApp } from '../context/AppContext'
 import useApi from '../hooks/useApi'
+import { labelColorStyle } from '../labelColors'
 
 export default function TopBar() {
   const { state, dispatch } = useApp()
@@ -26,7 +27,7 @@ export default function TopBar() {
   const meta = state.currentMeta
   const isChat = meta?.kind === 'chat'
   const projectName = meta ? (state.projectNames[meta.project_id] || meta.project_id) : ''
-  const taskName = meta ? (state.taskNames[meta.task_id] || meta.task_id) : ''
+  const labelName = meta ? (state.taskNames[meta.task_id] || meta.task_id) : ''
   const sessionTitle = meta ? (meta.title || meta.id?.slice(0, 8)) : ''
   const backendLabel = state.desktopEnabled
     ? `Server · ${state.desktopBackendUrl || window.location.origin}${state.electronOnly ? ' · Electron only' : ''}`
@@ -49,7 +50,13 @@ export default function TopBar() {
               <>
                 <span>{projectName}</span>
                 <span className="text-faint">/</span>
-                <span>{taskName}</span>
+                <span
+                  className="label-chip rounded-full px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider"
+                  style={labelColorStyle((state.projects || []).flatMap(project => project.tasks || []).find(task => task.id === meta.task_id)?.color || meta.task_id)}
+                  title="Primary label"
+                >
+                  {labelName}
+                </span>
               </>
             )}
             <span className="text-faint">/</span>

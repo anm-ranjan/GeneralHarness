@@ -21,4 +21,21 @@ module.exports = {
   // productName is already filesystem-safe, so the artifact name needs no
   // second, differently-spelled sanitization pass.
   artifactName: `${productName}-\${version}-\${os}-\${arch}.\${ext}`,
+  mac: {
+    ...packageJson.build.mac,
+    extendInfo: {
+      ...(packageJson.build.mac?.extendInfo || {}),
+      CFBundleDisplayName: rawProductName,
+    },
+  },
+  linux: {
+    ...packageJson.build.linux,
+    desktop: {
+      ...(packageJson.build.linux?.desktop || {}),
+      entry: {
+        ...(packageJson.build.linux?.desktop?.entry || {}),
+        Name: rawProductName,
+      },
+    },
+  },
 };

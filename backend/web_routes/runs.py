@@ -150,6 +150,9 @@ def remove_queued_message(session_id: str, message_id: str):
         web_app._store.update_session(meta)
         web_helpers._emit_queue_updated(session_id, meta)
     for attachment in removed.attachments or removed.images or []:
+        filename = attachment.get("filename")
+        if filename:
+            web_app._store.delete_attachment(session_id, filename)
         path = attachment.get("path")
         if path:
             try:

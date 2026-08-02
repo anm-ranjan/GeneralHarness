@@ -141,6 +141,12 @@ export function deriveTokens(rawPalette, spec = {}) {
     '--color-danger-soft': alpha(p.danger, 0.12),
     '--color-info': p.info,
     '--color-info-soft': alpha(p.info, 0.1),
+    '--color-label-1': accent,
+    '--color-label-2': p.info,
+    '--color-label-3': p.ok,
+    '--color-label-4': p.warn,
+    '--color-label-5': p.syntax.keyword,
+    '--color-label-6': p.syntax.number,
 
     // Surfaces that used to be hardcoded black washes; they have to invert on
     // light palettes or code blocks turn into holes.

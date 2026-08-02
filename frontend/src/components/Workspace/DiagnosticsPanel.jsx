@@ -39,7 +39,7 @@ export default function DiagnosticsPanel() {
         <Row label="Touched files" value={state.touchedFiles.length} />
       </Section>
 
-      <Section title="Session">
+      <Section title="Thread">
         <Row label="ID" value={meta?.id || '—'} mono />
         <Row label="Messages" value={meta?.message_count ?? '—'} />
         <Row label="Workspace" value={state.currentWorkspaceRoot || '—'} mono />

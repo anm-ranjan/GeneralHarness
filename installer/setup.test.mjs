@@ -28,6 +28,8 @@ import {
   REQUIRED_BACKEND_MODULES,
   ConfigEditor,
   yamlScalar,
+  normalizeDatabaseFilename,
+  readStorageDefaults,
   dedent,
   linuxSandboxPaths,
   inspectSandboxHelper,
@@ -251,6 +253,7 @@ test('everything-enabled run emits exactly the answered values', () => {
 
   assert.equal(readKey(out, 'server.host'), '0.0.0.0');
   assert.equal(readKey(out, 'server.port'), 9100);
+  assert.equal(readKey(out, 'storage.database_filename'), 'myharness.sqlite3');
 
   assert.equal(readKey(out, 'ui.app_name'), 'Everything Harness');
   // The first art line keeps its leading indent; only trailing space is dropped.
@@ -283,6 +286,7 @@ test('minimal run emits exactly the answered values', () => {
   assert.deepEqual(readKey(out, 'permissions.allowed_paths'), ['/tmp/only-workspace']);
   assert.equal(readKey(out, 'server.host'), '127.0.0.1');
   assert.equal(readKey(out, 'server.port'), 8420);
+  assert.equal(readKey(out, 'storage.database_filename'), 'myharness.sqlite3');
   assert.equal(readKey(out, 'ui.app_name'), 'MyHarness');
   assert.equal(readKey(out, 'ui.splash_ascii'), '');
   assert.equal(readKey(out, 'ui.verbose_tools'), false);
@@ -329,6 +333,33 @@ test('yamlScalar quotes hostile strings safely', () => {
   assert.equal(yamlScalar(true), 'true');
   assert.equal(yamlScalar(8420), '8420');
   assert.equal(yamlScalar(''), '""');
+});
+
+test('normalizeDatabaseFilename adds the suffix and rejects paths and sidecars', () => {
+  assert.equal(normalizeDatabaseFilename('team-history'), 'team-history.sqlite3');
+  assert.equal(normalizeDatabaseFilename('team-history.sqlite3'), 'team-history.sqlite3');
+  for (const invalid of ['../history', 'nested/history', 'nested\\history', 'history.sqlite3-wal']) {
+    assert.throws(() => normalizeDatabaseFilename(invalid), /filename only|sidecar/);
+  }
+});
+
+test('installer reruns keep the existing unified storage defaults', () => {
+  const existing = `
+storage:
+  data_dir: "/srv/agent-history"
+  database_filename: "team-history.sqlite3"
+`;
+  assert.deepEqual(readStorageDefaults(existing, '/repo'), {
+    dataDir: '/srv/agent-history',
+    databaseFilename: 'team-history.sqlite3',
+  });
+});
+
+test('missing legacy storage settings fall back to the repository data directory', () => {
+  assert.deepEqual(readStorageDefaults('server:\n  port: 8420\n', '/repo'), {
+    dataDir: path.join('/repo', 'data'),
+    databaseFilename: 'myharness.sqlite3',
+  });
 });
 
 test('dedent normalises art indentation without losing relative shape', () => {

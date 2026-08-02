@@ -150,7 +150,7 @@ export default function ModelSelector() {
               </span>
               <div>
                 <div className="text-[12px] font-semibold text-text-bright">Run configuration</div>
-                <div className="text-[10px] text-faint">Applies to this session</div>
+                <div className="text-[10px] text-faint">Applies to this thread</div>
               </div>
             </div>
             {saving && <span className="spinner" aria-label="Saving" />}

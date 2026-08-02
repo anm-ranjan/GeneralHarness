@@ -1,8 +1,8 @@
 # MyHarness
 
 MyHarness is a self-hosted harness for coding agents. It runs entirely on your
-own infrastructure and gives one persistent workspace — projects, tasks,
-sessions, and transcripts — to whichever agent backend you prefer: an
+own infrastructure and gives one persistent workspace — projects, labelled
+threads, and transcripts — to whichever agent backend you prefer: an
 OpenAI-compatible API, the Codex CLI, or Claude Code.
 
 The same backend drives four clients: a React web UI, an Electron desktop shell,
@@ -15,7 +15,7 @@ npx .            # interactive setup wizard
 
 ## Features
 
-**Three agent providers, switchable per session**
+**Three agent providers, switchable per thread**
 
 - `native` — any OpenAI-compatible `/chat/completions` endpoint (OpenRouter,
   OpenAI, a local llama.cpp/vLLM server, …). This is the built-in agent loop:
@@ -25,8 +25,8 @@ npx .            # interactive setup wizard
 - `claude-agent` — drives the local `claude` CLI through the Claude Agent SDK.
   Authenticates with your Claude Code subscription login (or `ANTHROPIC_API_KEY`).
 
-Sessions remember their provider, and `/model native|codex|claude` switches an
-existing session over, carrying the completed context across.
+Threads remember their provider, and `/model native|codex|claude` switches an
+existing thread over, carrying the completed context across.
 
 **Reusable Harness skills**
 
@@ -38,13 +38,17 @@ existing session over, carrying the completed context across.
 **Persistent workspace**
 
 - **Projects** map to real directories on disk (inside your allowed paths),
-  **tasks** group sessions within a project, and **sessions** hold a durable
-  event stream that survives restarts.
-- **Chats** are project-less sessions in a sandboxed `data/chats/<id>/`
+  **labels** organize threads within a project, and **threads** hold a durable
+  event stream that survives restarts. Every thread has a primary colour-coded
+  label; deleting a label reassigns its threads instead of deleting them.
+- **Chats** are project-less threads in a sandboxed `data/workspaces/<id>/`
   workspace, for questions that should not touch a real repository.
 - Cross-session search over transcripts, tool calls, and touched files.
-- Portable session backup/import as a single `.myharness.zip` (metadata, events,
-  attachments, chat files, change manifests).
+- Portable thread backup/import as a single `.myharness.zip` (metadata, events,
+  attachments, and change manifests).
+- SQLite stores application-owned state, including deduplicated image, audio,
+  and file BLOBs; only active workspaces and disposable materializations remain
+  as ordinary files.
 - Run-level change manifests, so a single file or an entire run can be reverted
   later — with conflict checks against edits made outside the agent.
 
@@ -107,7 +111,7 @@ The interactive installer asks for everything it needs and does the rest:
    either direct SSH or API configuration.
 5. Browser UI, an installable Electron package for the current OS, and the Rust TUI.
 6. Trusted-LAN bind address, port, allowed workspaces, approvals, data directory,
-   logging policy, verbose tools, and Git writes.
+   SQLite database filename, logging policy, verbose tools, and Git writes.
 
 It then creates `./.venv`, installs `requirements.txt` into it, and writes
 `backend/agent/agent_config.yaml`. Re-running it is safe: it offers to back the
@@ -179,6 +183,20 @@ Everything lives in `backend/agent/agent_config.yaml`, which is gitignored.
 exists there with a comment. The config is read once at process start, so a
 change needs a restart.
 
+Runtime storage defaults to:
+
+```text
+data/
+  myharness.sqlite3
+  workspaces/
+  temporary-materializations/
+```
+
+Set `storage.database_filename` to choose another filename inside `data/`; the
+`.sqlite3` suffix is added when omitted. SQLite may create `-wal` and `-shm`
+sidecars while the backend is running. Back up a live store through SQLite's
+backup mechanism rather than copying only the main file.
+
 | Section | Purpose |
 |---------|---------|
 | `api` | Native enablement, `base_url`, timeout, streaming, and an optional OpenRouter `provider` allowlist. |
@@ -193,7 +211,7 @@ change needs a restart.
 | `agent` | Default provider, `max_iterations`, and `tool_call_checkpoint`. |
 | `shell` | `default_timeout` for shell commands. |
 | `logging` | Enablement, level, directory, and retention period. |
-| `storage` | Persistent data directory (empty means `<repo>/data`). |
+| `storage` | Unified persistent data directory and SQLite database filename (empty directory means `<repo>/data`). |
 | `ui` | `app_name`, `splash_ascii`, `rich`, `verbose_tools`, `git_writes_enabled`. |
 | `audio` | Voice dictation: `enabled` and the `transcription` block below. |
 | `codex_app_server` | Codex provider: `enabled`, `binary`, sandbox and approval policy, timeout, model, reasoning effort. |
@@ -202,8 +220,8 @@ change needs a restart.
 
 ### Fleet host switching
 
-A fleet lets one web or Electron UI switch between independent MyHarness
-backends. Each host keeps its own projects, tasks, sessions, credentials,
+A fleet lets one web or Electron UI switch between independent harness
+backends. Each host keeps its own projects, labels, threads, credentials,
 and provider processes; switching replaces the whole workspace rather than
 merging data between hosts.
 
@@ -281,6 +299,11 @@ Electron normally reuses a healthy backend at `desktop.backend_url` when
 own sidecar when that backend is unavailable. Unpackaged Electron reads the
 deployment YAML at startup; packaged applications contain an embedded YAML, so
 make this change before rebuilding and installing the package.
+
+Every launcher uses `storage.data_dir` as the single source of truth for
+persistent state, including an Electron-started backend. The setup wizard writes
+an explicit data directory before packaging, so Electron does not create a
+second store under its own application-data directory.
 
 ### Providers
 

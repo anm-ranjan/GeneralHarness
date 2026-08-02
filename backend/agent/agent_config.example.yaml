@@ -52,7 +52,7 @@ python:
   interpreter: ""
 
 agent:
-  # Preferred provider for new sessions. If unavailable, the UI asks for one.
+  # Preferred provider for new threads. If unavailable, the UI asks for one.
   default_provider: native
   max_iterations: 20
   tool_call_checkpoint: 20
@@ -70,8 +70,8 @@ server:
   host: 127.0.0.1
   port: 8420
 
-# Other machines running MyHarness that the web UI can switch between. Each
-# host owns its own projects, tasks, and sessions — switching swaps the whole
+# Other machines running the app that the web UI can switch between. Each host
+# owns its own projects, labels, and threads — switching swaps the whole
 # tree, nothing is merged across machines.
 #
 # Keep `hosts` identical on every machine and change only `self`, so there is
@@ -109,6 +109,8 @@ logging:
 storage:
   # Empty means "<repo>/data". MYHARNESS_WEB_DATA_DIR overrides this.
   data_dir: ""
+  # Filename only, resolved inside data_dir. The .sqlite3 suffix is added when omitted.
+  database_filename: myharness.sqlite3
 
 ui:
   rich: auto

@@ -91,7 +91,7 @@ export default function SessionItem({ session, isActive, onSelect, onRename, onM
           <button
             onClick={(e) => { e.stopPropagation(); onMove(session) }}
             className="text-faint hover:text-accent text-[11px] px-0.5"
-            title="Move to another task"
+            title="Assign another label"
           >↷</button>
         )}
         <button
@@ -100,8 +100,8 @@ export default function SessionItem({ session, isActive, onSelect, onRename, onM
             dispatch({
               type: 'OPEN_CONFIRM',
               payload: {
-                title: 'Delete session?',
-                message: 'This deletes the session event stream and attachments.',
+                title: 'Delete thread?',
+                message: 'This deletes the thread event stream and attachments.',
                 detail: session.title || session.id,
                 confirmLabel: 'Delete',
                 tone: 'danger',

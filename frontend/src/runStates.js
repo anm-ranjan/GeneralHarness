@@ -29,10 +29,10 @@ export function runStateNotification(prevState, sessionId, state, currentSession
   if (!sessionId || sessionId === currentSessionId) return null
   const label = sessionTitle || sessionId
   if (state === 'waiting_approval') {
-    return { title: 'Approval needed', body: `Session "${label}" is waiting for a tool approval.` }
+    return { title: 'Approval needed', body: `Thread "${label}" is waiting for a tool approval.` }
   }
   if (state === 'idle' && (prevState === 'running' || prevState === 'waiting_approval')) {
-    return { title: 'Run finished', body: `Session "${label}" completed its run.` }
+    return { title: 'Run finished', body: `Thread "${label}" completed its run.` }
   }
   return null
 }

@@ -105,6 +105,24 @@ function readDesktopConfig() {
   return result;
 }
 
+function configuredDataDir() {
+  if (process.env.MYHARNESS_WEB_DATA_DIR) {
+    return path.resolve(process.env.MYHARNESS_WEB_DATA_DIR);
+  }
+  if (!fs.existsSync(configPath)) return path.join(repoRoot, "data");
+  const lines = fs.readFileSync(configPath, "utf-8").split(/\r?\n/);
+  let inStorage = false;
+  for (const line of lines) {
+    if (/^\S/.test(line)) inStorage = /^storage:\s*$/.test(line);
+    if (!inStorage) continue;
+    const match = line.match(/^\s+data_dir:\s*(.*?)\s*(?:#.*)?$/);
+    if (!match) continue;
+    const configured = String(parseScalar(match[1]) || "").trim();
+    return configured ? path.resolve(repoRoot, configured) : path.join(repoRoot, "data");
+  }
+  return path.join(repoRoot, "data");
+}
+
 // Locked-down Windows clients can crash on GPU process launch, so hardware
 // acceleration is disabled by default. Set desktop.disable_gpu: false in
 // agent_config.yaml to re-enable it and test rendering performance. Must run
@@ -195,29 +213,9 @@ function selectPython() {
   throw new Error("No Python interpreter was found. Set MYHARNESS_PYTHON or install Python 3.10+.");
 }
 
-function defaultBackendDataDir() {
-  if (!app.isPackaged) return path.join(repoRoot, "data");
-  return path.join(app.getPath("userData"), "data");
-}
-
-function migratePackagedData(dataDir) {
-  if (!app.isPackaged || fs.existsSync(path.join(dataDir, "project_index.json"))) return;
-  const legacyDataDir = path.join(repoRoot, "data");
-  if (!fs.existsSync(legacyDataDir)) return;
-  try {
-    fs.mkdirSync(dataDir, { recursive: true });
-    fs.cpSync(legacyDataDir, dataDir, { recursive: true, force: false, errorOnExist: false });
-    console.log(`Migrated packaged session data to ${dataDir}`);
-  } catch (error) {
-    console.warn(`Could not migrate packaged session data to ${dataDir}`, error);
-  }
-}
-
 function spawnLocalBackend(baseUrl) {
   const url = new URL(baseUrl);
-  const configuredDataDir = process.env.MYHARNESS_WEB_DATA_DIR;
-  const dataDir = configuredDataDir || defaultBackendDataDir();
-  if (!configuredDataDir) migratePackagedData(dataDir);
+  const dataDir = configuredDataDir();
   const env = {
     ...process.env,
     PATH: executablePath(),

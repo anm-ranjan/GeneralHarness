@@ -105,6 +105,7 @@ class ConfigFilesTests(unittest.TestCase):
         self.assertFalse(example["audio"]["enabled"])
         self.assertFalse(example["codex_app_server"]["enabled"])
         self.assertFalse(example["claude_agent"]["enabled"])
+        self.assertEqual(example["storage"]["database_filename"], "myharness.sqlite3")
 
 
 def run_utils_probe(body, env_extra=None, config_text=None):
@@ -224,6 +225,21 @@ class LogDirTests(unittest.TestCase):
 
     def test_repo_root_points_at_the_repository(self):
         self.assertEqual(Path(utils.REPO_ROOT), ROOT)
+
+
+class StorageConfigTests(unittest.TestCase):
+    def test_database_filename_default_and_suffix_normalization(self):
+        self.assertEqual(utils.DATABASE_FILENAME, "myharness.sqlite3")
+        self.assertEqual(utils.normalize_database_filename("team-history"), "team-history.sqlite3")
+        self.assertEqual(
+            utils.normalize_database_filename("team-history.sqlite3"),
+            "team-history.sqlite3",
+        )
+
+    def test_database_filename_rejects_paths_and_sqlite_sidecars(self):
+        for value in ("../history", "nested/history", r"nested\history", "history.sqlite3-wal"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                utils.normalize_database_filename(value)
 
 
 class StartupValidationTests(unittest.TestCase):

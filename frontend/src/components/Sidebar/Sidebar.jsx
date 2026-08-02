@@ -125,7 +125,7 @@ export default function Sidebar() {
   return (
     <div className="flex flex-col h-full px-5 pt-8 pb-5">
       <h1 className="text-[18px] font-bold text-text-bright mb-0.5">{state.appName}</h1>
-      <p className="text-[12px] text-faint mb-4">Agent Sessions</p>
+      <p className="text-[12px] text-faint mb-4">Projects & Threads</p>
 
       <HostSwitcher />
 
@@ -170,7 +170,7 @@ export default function Sidebar() {
               onSelectSession={selectSession}
               onRenameProject={tree.renameProject}
               onDeleteProject={tree.deleteProject}
-              onCreateTask={(pid) => tree.createTask(pid, 'New Task')}
+              onCreateTask={(pid) => tree.createTask(pid, 'New Label')}
               onRenameTask={tree.renameTask}
               onDeleteTask={tree.deleteTask}
               onCreateSession={createSession}

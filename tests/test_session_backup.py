@@ -51,9 +51,13 @@ def _populate(store, meta):
         session_id=meta.id, type=EventType.ASSISTANT_MESSAGE,
         data={"markdown": "hi there"},
     ))
-    attachments_dir = store._data_dir / "attachments" / meta.id
-    attachments_dir.mkdir(parents=True)
-    (attachments_dir / "20260715_0_pic.png").write_bytes(b"PNGDATA")
+    store.store_attachment(
+        meta.id,
+        "20260715_0_pic.png",
+        b"PNGDATA",
+        mime_type="image/png",
+        role="image",
+    )
     store.save_change_manifest(meta.id, {
         "run_id": "run_abc",
         "session_id": meta.id,
@@ -111,9 +115,17 @@ class SessionBackupTests(unittest.TestCase):
             self.assertEqual(events[0].session_id, imported.id)
             attachment = events[0].data["attachments"][0]
             self.assertIn(imported.id, attachment["url"])
-            expected_path = str(store._data_dir / "attachments" / imported.id / "20260715_0_pic.png")
-            self.assertEqual(attachment["path"], expected_path)
-            self.assertTrue(Path(expected_path).is_file())
+            content, mime_type = store.read_attachment(imported.id, "20260715_0_pic.png")
+            self.assertEqual(content, b"PNGDATA")
+            self.assertEqual(mime_type, "image/png")
+            # Import rewrites provider-facing paths to a disposable materialized
+            # file; the SQLite blob remains the persistent source of truth.
+            materialized = Path(attachment["path"])
+            self.assertTrue(materialized.is_file())
+            self.assertEqual(materialized.read_bytes(), b"PNGDATA")
+            self.assertTrue(
+                materialized.is_relative_to(store._data_dir / "temporary-materializations")
+            )
 
             manifests = store.load_change_manifests(imported.id)
             self.assertEqual(len(manifests), 1)
