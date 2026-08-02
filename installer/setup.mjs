@@ -436,8 +436,8 @@ class ConfigEditor {
    * Write a list of mappings, e.g. fleet.hosts:
    *
    *   hosts:
-   *     - id: "mac"
-   *       label: "MacBook"
+   *     - id: "laptop"
+   *       label: "Laptop"
    *
    * `fields` fixes the key order so regenerating a config produces a stable
    * diff rather than reshuffling on object-key order.
@@ -1027,7 +1027,7 @@ async function askHostId(message, initial, taken) {
     // ':' is reserved, and a duplicate would silently drop a machine from the
     // switcher — both are things the backend refuses to guess about.
     if (value.includes(':')) {
-      warn('Ids cannot contain ":". Use a plain name such as "jarvis".');
+      warn('Ids cannot contain ":". Use a plain name such as "workstation".');
       continue;
     }
     if (taken.includes(value)) {

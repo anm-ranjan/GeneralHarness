@@ -488,11 +488,11 @@ const FLEET_ANSWERS = {
   ...MINIMAL,
   fleet: {
     enabled: true,
-    self: 'mac',
+    self: 'laptop',
     pollSeconds: 15,
     hosts: [
-      { id: 'mac', label: 'MacBook', url: 'http://127.0.0.1:8420' },
-      { id: 'jarvis', label: 'Jarvis', url: 'http://127.0.0.1:8421' },
+      { id: 'laptop', label: 'Laptop', url: 'http://127.0.0.1:8420' },
+      { id: 'workstation', label: 'Workstation', url: 'http://127.0.0.1:8421' },
     ],
   },
 };
@@ -501,11 +501,11 @@ test('a configured fleet is written as a list of host mappings', () => {
   const out = buildConfig(FLEET_ANSWERS, TEMPLATE);
 
   assert.equal(readKey(out, 'fleet.enabled'), true);
-  assert.equal(readKey(out, 'fleet.self'), 'mac');
+  assert.equal(readKey(out, 'fleet.self'), 'laptop');
   assert.equal(readKey(out, 'fleet.poll_seconds'), 15);
   assert.deepEqual(readMappingList(out, 'fleet.hosts'), [
-    { id: 'mac', label: 'MacBook', url: 'http://127.0.0.1:8420' },
-    { id: 'jarvis', label: 'Jarvis', url: 'http://127.0.0.1:8421' },
+    { id: 'laptop', label: 'Laptop', url: 'http://127.0.0.1:8420' },
+    { id: 'workstation', label: 'Workstation', url: 'http://127.0.0.1:8421' },
   ]);
 });
 
@@ -521,11 +521,11 @@ test('host labels containing YAML metacharacters stay quoted', () => {
     ...MINIMAL,
     fleet: {
       enabled: true,
-      self: 'mac',
+      self: 'laptop',
       pollSeconds: 10,
       hosts: [
-        { id: 'mac', label: 'Ani: "work" #1', url: 'http://127.0.0.1:8420' },
-        { id: 'jarvis', label: 'Jarvis', url: 'http://127.0.0.1:8421' },
+        { id: 'laptop', label: 'Ani: "work" #1', url: 'http://127.0.0.1:8420' },
+        { id: 'workstation', label: 'Workstation', url: 'http://127.0.0.1:8421' },
       ],
     },
   };
@@ -542,10 +542,10 @@ test('declining the fleet prompt leaves it disabled', async () => {
 test('stepFleet collects this machine and its peers', async () => {
   prompts.inject([
     true,                     // set up a fleet
-    'mac', 'MacBook', 'http://127.0.0.1:8420',   // this machine
+    'laptop', 'Laptop', 'http://127.0.0.1:8420',   // this machine
     true,                     // add another
-    'jarvis', 'Jarvis', 'http://127.0.0.1:8421', // peer
-    'jarvis.local', 8420,     // tunnel details, since the URL is loopback
+    'workstation', 'Workstation', 'http://127.0.0.1:8421', // peer
+    'workstation.local', 8420,     // tunnel details, since the URL is loopback
     false,                    // no more machines
     12,                       // poll seconds
   ]);
@@ -554,11 +554,11 @@ test('stepFleet collects this machine and its peers', async () => {
   const fleet = await stepFleet({ host: '0.0.0.0', port: 8420 }, scriptRoot);
 
   assert.equal(fleet.enabled, true);
-  assert.equal(fleet.self, 'mac');
+  assert.equal(fleet.self, 'laptop');
   assert.equal(fleet.pollSeconds, 12);
   assert.deepEqual(fleet.hosts, [
-    { id: 'mac', label: 'MacBook', url: 'http://127.0.0.1:8420' },
-    { id: 'jarvis', label: 'Jarvis', url: 'http://127.0.0.1:8421' },
+    { id: 'laptop', label: 'Laptop', url: 'http://127.0.0.1:8420' },
+    { id: 'workstation', label: 'Workstation', url: 'http://127.0.0.1:8421' },
   ]);
   assert.ok(existsSync(path.join(scriptRoot, 'scripts', 'fleet-tunnels.sh')));
 });
@@ -566,7 +566,7 @@ test('stepFleet collects this machine and its peers', async () => {
 test('a fleet of one machine is refused, since there is nothing to switch to', async () => {
   prompts.inject([
     true,
-    'mac', 'MacBook', 'http://127.0.0.1:8420',
+    'laptop', 'Laptop', 'http://127.0.0.1:8420',
     false,  // decline to add a second machine
   ]);
 
@@ -576,8 +576,8 @@ test('a fleet of one machine is refused, since there is nothing to switch to', a
 });
 
 test('suggestHostId produces a plain identifier from a hostname', () => {
-  assert.equal(suggestHostId('Jarvis.local'), 'jarvis');
-  assert.equal(suggestHostId("Ani's MacBook Pro.local"), 'anismacbookpro');
+  assert.equal(suggestHostId('Workstation.local'), 'workstation');
+  assert.equal(suggestHostId("Sam's Work Laptop.local"), 'samsworklaptop');
   assert.equal(suggestHostId(''), 'this-machine');
 });
 
@@ -618,14 +618,14 @@ test('the dependency check is a single runnable python -c statement', () => {
 // cannot hold one open, so it writes a launcher instead.
 
 const TUNNELS = [
-  { localPort: '8421', remotePort: 8420, sshHost: 'jarvis.local' },
+  { localPort: '8421', remotePort: 8420, sshHost: 'workstation.local' },
   { localPort: '8422', remotePort: 8420, sshHost: 'nas.local' },
 ];
 
 test('the tunnel script forwards every configured host', () => {
   const script = fleetTunnelScript(TUNNELS);
   assert.ok(script.startsWith('#!/usr/bin/env bash'));
-  assert.match(script, /"8421:127\.0\.0\.1:8420 jarvis\.local"/);
+  assert.match(script, /"8421:127\.0\.0\.1:8420 workstation\.local"/);
   assert.match(script, /"8422:127\.0\.0\.1:8420 nas\.local"/);
 });
 

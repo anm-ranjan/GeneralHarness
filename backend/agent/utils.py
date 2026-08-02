@@ -539,7 +539,7 @@ def _fleet_warnings() -> list:
         if ":" in host["id"]:
             warnings.append(
                 f"fleet host id '{host['id']}' contains ':', which is reserved. Use a plain "
-                "identifier such as 'jarvis'."
+                "identifier such as 'workstation'."
             )
         if "://" not in host["url"]:
             warnings.append(

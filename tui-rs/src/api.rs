@@ -379,10 +379,10 @@ mod tests {
 
     #[test]
     fn preserves_backend_path_prefix() {
-        let client = MyHarnessClient::new("https://example.test/jarvis").unwrap();
+        let client = MyHarnessClient::new("https://example.test/workstation").unwrap();
         assert_eq!(
             client.session_ws_url("ses_1").unwrap().as_str(),
-            "wss://example.test/jarvis/api/sessions/ses_1/events"
+            "wss://example.test/workstation/api/sessions/ses_1/events"
         );
     }
 

@@ -2,13 +2,13 @@
 // palette omits is derived by `completePalette` in engine.js, so a minimal
 // entry only needs bg / text / accent.
 //
-// `jarvis` pins every token to the values that used to live in index.css so the
+// `ember` pins every token to the values that used to live in index.css so the
 // default look is unchanged.
 
 export const PALETTES = [
   {
-    id: 'jarvis',
-    name: 'Jarvis',
+    id: 'ember',
+    name: 'Ember',
     appearance: 'dark',
     bg: '#101214',
     panel: '#16181b',
@@ -338,7 +338,7 @@ export const PALETTES = [
   },
 ]
 
-export const DEFAULT_PALETTE_ID = 'jarvis'
+export const DEFAULT_PALETTE_ID = 'ember'
 
 /** Look a palette up by id across the catalog and any user-saved palettes. */
 export function findPalette(id, customPalettes = []) {

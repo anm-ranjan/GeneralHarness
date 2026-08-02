@@ -42,7 +42,7 @@ if [[ "${1:-}" == "--tui" ]]; then
     shift
     if command -v cargo &>/dev/null; then
         # Point the Rust TUI at the configured desktop.backend_url so it can
-        # reach a remote backend (e.g. Jarvis.local) instead of assuming the
+        # reach a remote backend (e.g. workstation.local) instead of assuming the
         # backend runs on this machine. An explicit MYHARNESS_BACKEND_URL or a
         # --backend-url flag still wins (clap precedence: arg > env > default),
         # and localhost remains the fallback when nothing is configured.

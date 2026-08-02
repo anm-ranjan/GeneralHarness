@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* These are the defaults (the "Jarvis" palette). The theme engine in
+/* These are the defaults (the "Ember" palette). The theme engine in
    src/theme/ overrides the same custom properties as inline styles on :root,
    which is why every value here must stay a plain token reference downstream —
    no literal colors outside this block. */

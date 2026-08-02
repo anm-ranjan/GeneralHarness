@@ -32,7 +32,7 @@ test('contrastRatio matches known WCAG values', () => {
 })
 
 test('the default palette reproduces the original index.css tokens', () => {
-  const tokens = deriveTokens(findPalette('jarvis'), normalizeSpec({}))
+  const tokens = deriveTokens(findPalette('ember'), normalizeSpec({}))
   assert.equal(tokens['--color-bg'], '#101214')
   assert.equal(tokens['--color-panel'], 'rgba(22, 24, 27, 0.82)')
   assert.equal(tokens['--color-surface'], 'rgba(31, 35, 40, 0.72)')
@@ -52,7 +52,7 @@ test('the default palette reproduces the original index.css tokens', () => {
 })
 
 test('every bundled palette derives a complete, valid token set', () => {
-  const reference = Object.keys(deriveTokens(findPalette('jarvis'), normalizeSpec({})))
+  const reference = Object.keys(deriveTokens(findPalette('ember'), normalizeSpec({})))
   for (const palette of PALETTES) {
     const tokens = deriveTokens(palette, normalizeSpec({}))
     assert.deepEqual(Object.keys(tokens), reference, `${palette.id} token keys`)
@@ -89,8 +89,8 @@ test('accent override wins over the palette accent and retints derivatives', () 
 })
 
 test('glass level pushes surfaces toward opaque', () => {
-  const full = deriveTokens(findPalette('jarvis'), normalizeSpec({ glassId: 'full' }))
-  const off = deriveTokens(findPalette('jarvis'), normalizeSpec({ glassId: 'off' }))
+  const full = deriveTokens(findPalette('ember'), normalizeSpec({ glassId: 'full' }))
+  const off = deriveTokens(findPalette('ember'), normalizeSpec({ glassId: 'off' }))
   assert.equal(full['--color-panel'], 'rgba(22, 24, 27, 0.82)')
   assert.equal(off['--color-panel'], '#16181b')
   assert.equal(off['--glass-blur'], '0px')
@@ -98,7 +98,7 @@ test('glass level pushes surfaces toward opaque', () => {
 })
 
 test('light palettes invert the code-block wash and the console scanline', () => {
-  const dark = deriveTokens(findPalette('jarvis'), normalizeSpec({}))
+  const dark = deriveTokens(findPalette('ember'), normalizeSpec({}))
   const light = deriveTokens(findPalette('github-light'), normalizeSpec({}))
   assert.equal(dark['--color-scanline'], 'rgba(255, 255, 255, 0.035)')
   assert.equal(light['--color-scanline'], 'rgba(0, 0, 0, 0.035)')
@@ -107,7 +107,7 @@ test('light palettes invert the code-block wash and the console scanline', () =>
 })
 
 test('overrides are applied last and ignore junk keys', () => {
-  const tokens = deriveTokens(findPalette('jarvis'), normalizeSpec({
+  const tokens = deriveTokens(findPalette('ember'), normalizeSpec({
     overrides: { '--color-bg': '#123456', 'color-bg': '#ff0000', '--color-ok': '' },
   }))
   assert.equal(tokens['--color-bg'], '#123456')
@@ -121,13 +121,13 @@ test('normalizeSpec falls back for unknown ids and bad accents', () => {
   assert.equal(spec.radiusId, 'default')
   assert.equal(spec.glassId, 'full')
   assert.equal(spec.accent, null)
-  assert.equal(normalizeSpec(null).paletteId, 'jarvis')
+  assert.equal(normalizeSpec(null).paletteId, 'ember')
 })
 
 test('findPalette prefers user palettes and falls back to the default', () => {
   const custom = { id: 'nord', name: 'My Nord', bg: '#000000', text: '#ffffff', accent: '#ff0000' }
   assert.equal(findPalette('nord', [custom]).name, 'My Nord')
-  assert.equal(findPalette('does-not-exist').id, 'jarvis')
+  assert.equal(findPalette('does-not-exist').id, 'ember')
 })
 
 test('applyTokens writes to a target and snapshots round-trip', () => {

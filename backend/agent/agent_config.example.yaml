@@ -78,7 +78,7 @@ server:
 # one fleet definition to maintain. The browser connects to each `url`
 # directly, so point them at SSH tunnels and leave every backend on 127.0.0.1:
 #
-#   ssh -N -L 8421:127.0.0.1:8420 jarvis.local
+#   ssh -N -L 8421:127.0.0.1:8420 workstation.local
 #
 fleet:
   enabled: false
@@ -90,11 +90,11 @@ fleet:
   # Every machine in the fleet, this one included. For example:
   #
   #   hosts:
-  #     - id: mac                    # stable and unique; renaming it resets
-  #       label: MacBook             # that host's saved UI state
+  #     - id: laptop                 # stable and unique; renaming it resets
+  #       label: Laptop              # that host's saved UI state
   #       url: http://127.0.0.1:8420 # as reached from the browser
-  #     - id: jarvis
-  #       label: Jarvis
+  #     - id: workstation
+  #       label: Workstation
   #       url: http://127.0.0.1:8421 # the tunnel above
   #       enabled: false             # keep the entry but stop offering the host
   hosts: []

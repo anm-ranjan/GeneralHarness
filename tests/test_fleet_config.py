@@ -24,58 +24,58 @@ import utils  # noqa: E402
 class NormalizeFleetHostsTests(unittest.TestCase):
     def test_keeps_well_formed_hosts_and_strips_trailing_slash(self):
         hosts = utils.normalize_fleet_hosts([
-            {"id": "mac", "label": "MacBook", "url": "http://127.0.0.1:8420/"},
+            {"id": "laptop", "label": "Laptop", "url": "http://127.0.0.1:8420/"},
         ])
         self.assertEqual(hosts, [
-            {"id": "mac", "label": "MacBook", "url": "http://127.0.0.1:8420"},
+            {"id": "laptop", "label": "Laptop", "url": "http://127.0.0.1:8420"},
         ])
 
     def test_label_defaults_to_the_id(self):
-        hosts = utils.normalize_fleet_hosts([{"id": "jarvis", "url": "http://a"}])
-        self.assertEqual(hosts[0]["label"], "jarvis")
+        hosts = utils.normalize_fleet_hosts([{"id": "workstation", "url": "http://a"}])
+        self.assertEqual(hosts[0]["label"], "workstation")
 
     def test_drops_unusable_entries_instead_of_raising(self):
         # A typo in one host must not stop the machine you are sitting at.
         hosts = utils.normalize_fleet_hosts([
-            {"id": "mac", "url": "http://a"},
-            {"id": "mac", "url": "http://duplicate"},
+            {"id": "laptop", "url": "http://a"},
+            {"id": "laptop", "url": "http://duplicate"},
             {"id": "", "url": "http://no-id"},
             {"id": "no-url"},
             "not-a-mapping",
             {"id": "disabled", "url": "http://b", "enabled": False},
-            {"id": "jarvis", "url": "http://c"},
+            {"id": "workstation", "url": "http://c"},
         ])
-        self.assertEqual([h["id"] for h in hosts], ["mac", "jarvis"])
+        self.assertEqual([h["id"] for h in hosts], ["laptop", "workstation"])
         self.assertEqual(hosts[0]["url"], "http://a")
 
     def test_non_list_config_is_ignored(self):
         self.assertEqual(utils.normalize_fleet_hosts(None), [])
-        self.assertEqual(utils.normalize_fleet_hosts("jarvis"), [])
+        self.assertEqual(utils.normalize_fleet_hosts("workstation"), [])
 
 
 HOSTS = [
-    {"id": "mac", "label": "MacBook", "url": "http://127.0.0.1:8420"},
-    {"id": "jarvis", "label": "Jarvis", "url": "http://127.0.0.1:8421"},
+    {"id": "laptop", "label": "Laptop", "url": "http://127.0.0.1:8420"},
+    {"id": "workstation", "label": "Workstation", "url": "http://127.0.0.1:8421"},
 ]
 
 
 class FleetRegistryTests(unittest.TestCase):
     def test_marks_this_machine(self):
         with mock.patch.multiple(
-            utils, FLEET_ENABLED=True, FLEET_HOSTS=HOSTS, FLEET_SELF_ID="jarvis",
+            utils, FLEET_ENABLED=True, FLEET_HOSTS=HOSTS, FLEET_SELF_ID="workstation",
         ):
             registry = utils.fleet_registry()
         self.assertEqual([h["self"] for h in registry], [False, True])
 
     def test_disabled_fleet_reports_no_hosts(self):
         with mock.patch.multiple(
-            utils, FLEET_ENABLED=False, FLEET_HOSTS=HOSTS, FLEET_SELF_ID="mac",
+            utils, FLEET_ENABLED=False, FLEET_HOSTS=HOSTS, FLEET_SELF_ID="laptop",
         ):
             self.assertEqual(utils.fleet_registry(), [])
 
     def test_single_host_is_not_a_fleet(self):
         with mock.patch.multiple(
-            utils, FLEET_ENABLED=True, FLEET_HOSTS=HOSTS[:1], FLEET_SELF_ID="mac",
+            utils, FLEET_ENABLED=True, FLEET_HOSTS=HOSTS[:1], FLEET_SELF_ID="laptop",
         ):
             self.assertEqual(utils.fleet_registry(), [])
 
@@ -104,16 +104,16 @@ class FleetWarningTests(unittest.TestCase):
             self.assertTrue(any("typo" in w for w in utils._fleet_warnings()))
 
     def test_warns_about_a_url_without_a_scheme(self):
-        hosts = [HOSTS[0], {"id": "jarvis", "label": "Jarvis", "url": "127.0.0.1:8421"}]
+        hosts = [HOSTS[0], {"id": "workstation", "label": "Workstation", "url": "127.0.0.1:8421"}]
         with mock.patch.multiple(
-            utils, FLEET_ENABLED=True, FLEET_HOSTS=hosts, FLEET_SELF_ID="mac",
+            utils, FLEET_ENABLED=True, FLEET_HOSTS=hosts, FLEET_SELF_ID="laptop",
         ):
             self.assertTrue(any("no scheme" in w for w in utils._fleet_warnings()))
 
     def test_warns_about_a_reserved_character_in_an_id(self):
         hosts = [HOSTS[0], {"id": "jar:vis", "label": "J", "url": "http://a"}]
         with mock.patch.multiple(
-            utils, FLEET_ENABLED=True, FLEET_HOSTS=hosts, FLEET_SELF_ID="mac",
+            utils, FLEET_ENABLED=True, FLEET_HOSTS=hosts, FLEET_SELF_ID="laptop",
         ):
             self.assertTrue(any("reserved" in w for w in utils._fleet_warnings()))
 
@@ -121,12 +121,12 @@ class FleetWarningTests(unittest.TestCase):
         # Three configured entries, two usable: the dropped one is worth saying
         # out loud rather than silently missing from the switcher.
         config = {"fleet": {"hosts": [
-            {"id": "mac", "url": "http://a"},
-            {"id": "jarvis", "url": "http://b"},
+            {"id": "laptop", "url": "http://a"},
+            {"id": "workstation", "url": "http://b"},
             {"id": "broken"},
         ]}}
         with mock.patch.multiple(
-            utils, FLEET_ENABLED=True, FLEET_HOSTS=HOSTS, FLEET_SELF_ID="mac", CONFIG=config,
+            utils, FLEET_ENABLED=True, FLEET_HOSTS=HOSTS, FLEET_SELF_ID="laptop", CONFIG=config,
         ):
             self.assertTrue(any("skipped" in w for w in utils._fleet_warnings()))
 
@@ -137,13 +137,13 @@ class FleetEndpointTests(unittest.TestCase):
             utils,
             FLEET_ENABLED=True,
             FLEET_HOSTS=HOSTS,
-            FLEET_SELF_ID="mac",
+            FLEET_SELF_ID="laptop",
             FLEET_POLL_SECONDS=15,
         ):
             payload = web_app.fleet()
-        self.assertEqual(payload["self"], "mac")
+        self.assertEqual(payload["self"], "laptop")
         self.assertEqual(payload["poll_seconds"], 15)
-        self.assertEqual([h["id"] for h in payload["hosts"]], ["mac", "jarvis"])
+        self.assertEqual([h["id"] for h in payload["hosts"]], ["laptop", "workstation"])
 
     def test_fleet_status_separates_waiting_from_running(self):
         sessions = [
@@ -160,10 +160,10 @@ class FleetEndpointTests(unittest.TestCase):
 
         with mock.patch.object(web_app, "_manager", manager), \
                 mock.patch.object(web_app, "_store", store), \
-                mock.patch.object(utils, "FLEET_SELF_ID", "jarvis"):
+                mock.patch.object(utils, "FLEET_SELF_ID", "workstation"):
             payload = web_app.fleet_status()
 
-        self.assertEqual(payload["host_id"], "jarvis")
+        self.assertEqual(payload["host_id"], "workstation")
         self.assertEqual(payload["running"], 1)
         self.assertEqual(payload["waiting_approval"], 1)
 

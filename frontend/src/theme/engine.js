@@ -51,7 +51,7 @@ export const GLASS_PRESETS = [
 ]
 
 export const DEFAULT_SPEC = {
-  paletteId: 'jarvis',
+  paletteId: 'ember',
   accent: null,
   fontId: 'default',
   radiusId: 'default',

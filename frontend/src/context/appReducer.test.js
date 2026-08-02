@@ -131,14 +131,14 @@ test('SET_RUN_SETTINGS updates current meta and the session tree copy', () => {
 // under the wrong label.
 
 const FLEET = [
-  { id: 'mac', label: 'MacBook', url: 'http://127.0.0.1:8420', self: true },
-  { id: 'jarvis', label: 'Jarvis', url: 'http://127.0.0.1:8421', self: false },
+  { id: 'laptop', label: 'Laptop', url: 'http://127.0.0.1:8420', self: true },
+  { id: 'workstation', label: 'Workstation', url: 'http://127.0.0.1:8421', self: false },
 ]
 
 function loadedHostState() {
   let state = reducer(initialState, {
     type: 'SET_FLEET',
-    payload: { hosts: FLEET, activeHostId: 'mac' },
+    payload: { hosts: FLEET, activeHostId: 'laptop' },
   })
   state = reducer(state, {
     type: 'SET_TREE',
@@ -162,9 +162,9 @@ test('SWITCH_HOST clears every slice owned by the machine being left', () => {
   assert.equal(before.currentSessionId, 's1')
   assert.equal(before.projects.length, 1)
 
-  const after = reducer(before, { type: 'SWITCH_HOST', payload: { hostId: 'jarvis' } })
+  const after = reducer(before, { type: 'SWITCH_HOST', payload: { hostId: 'workstation' } })
 
-  assert.equal(after.activeHostId, 'jarvis')
+  assert.equal(after.activeHostId, 'workstation')
   assert.equal(after.hostSwitching, true)
   assert.equal(after.currentSessionId, null)
   assert.equal(after.currentMeta, null)
@@ -184,13 +184,13 @@ test('SWITCH_HOST keeps the fleet registry and cross-host statuses', () => {
   let state = loadedHostState()
   state = reducer(state, {
     type: 'SET_HOST_STATUS',
-    payload: { hostId: 'jarvis', status: { online: true, running: 1, waitingApproval: 0 } },
+    payload: { hostId: 'workstation', status: { online: true, running: 1, waitingApproval: 0 } },
   })
 
-  const after = reducer(state, { type: 'SWITCH_HOST', payload: { hostId: 'jarvis' } })
+  const after = reducer(state, { type: 'SWITCH_HOST', payload: { hostId: 'workstation' } })
 
   assert.deepEqual(after.fleetHosts, FLEET)
-  assert.deepEqual(after.fleetStatuses.jarvis, { online: true, running: 1, waitingApproval: 0 })
+  assert.deepEqual(after.fleetStatuses.workstation, { online: true, running: 1, waitingApproval: 0 })
 })
 
 test('SWITCH_HOST preserves panel layout, which is a user preference', () => {
@@ -198,14 +198,14 @@ test('SWITCH_HOST preserves panel layout, which is a user preference', () => {
   state = reducer(state, { type: 'TOGGLE_WORKSPACE_PANEL' })
   state = reducer(state, { type: 'SET_WORKSPACE_TAB', payload: 'files' })
 
-  const after = reducer(state, { type: 'SWITCH_HOST', payload: { hostId: 'jarvis' } })
+  const after = reducer(state, { type: 'SWITCH_HOST', payload: { hostId: 'workstation' } })
 
   assert.equal(after.workspacePanelOpen, state.workspacePanelOpen)
   assert.equal(after.workspacePanelTab, 'files')
 })
 
 test('the new host tree ends the switching state', () => {
-  const switched = reducer(loadedHostState(), { type: 'SWITCH_HOST', payload: { hostId: 'jarvis' } })
+  const switched = reducer(loadedHostState(), { type: 'SWITCH_HOST', payload: { hostId: 'workstation' } })
   const loaded = reducer(switched, {
     type: 'SET_TREE',
     payload: { projects: [], sessions: {} },
@@ -215,7 +215,7 @@ test('the new host tree ends the switching state', () => {
 
 test('SET_HOST_STATUS returns the same state when nothing changed', () => {
   const status = { online: true, running: 0, waitingApproval: 0 }
-  const first = reducer(initialState, { type: 'SET_HOST_STATUS', payload: { hostId: 'jarvis', status } })
-  const second = reducer(first, { type: 'SET_HOST_STATUS', payload: { hostId: 'jarvis', status: { ...status } } })
+  const first = reducer(initialState, { type: 'SET_HOST_STATUS', payload: { hostId: 'workstation', status } })
+  const second = reducer(first, { type: 'SET_HOST_STATUS', payload: { hostId: 'workstation', status: { ...status } } })
   assert.equal(second, first)
 })
