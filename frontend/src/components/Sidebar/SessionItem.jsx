@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useAppDispatch, useAppSelector } from '../../context/AppContext'
 import InlineEdit from './InlineEdit'
 import { relativeTime } from '../../utils'
+import { runStateBadge } from '../../runStates'
 import { downloadSessionBackup, downloadSessionExport } from '../../api'
 
 export default function SessionItem({ session, isActive, onSelect, onRename, onMove, onDelete }) {
@@ -49,12 +50,8 @@ export default function SessionItem({ session, isActive, onSelect, onRename, onM
         >
           {runState && (
             <span
-              className={`shrink-0 w-1.5 h-1.5 rounded-full ${
-                runState === 'waiting_approval'
-                  ? 'bg-warn shadow-[0_0_5px_var(--color-warn)]'
-                  : 'bg-ok animate-pulse'
-              }`}
-              title={runState === 'waiting_approval' ? 'Waiting for approval' : 'Run in progress'}
+              className={`shrink-0 w-1.5 h-1.5 rounded-full ${runStateBadge(runState).dotClass}`}
+              title={runStateBadge(runState).label}
             />
           )}
           <span className="truncate">{session.title || session.id.slice(0, 8)}</span>

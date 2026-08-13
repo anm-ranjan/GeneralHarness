@@ -55,6 +55,17 @@ class AgentUI(typing.Protocol):
         this."""
         ...
 
+    def ask_user_question(
+        self,
+        question: str,
+        options: list[str] | None = None,
+        allow_free_text: bool = True,
+    ) -> str | None:
+        """Optional: put one clarifying question to the user and wait for the
+        answer, returning None if unanswered. Callers feature-detect with
+        hasattr, so UIs without a question surface may omit this."""
+        ...
+
     def prompt_user_input(self, prompt_text: str) -> str:
         """Raises EOFError or KeyboardInterrupt on exit."""
         ...

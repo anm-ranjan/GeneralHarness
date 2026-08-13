@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { applyRunState, snapshotRunStates, runStateNotification } from './runStates.js'
+import { applyRunState, snapshotRunStates, runStateBadge, runStateNotification } from './runStates.js'
 
 test('applyRunState tracks non-idle states and drops idle sessions', () => {
   let states = {}
@@ -37,4 +37,17 @@ test('runStateNotification fires for background approvals and completions', () =
   assert.equal(runStateNotification('running', 'a', 'idle', 'a', 'My Session'), null)
   assert.equal(runStateNotification(undefined, 'a', 'idle', 'other', 'My Session'), null)
   assert.equal(runStateNotification(undefined, 'a', 'running', 'other', 'My Session'), null)
+})
+
+test('a session waiting on an answer gets its own badge and notification', () => {
+  assert.equal(runStateBadge('waiting_input').label, 'Waiting for an answer')
+  assert.notEqual(runStateBadge('waiting_input').dotClass, runStateBadge('waiting_approval').dotClass)
+  assert.equal(runStateBadge('running').label, 'Run in progress')
+
+  const asking = runStateNotification('running', 'ses_b', 'waiting_input', 'ses_a', 'Parser work')
+  assert.equal(asking.title, 'Question waiting')
+
+  // Finishing from a waiting-for-answer state still reads as a completed run.
+  const done = runStateNotification('waiting_input', 'ses_b', 'idle', 'ses_a', 'Parser work')
+  assert.equal(done.title, 'Run finished')
 })

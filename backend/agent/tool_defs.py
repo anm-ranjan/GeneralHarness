@@ -264,6 +264,38 @@ READ_ONLY_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_user",
+            "description": (
+                "Ask the user one clarifying question and wait for their answer. Use it when the request is "
+                "genuinely ambiguous and different readings would lead to materially different work - a "
+                "missing target file, two plausible interpretations of the goal, an unstated constraint. "
+                "Do NOT use it for questions you can answer yourself by reading the code, for permission to "
+                "continue, or to confirm work you have already done.\n"
+                "Ask exactly one question per call: to ask several, call it again after each answer so the "
+                "next question can take the previous answer into account. Offer options when the plausible "
+                "answers are a short closed set; leave them out for open questions. If the answer comes back "
+                "empty the user declined to answer - proceed on your best judgement and say what you assumed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The question, in one sentence. Be concrete and self-contained.",
+                    },
+                    "options": {
+                        "type": "array",
+                        "description": "Optional short answers to choose from, in order of preference.",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": ["question"],
+            },
+        },
+    },
 ]
 
 WRITE_TOOLS = [

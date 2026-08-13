@@ -120,6 +120,23 @@ def fake_sdk(captured):
             self.subtype = "success"
             self.usage = {"input_tokens": 3}
 
+    class SdkMcpTool:
+        def __init__(self, name, description, input_schema, handler):
+            self.name = name
+            self.description = description
+            self.input_schema = input_schema
+            self.handler = handler
+
+    def tool(name, description, input_schema):
+        def decorate(handler):
+            return SdkMcpTool(name, description, input_schema, handler)
+        return decorate
+
+    def create_sdk_mcp_server(name, version="1.0.0", tools=None):
+        server = {"name": name, "tools": {t.name: t for t in (tools or [])}}
+        captured["mcp_server"] = server
+        return server
+
     class PermissionResultAllow:
         pass
 
@@ -153,7 +170,7 @@ def fake_sdk(captured):
     for value in (
         AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, PermissionResultAllow,
         PermissionResultDeny, ResultMessage, StreamEvent, SystemMessage, TextBlock,
-        ThinkingBlock, ToolUseBlock,
+        ThinkingBlock, ToolUseBlock, tool, create_sdk_mcp_server,
     ):
         setattr(module, value.__name__, value)
     return module
@@ -254,6 +271,75 @@ class ClaudeAgentProviderTests(unittest.TestCase):
         # block carries the full text for replay.
         self.assertEqual(ui.thinking, ["Weighing it"])
         self.assertEqual(ui.assistant, ["Done"])
+
+    def test_the_ask_tool_is_registered_and_returns_the_user_answer(self):
+        captured = {}
+        store = FakeStore()
+        ui = FakeUI()
+        ui.answers = ["the strict parser"]
+
+        def ask_user_question(question, options=None, allow_free_text=True):
+            ui.asked.append((question, list(options or []), allow_free_text))
+            return ui.answers.pop(0) if ui.answers else None
+
+        ui.asked = []
+        ui.ask_user_question = ask_user_question
+        meta = SimpleNamespace(
+            id="ses_claude", project_id="project", task_id="task", kind="project",
+            message_count=1, claude_state={},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            sdk = fake_sdk(captured)
+            with (
+                patch.dict(sys.modules, {"claude_agent_sdk": sdk}),
+                patch.object(provider_module.utils, "UI_VERBOSE_TOOLS", False),
+                patch.object(provider_module.utils, "CLAUDE_AGENT_PERMISSION_MODE", ""),
+            ):
+                provider = provider_module.ClaudeAgentProvider(
+                    timeout_seconds=30, allowed_roots=[tmp], approval_mode="always_ask",
+                )
+                asyncio.run(provider.run(
+                    meta=meta, user_prompt="Continue", workspace=tmp, ui=ui,
+                    cancel_event=threading.Event(), store=store,
+                ))
+
+            server = captured["options"]["mcp_servers"][provider_module.ASK_SERVER_NAME]
+            self.assertIs(server, captured["mcp_server"])
+            # Naming the tool in allowed_tools would shadow the approval
+            # callback for it, so registration alone must be enough.
+            self.assertNotIn("allowed_tools", captured["options"])
+
+            handler = server["tools"][provider_module.ASK_TOOL_NAME].handler
+            result = asyncio.run(handler({"question": "Which parser?", "options": ["fast", "strict"]}))
+
+        self.assertEqual(ui.asked, [("Which parser?", ["fast", "strict"], True)])
+        self.assertEqual(result["content"][0]["text"], "The user answered: the strict parser")
+
+        unanswered = asyncio.run(handler({"question": "Which parser?"}))
+        self.assertTrue(unanswered["content"][0]["text"].startswith("No answer:"))
+
+    def test_the_ask_tool_is_not_offered_to_a_ui_that_cannot_ask(self):
+        captured = {}
+        store = FakeStore()
+        meta = SimpleNamespace(
+            id="ses_claude", project_id="project", task_id="task", kind="project",
+            message_count=1, claude_state={},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            sdk = fake_sdk(captured)
+            with (
+                patch.dict(sys.modules, {"claude_agent_sdk": sdk}),
+                patch.object(provider_module.utils, "CLAUDE_AGENT_PERMISSION_MODE", ""),
+            ):
+                provider = provider_module.ClaudeAgentProvider(
+                    timeout_seconds=30, allowed_roots=[tmp], approval_mode="always_ask",
+                )
+                asyncio.run(provider.run(
+                    meta=meta, user_prompt="Continue", workspace=tmp, ui=FakeUI(),
+                    cancel_event=threading.Event(), store=store,
+                ))
+
+        self.assertNotIn("mcp_servers", captured["options"])
 
     def test_verbosity_follows_the_run_setting_over_the_global_default(self):
         with patch.object(provider_module.utils, "UI_VERBOSE_TOOLS", True):

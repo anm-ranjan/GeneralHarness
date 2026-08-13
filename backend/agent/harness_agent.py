@@ -833,6 +833,16 @@ def _plan_fragment() -> str:
     )
 
 
+def _clarification_fragment() -> str:
+    return (
+        "AMBIGUITY: When the request could reasonably mean two different things and the readings would lead "
+        "to materially different work, call ask_user with one concrete question and wait for the answer "
+        "rather than guessing. Ask again for each follow-up question so each one can build on the last "
+        "answer. Do not use it for anything you can settle by reading the code, and do not use it to ask "
+        "permission to continue. "
+    )
+
+
 def _build_managed_system_content(workspace_root: str | None = None) -> str:
     return (
         "You are a pragmatic coding agent with access to file listing, filename search, content search, file read, web request, "
@@ -851,6 +861,7 @@ def _build_managed_system_content(workspace_root: str | None = None) -> str:
         "shell_run is ONLY for running scripts, tests, builds, and commands that have no tool equivalent. "
         + _gather_context_fragment()
         + _plan_fragment()
+        + _clarification_fragment()
         + utils.skill_registry.prompt_fragment()
         + f"You can only access these directories: {', '.join(utils.ALLOWED_PATHS)}. "
         + _workspace_fragment(workspace_root)
@@ -885,6 +896,7 @@ def _build_native_system_content(workspace_root: str | None = None) -> str:
         "Always inspect before editing. "
         + _gather_context_fragment()
         + _plan_fragment()
+        + _clarification_fragment()
         + utils.skill_registry.prompt_fragment()
         + f"You can only access these directories: {', '.join(utils.ALLOWED_PATHS)}. "
         + _workspace_fragment(workspace_root)
@@ -989,6 +1001,34 @@ def request_approval(tool_name: str, arguments: dict, ui=None) -> bool:
 # Tool execution
 # ---------------------------------------------------------------------------
 
+def _ask_user(arguments: dict, ui) -> str:
+    """Put one clarifying question to the user and return their answer.
+
+    A UI without a question surface (or a user who lets it time out) yields no
+    answer; the model is told to continue on its own judgement rather than
+    being left to guess what the silence meant.
+    """
+    question = str(arguments.get("question", "")).strip()
+    if not question:
+        return "ERROR: ask_user requires a question."
+    options = arguments.get("options") or []
+    if not isinstance(options, list):
+        return "ERROR: ask_user options must be a list of strings."
+    ask = getattr(ui, "ask_user_question", None) if ui else None
+    if not callable(ask):
+        return (
+            "No answer: this interface cannot ask the user questions. "
+            "Proceed on your best judgement and state the assumption you made."
+        )
+    answer = ask(question, [str(option) for option in options], True)
+    if answer is None or not str(answer).strip():
+        return (
+            "No answer: the user did not respond. "
+            "Proceed on your best judgement and state the assumption you made."
+        )
+    return f"The user answered: {answer}"
+
+
 def execute_tool(name: str, arguments: dict, ui=None) -> str:
     err = utils._check_required_args(name, arguments)
     if err:
@@ -1006,6 +1046,8 @@ def execute_tool(name: str, arguments: dict, ui=None) -> str:
             except ValueError:
                 pass
         return result
+    if name == "ask_user":
+        return _ask_user(arguments, ui)
     if not request_approval(name, arguments, ui=ui):
         return "ERROR: Tool call denied by user."
     try:
@@ -1229,6 +1271,8 @@ def _tool_status_line(func_name: str, func_args: dict) -> str:
     if func_name == "plan_update":
         n = len(func_args.get("items") or [])
         return f"Plan: {n} step{'s' if n != 1 else ''}"
+    if func_name == "ask_user":
+        return f"Ask: {func_args.get('question', '')}"
     if func_name == "web_request":
         return f"Fetch {func_args.get('url', '')}"
     if func_name == "skill_list":

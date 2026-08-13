@@ -7,6 +7,10 @@ from fastapi import WebSocket
 
 from web_models import EventEnvelope
 
+# A question waits on a person, not on a click-through, so it holds the run far
+# longer than the 300s approval wait before giving up.
+QUESTION_TIMEOUT_SECONDS = 1800
+
 
 class ConnectionManager:
     def __init__(self):
@@ -68,6 +72,34 @@ class ActiveRun:
         self._pending_approval_id: str | None = None
         self._approval_event = threading.Event()
         self._approval_result: bool = False
+        self._pending_question_id: str | None = None
+        self._question_event = threading.Event()
+        self._question_answer: str | None = None
+
+    def ask_question(self, question_id: str, timeout: float = QUESTION_TIMEOUT_SECONDS) -> str | None:
+        """Block the run until the user answers, or until they don't.
+
+        A person reading a question and typing an answer takes far longer than
+        waving through a tool call, so this waits much longer than an approval.
+        Returns None on timeout, which the caller reports as unanswered rather
+        than treating as an answer.
+        """
+        self._pending_question_id = question_id
+        self._question_answer = None
+        self._question_event.clear()
+        self._question_event.wait(timeout=timeout)
+        answered = self._question_event.is_set()
+        answer = self._question_answer
+        self._pending_question_id = None
+        self._question_answer = None
+        return answer if answered else None
+
+    def answer_question(self, question_id: str, answer: str) -> bool:
+        if self._pending_question_id != question_id:
+            return False
+        self._question_answer = answer
+        self._question_event.set()
+        return True
 
     def request_approval(self, approval_id: str) -> bool:
         self._pending_approval_id = approval_id
@@ -145,4 +177,11 @@ class SessionManager:
             session_id
             for session_id, run in self._active_runs.items()
             if run._pending_approval_id
+        ]
+
+    def pending_question_session_ids(self) -> list[str]:
+        return [
+            session_id
+            for session_id, run in self._active_runs.items()
+            if run._pending_question_id
         ]

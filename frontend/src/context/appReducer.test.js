@@ -286,3 +286,21 @@ test('SET_SESSION_TITLE updates the sidebar entry and the open session', () => {
     next,
   )
 })
+
+test('RESOLVE_QUESTION marks only the matching question', () => {
+  const asked = ['qst_1', 'qst_2'].reduce(
+    (state, questionId) => reducer(state, {
+      type: 'APPEND_STAGE_ITEM',
+      payload: { type: 'question', questionId, question: 'q', answer: null, answered: null },
+    }),
+    initialState,
+  )
+
+  const next = reducer(asked, {
+    type: 'RESOLVE_QUESTION',
+    payload: { questionId: 'qst_1', answer: 'strict', answered: true },
+  })
+
+  assert.deepEqual(next.stageItems.map(i => i.answer), ['strict', null])
+  assert.deepEqual(next.stageItems.map(i => i.answered), [true, null])
+})

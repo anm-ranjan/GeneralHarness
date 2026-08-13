@@ -3,6 +3,7 @@ import { useApp, useAppSelector } from '../../context/AppContext'
 import useSelectSession from '../../hooks/useSelectSession'
 import { recentSessions } from '../../recentSessions'
 import { relativeTime } from '../../utils'
+import { runStateBadge } from '../../runStates'
 
 // One recent-session row. Mirrors SessionItem's run-state dot so a background run
 // reads the same way here as it does in the sidebar.
@@ -18,12 +19,8 @@ function RecentSessionRow({ session, onSelect }) {
     >
       {runState && (
         <span
-          className={`shrink-0 self-center h-1.5 w-1.5 rounded-full ${
-            runState === 'waiting_approval'
-              ? 'bg-warn shadow-[0_0_5px_var(--color-warn)]'
-              : 'bg-ok animate-pulse'
-          }`}
-          title={runState === 'waiting_approval' ? 'Waiting for approval' : 'Run in progress'}
+          className={`shrink-0 self-center h-1.5 w-1.5 rounded-full ${runStateBadge(runState).dotClass}`}
+          title={runStateBadge(runState).label}
         />
       )}
       <span className="max-w-[55%] truncate text-[13px] text-text-default group-hover:text-accent">

@@ -649,6 +649,16 @@ export function reducer(state, action) {
       return { ...state, stageItems: items }
     }
 
+    case 'RESOLVE_QUESTION': {
+      const { questionId, answer, answered } = action.payload
+      const items = state.stageItems.map(item =>
+        item.type === 'question' && item.questionId === questionId
+          ? { ...item, answer, answered }
+          : item
+      )
+      return { ...state, stageItems: items }
+    }
+
     case 'UPDATE_SESSION_META':
       return {
         ...state,

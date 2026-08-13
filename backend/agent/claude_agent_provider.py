@@ -65,6 +65,8 @@ Answer clearly and directly; most questions need no tool at all.
 Rules:
 - Read, write, modify, list, and search only inside the allowed filesystem roots above.
 - Be concise: no verbose tool narration, no risk disclaimers, no unnecessary explanation.
+- When the request is genuinely ambiguous and the readings lead to materially different answers,
+  call {ASK_TOOL_QUALIFIED} with one question and wait, rather than guessing.
 """
     return f"""You are running inside a local agent harness for coding sessions.
 Context: project={meta.project_id}, task={meta.task_id}
@@ -76,6 +78,9 @@ Rules:
 - Read, write, modify, list, and search only inside the allowed filesystem roots above.
 - Small, focused changes. Modify existing files; do NOT create new files unless the task requires them.
 - Be concise: no verbose tool narration, no risk disclaimers, no unnecessary explanation.
+- When the request is genuinely ambiguous and the readings lead to materially different work, call
+  {ASK_TOOL_QUALIFIED} with one concrete question and wait for the answer rather than guessing. Ask
+  again for each follow-up. Do not use it for anything you can settle by reading the code.
 - End with a short summary: files changed, commands run, test result.
 """
 
@@ -90,6 +95,55 @@ Don't redo completed work.
 
 {user_prompt}
 """
+
+
+ASK_TOOL_NAME = "ask_user"
+ASK_SERVER_NAME = "harness"
+# Fully-qualified name the CLI uses for a tool served by an in-process SDK
+# server, which is what permission and allow-list matching sees.
+ASK_TOOL_QUALIFIED = f"mcp__{ASK_SERVER_NAME}__{ASK_TOOL_NAME}"
+
+ASK_TOOL_DESCRIPTION = (
+    "Ask the user one clarifying question and wait for their answer. Use it when the request is "
+    "genuinely ambiguous and the readings would lead to materially different work. Do not use it "
+    "for questions you can answer by reading the code, or to ask permission to continue. Ask one "
+    "question per call; call it again for follow-ups so each builds on the last answer."
+)
+
+
+def _build_ask_server(ui, sdk):
+    """In-process MCP server exposing the harness question round-trip.
+
+    Returns None for UIs that cannot ask questions, in which case the tool is
+    not offered at all rather than being offered and always failing.
+    """
+    ask = getattr(ui, "ask_user_question", None)
+    if not callable(ask):
+        return None
+
+    @sdk.tool(
+        ASK_TOOL_NAME,
+        ASK_TOOL_DESCRIPTION,
+        {"question": str, "options": list},
+    )
+    async def ask_user(args: dict[str, Any]) -> dict[str, Any]:
+        question = str(args.get("question", "")).strip()
+        if not question:
+            return {"content": [{"type": "text", "text": "ERROR: a question is required."}]}
+        raw_options = args.get("options")
+        options = [str(o) for o in raw_options if str(o).strip()] if isinstance(raw_options, list) else []
+        answer = await asyncio.to_thread(ask, question, options, True)
+        text = (
+            f"The user answered: {answer}"
+            if answer is not None and str(answer).strip()
+            else (
+                "No answer: the user did not respond. Proceed on your best judgement "
+                "and state the assumption you made."
+            )
+        )
+        return {"content": [{"type": "text", "text": text}]}
+
+    return sdk.create_sdk_mcp_server(name=ASK_SERVER_NAME, tools=[ask_user])
 
 
 def _verbose(ui) -> bool:
@@ -218,6 +272,13 @@ class ClaudeAgentProvider:
         run_started_at = time.perf_counter()
         verbose = _verbose(ui)
         permission_mode = _permission_mode_for(self.approval_mode)
+        ask_server = _build_ask_server(ui, sdk)
+        # Registering the server is enough to make the tool callable; it is
+        # auto-approved in can_use_tool below rather than through allowed_tools,
+        # which would shadow that callback for every tool it names.
+        ask_options: dict[str, Any] = (
+            {"mcp_servers": {ASK_SERVER_NAME: ask_server}} if ask_server is not None else {}
+        )
         streaming = any(
             callable(getattr(ui, hook, None))
             for hook in ("show_assistant_delta", "show_thinking_delta")
@@ -226,7 +287,9 @@ class ClaudeAgentProvider:
         async def can_use_tool(tool_name: str, tool_input: dict[str, Any], context):
             # Harness-level approval gate; only consulted for calls the SDK
             # does not auto-allow under the active permission mode.
-            if tool_name in _READ_ONLY_TOOLS:
+            if tool_name in _READ_ONLY_TOOLS or tool_name == ASK_TOOL_QUALIFIED:
+                # Asking the user a question is its own confirmation; gating it
+                # behind an approval would make them click before they answer.
                 return PermissionResultAllow()
             if self.approval_mode == "shell_only" and tool_name != "Bash":
                 return PermissionResultAllow()
@@ -253,6 +316,7 @@ class ClaudeAgentProvider:
             can_use_tool=can_use_tool if permission_mode not in ("bypassPermissions",) else None,
             setting_sources=[],
             include_partial_messages=streaming,
+            **ask_options,
         )
 
         ui.show_user_message(display_prompt if display_prompt is not None else user_prompt, display_images)

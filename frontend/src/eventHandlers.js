@@ -190,6 +190,31 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       dispatch({ type: 'RESOLVE_APPROVAL', payload: { approvalId: data.approval_id, approved: data.approved } })
       break
 
+    case 'question_required':
+      dispatch({ type: 'CLEAR_ASSISTANT_STREAM' })
+      dispatch({ type: 'CLEAR_THINKING_STREAM' })
+      dispatch({ type: 'CLEAR_ITERATION' })
+      dispatch({
+        type: 'APPEND_STAGE_ITEM',
+        payload: {
+          type: 'question',
+          questionId: data.question_id,
+          question: data.question,
+          options: data.options || [],
+          allowFreeText: data.allow_free_text !== false,
+          answer: null,
+          answered: null,
+        },
+      })
+      break
+
+    case 'question_resolved':
+      dispatch({
+        type: 'RESOLVE_QUESTION',
+        payload: { questionId: data.question_id, answer: data.answer || '', answered: !!data.answered },
+      })
+      break
+
     case 'api_metrics': {
       const parts = []
       if (data.input_tokens) parts.push(`in: ${data.input_tokens}`)

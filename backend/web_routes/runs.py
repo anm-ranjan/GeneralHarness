@@ -7,7 +7,9 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel as _PydanticBaseModel
 
-from web_models import ApprovalResponse, EventEnvelope, EventType, SendMessageRequest
+from web_models import (
+    ApprovalResponse, EventEnvelope, EventType, QuestionResponse, SendMessageRequest,
+)
 
 import web_app
 import web_helpers
@@ -28,9 +30,15 @@ async def global_events(websocket: WebSocket):
     await web_app._manager.connections.connect_global(websocket)
     try:
         waiting = set(web_app._manager.pending_approval_session_ids())
+        asking = set(web_app._manager.pending_question_session_ids())
         sessions = []
         for meta in web_app._store.list_sessions():
-            state = "waiting_approval" if meta.id in waiting else meta.status
+            if meta.id in waiting:
+                state = "waiting_approval"
+            elif meta.id in asking:
+                state = "waiting_input"
+            else:
+                state = meta.status
             if state != "idle":
                 sessions.append({"session_id": meta.id, "state": state})
         await websocket.send_json({"type": "run_state_snapshot", "sessions": sessions})
@@ -136,6 +144,17 @@ async def resolve_approval(session_id: str, req: ApprovalResponse):
     return {"status": "resolved", "approved": req.approved}
 
 
+@router.post("/api/sessions/{session_id}/question")
+async def answer_question(session_id: str, req: QuestionResponse):
+    run = web_app._manager.get_active_run(session_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="No active run")
+    ok = run.answer_question(req.question_id, req.answer)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Question ID mismatch or expired")
+    return {"status": "answered"}
+
+
 @router.delete("/api/sessions/{session_id}/queue/{message_id}")
 def remove_queued_message(session_id: str, message_id: str):
     with web_app._run_lock_for(session_id):
@@ -190,4 +209,8 @@ async def cancel_run(session_id: str):
     run.cancel_event.set()
     if run._pending_approval_id:
         run.resolve_approval(run._pending_approval_id, False)
+    if run._pending_question_id:
+        # Release the run thread; it is blocked on the answer and would
+        # otherwise sit there until the question timeout despite the cancel.
+        run.answer_question(run._pending_question_id, "")
     return {"status": "cancelling"}

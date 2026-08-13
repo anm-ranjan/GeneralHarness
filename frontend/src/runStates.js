@@ -23,6 +23,18 @@ export function snapshotRunStates(sessions) {
   return map
 }
 
+// Dot colour and tooltip for a session's run state, shared by every place that
+// shows the indicator so the states cannot drift apart between them.
+export function runStateBadge(runState) {
+  if (runState === 'waiting_approval') {
+    return { dotClass: 'bg-warn shadow-[0_0_5px_var(--color-warn)]', label: 'Waiting for approval' }
+  }
+  if (runState === 'waiting_input') {
+    return { dotClass: 'bg-accent shadow-[0_0_5px_var(--color-accent)]', label: 'Waiting for an answer' }
+  }
+  return { dotClass: 'bg-ok animate-pulse', label: 'Run in progress' }
+}
+
 // Decides whether a run-state transition for a non-selected session warrants
 // a desktop notification. Returns { title, body } or null.
 export function runStateNotification(prevState, sessionId, state, currentSessionId, sessionTitle) {
@@ -31,7 +43,10 @@ export function runStateNotification(prevState, sessionId, state, currentSession
   if (state === 'waiting_approval') {
     return { title: 'Approval needed', body: `Thread "${label}" is waiting for a tool approval.` }
   }
-  if (state === 'idle' && (prevState === 'running' || prevState === 'waiting_approval')) {
+  if (state === 'waiting_input') {
+    return { title: 'Question waiting', body: `Thread "${label}" is waiting for an answer.` }
+  }
+  if (state === 'idle' && (prevState === 'running' || prevState === 'waiting_approval' || prevState === 'waiting_input')) {
     return { title: 'Run finished', body: `Thread "${label}" completed its run.` }
   }
   return null

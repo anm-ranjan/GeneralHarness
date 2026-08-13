@@ -322,3 +322,48 @@ test('a completed thinking event replaces the streamed trace', () => {
   assert.deepEqual(ctx.actions.map(a => a.type), ['CLEAR_THINKING_STREAM', 'APPEND_THINKING'])
   assert.equal(ctx.actions.at(-1).payload, 'full reasoning')
 })
+
+test('question_required clears live streams and appends an unanswered question', () => {
+  const ctx = collect()
+  handleSessionEvent({
+    type: 'question_required',
+    data: {
+      question_id: 'qst_1',
+      question: 'Which parser?',
+      options: ['fast', 'strict'],
+      allow_free_text: true,
+    },
+  }, ctx.dispatch, ctx.stateRef)
+
+  assert.deepEqual(ctx.actions.map(a => a.type), [
+    'CLEAR_ASSISTANT_STREAM',
+    'CLEAR_THINKING_STREAM',
+    'CLEAR_ITERATION',
+    'APPEND_STAGE_ITEM',
+  ])
+  assert.deepEqual(ctx.actions.at(-1).payload, {
+    type: 'question',
+    questionId: 'qst_1',
+    question: 'Which parser?',
+    options: ['fast', 'strict'],
+    allowFreeText: true,
+    answer: null,
+    answered: null,
+  })
+})
+
+test('question_resolved records the answer, including when there was none', () => {
+  const ctx = collect()
+  handleSessionEvent({
+    type: 'question_resolved',
+    data: { question_id: 'qst_1', answer: 'strict', answered: true },
+  }, ctx.dispatch, ctx.stateRef)
+  assert.deepEqual(ctx.actions[0].payload, { questionId: 'qst_1', answer: 'strict', answered: true })
+
+  const timedOut = collect()
+  handleSessionEvent({
+    type: 'question_resolved',
+    data: { question_id: 'qst_2', answer: null, answered: false },
+  }, timedOut.dispatch, timedOut.stateRef)
+  assert.deepEqual(timedOut.actions[0].payload, { questionId: 'qst_2', answer: '', answered: false })
+})

@@ -41,6 +41,15 @@ export default function useApi() {
     }
   }, [dispatch])
 
+  const answerQuestion = useCallback(async (sessionId, questionId, answer) => {
+    dispatch({ type: 'RESOLVE_QUESTION', payload: { questionId, answer, answered: true } })
+    try {
+      await api('POST', `/api/sessions/${encodeURIComponent(sessionId)}/question`, { question_id: questionId, answer })
+    } catch (err) {
+      dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: err.detail || err.message } })
+    }
+  }, [dispatch])
+
   const cancelRun = useCallback(async (sessionId) => {
     dispatch({ type: 'SET_CANCELLING' })
     try {
@@ -61,5 +70,5 @@ export default function useApi() {
     }
   }, [dispatch])
 
-  return { sendMessage, sendSilentCommand, respondApproval, cancelRun, shutdown }
+  return { sendMessage, sendSilentCommand, respondApproval, answerQuestion, cancelRun, shutdown }
 }

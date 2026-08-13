@@ -926,16 +926,74 @@ class CodexAppServerProvider:
             )
             return
         if method == "item/tool/requestUserInput":
-            await self.transport.respond(msg["id"], {"answers": {}})
+            answers = await self._collect_user_answers(params, ui)
+            await self.transport.respond(msg["id"], {"answers": answers})
             return
         if method == "mcpServer/elicitation/request":
-            await self.transport.respond(
-                msg["id"], {"action": "decline", "content": None}
+            answer = await self._ask_one(
+                ui,
+                str(params.get("message") or params.get("prompt") or "").strip(),
+                [],
             )
+            if answer is None:
+                await self.transport.respond(
+                    msg["id"], {"action": "decline", "content": None}
+                )
+            else:
+                await self.transport.respond(
+                    msg["id"], {"action": "accept", "content": {"answer": answer}}
+                )
             return
         await self.transport.respond_error(
             msg["id"], -32601, f"MyHarness does not support server request {method}"
         )
+
+    @staticmethod
+    async def _ask_one(ui, question: str, options: list[str]) -> str | None:
+        """Put one question to the user, or give up if this UI cannot ask."""
+        ask = getattr(ui, "ask_user_question", None)
+        if not question or not callable(ask):
+            return None
+        answer = await asyncio.to_thread(ask, question, options, True)
+        answer = (answer or "").strip()
+        return answer or None
+
+    async def _collect_user_answers(self, params: dict[str, Any], ui) -> dict[str, str]:
+        """Answer a Codex requestUserInput, one question at a time.
+
+        The schema is experimental, so identifiers and option shapes are read
+        leniently: whatever key the request used to name a question is the key
+        its answer is returned under. Unanswered questions are simply absent,
+        which Codex reads as "no answer given".
+        """
+        questions = params.get("questions")
+        if not isinstance(questions, list):
+            return {}
+        answers: dict[str, str] = {}
+        for index, question in enumerate(questions):
+            if not isinstance(question, dict):
+                continue
+            key = next(
+                (
+                    str(question[field])
+                    for field in ("id", "questionId", "question_id", "header")
+                    if isinstance(question.get(field), (str, int))
+                ),
+                str(index),
+            )
+            text = str(question.get("question") or question.get("header") or "").strip()
+            options: list[str] = []
+            for option in question.get("options") or []:
+                if isinstance(option, str):
+                    options.append(option)
+                elif isinstance(option, dict):
+                    label = option.get("label") or option.get("value") or option.get("name")
+                    if isinstance(label, str) and label:
+                        options.append(label)
+            answer = await self._ask_one(ui, text, options)
+            if answer is not None:
+                answers[key] = answer
+        return answers
 
     @staticmethod
     def _route_delta(ui, phase: str, delta: str, deltas: list[str]) -> None:

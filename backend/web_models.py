@@ -18,6 +18,8 @@ class EventType(str, Enum):
     TOOL_RESULT = "tool_result"
     APPROVAL_REQUIRED = "approval_required"
     APPROVAL_RESOLVED = "approval_resolved"
+    QUESTION_REQUIRED = "question_required"
+    QUESTION_RESOLVED = "question_resolved"
     API_METRICS = "api_metrics"
     CONTEXT_USAGE = "context_usage"
     ITERATION = "iteration"
@@ -188,3 +190,7 @@ class ApprovalResponse(BaseModel):
     approval_id: str
     approved: bool
 
+
+class QuestionResponse(BaseModel):
+    question_id: str
+    answer: str

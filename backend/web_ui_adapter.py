@@ -255,6 +255,37 @@ class WebUI:
         )
         return approved
 
+    def ask_user_question(
+        self,
+        question: str,
+        options: list[str] | None = None,
+        allow_free_text: bool = True,
+    ) -> str | None:
+        """Put one question to the user and block the run until they answer.
+
+        Returns the answer text, or None if it went unanswered — callers tell
+        the model to proceed on its own judgement rather than inventing one.
+        """
+        question_id = f"qst_{uuid.uuid4().hex[:8]}"
+        choices = [str(option) for option in (options or []) if str(option).strip()]
+        self._emit(
+            EventType.QUESTION_REQUIRED,
+            {
+                "question_id": question_id,
+                "question": question,
+                "options": choices,
+                "allow_free_text": bool(allow_free_text) or not choices,
+            },
+        )
+        self._manager.notify_run_state(self._sid, "waiting_input")
+        answer = self._run.ask_question(question_id)
+        self._manager.notify_run_state(self._sid, "running")
+        self._emit(
+            EventType.QUESTION_RESOLVED,
+            {"question_id": question_id, "answer": answer, "answered": answer is not None},
+        )
+        return answer
+
     def snapshot_file_before_write(self, path: str) -> None:
         normalized = os.path.normpath(os.path.abspath(path))
         # Per-run manifest entry: baseline as of this run's first write.

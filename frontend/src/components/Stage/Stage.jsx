@@ -15,10 +15,11 @@ import ApprovalCard from './ApprovalCard'
 import CodexCommand from './CodexCommand'
 import CodexFileChange from './CodexFileChange'
 import ThinkingBlock from './ThinkingBlock'
+import QuestionCard from './QuestionCard'
 
 export default function Stage() {
   const { state, dispatch } = useApp()
-  const { respondApproval } = useApi()
+  const { respondApproval, answerQuestion } = useApi()
   const stageRef = useRef(null)
   const stateRef = useAppStateRef()
   const windowFetchRef = useRef(false)
@@ -99,6 +100,10 @@ export default function Stage() {
     (approvalId, approved) => respondApproval(sessionId, approvalId, approved),
     [respondApproval, sessionId],
   )
+  const handleQuestion = useCallback(
+    (questionId, answer) => answerQuestion(sessionId, questionId, answer),
+    [answerQuestion, sessionId],
+  )
 
   if (!sessionId) {
     return <SplashScreen />
@@ -139,6 +144,18 @@ export default function Stage() {
             diffPreview={item.diffPreview}
             resolved={item.resolved}
             onRespond={handleApproval}
+          />
+        )
+      case 'question':
+        return (
+          <QuestionCard
+            questionId={item.questionId}
+            question={item.question}
+            options={item.options}
+            allowFreeText={item.allowFreeText}
+            answer={item.answer}
+            answered={item.answered}
+            onRespond={handleQuestion}
           />
         )
       case 'codex_command':
