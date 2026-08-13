@@ -260,3 +260,29 @@ test('CLEAR_THINKING_STREAM only drops a trailing live trace', () => {
   })
   assert.equal(reducer(settled, { type: 'CLEAR_THINKING_STREAM' }), settled)
 })
+
+test('SET_SESSION_TITLE updates the sidebar entry and the open session', () => {
+  const seeded = reducer(initialState, {
+    type: 'SET_TREE',
+    payload: {
+      projects: [],
+      sessions: { ses_1: { id: 'ses_1', title: 'Thread 2026-08-14 09:30', project_id: 'p', task_id: 't' } },
+    },
+  })
+  const opened = { ...seeded, currentSessionId: 'ses_1', currentMeta: seeded.sessionsById.ses_1 }
+
+  const next = reducer(opened, {
+    type: 'SET_SESSION_TITLE',
+    payload: { sessionId: 'ses_1', title: 'Stream Codex reasoning' },
+  })
+
+  assert.equal(next.sessionsById.ses_1.title, 'Stream Codex reasoning')
+  assert.equal(next.currentMeta.title, 'Stream Codex reasoning')
+
+  // Unknown sessions and no-op renames leave state identical.
+  assert.equal(reducer(next, { type: 'SET_SESSION_TITLE', payload: { sessionId: 'ses_x', title: 'x' } }), next)
+  assert.equal(
+    reducer(next, { type: 'SET_SESSION_TITLE', payload: { sessionId: 'ses_1', title: 'Stream Codex reasoning' } }),
+    next,
+  )
+})

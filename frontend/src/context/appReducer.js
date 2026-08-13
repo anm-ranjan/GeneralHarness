@@ -407,6 +407,20 @@ export function reducer(state, action) {
       }
     }
 
+    case 'SET_SESSION_TITLE': {
+      const { sessionId, title } = action.payload
+      const known = state.sessionsById[sessionId]
+      if (!known || known.title === title) return state
+      return {
+        ...state,
+        sessionsById: { ...state.sessionsById, [sessionId]: { ...known, title } },
+        currentMeta:
+          state.currentMeta && state.currentMeta.id === sessionId
+            ? { ...state.currentMeta, title }
+            : state.currentMeta,
+      }
+    }
+
     case 'INCREMENT_WS_RECONNECTS':
       return { ...state, wsReconnects: state.wsReconnects + 1 }
 

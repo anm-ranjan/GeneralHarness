@@ -57,6 +57,11 @@ export default function useGlobalEvents(dispatch, stateRef, activeHostId) {
               type: 'SET_SESSION_RUN_STATE',
               payload: { sessionId: msg.session_id, state: msg.state },
             })
+          } else if (msg.type === 'session_renamed') {
+            dispatch({
+              type: 'SET_SESSION_TITLE',
+              payload: { sessionId: msg.session_id, title: msg.title },
+            })
           }
         } catch (err) {
           console.error('Global WS parse error:', err)

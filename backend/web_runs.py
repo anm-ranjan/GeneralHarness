@@ -254,6 +254,16 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
     web_app._manager.notify_run_state(session_id, "running")
     run_settings = _effective_run_settings(meta)
 
+    # Name the session from its opening prompt. Off the run's thread: the title
+    # is written straight to the store and broadcast, so a slow call delays the
+    # sidebar label, never the agent.
+    if web_helpers._has_default_title(meta):
+        threading.Thread(
+            target=web_helpers._autotitle_session,
+            args=(session_id, text, meta),
+            daemon=True,
+        ).start()
+
     if meta.provider == "codex-app-server":
         def worker():
             web_ui = WebUI(session_id, web_app._manager, run, web_app._store, run_settings=run_settings)
