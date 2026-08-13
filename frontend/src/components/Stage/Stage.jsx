@@ -110,6 +110,8 @@ export default function Stage() {
         return <MessageBubble role="user" text={item.text} images={item.images} attachments={item.attachments} />
       case 'thinking':
         return <ThinkingBlock markdown={item.markdown} />
+      case 'thinking_stream':
+        return <ThinkingBlock markdown={item.markdown} streaming />
       case 'assistant_message':
         return <MessageBubble role="assistant" markdown={item.markdown} />
       case 'assistant_stream':

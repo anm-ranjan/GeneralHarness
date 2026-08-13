@@ -32,6 +32,7 @@ class EventType(str, Enum):
     FILE_CHANGE = "file_change"
     GENERATED_ARTIFACT = "generated_artifact"
     THINKING = "thinking"
+    THINKING_DELTA = "thinking_delta"
     QUEUE_UPDATED = "queue_updated"
     WORKSPACE_CHANGED = "workspace_changed"
     PLAN_UPDATE = "plan_update"
@@ -186,3 +187,4 @@ class BrowseDirectoryRequest(BaseModel):
 class ApprovalResponse(BaseModel):
     approval_id: str
     approved: bool
+

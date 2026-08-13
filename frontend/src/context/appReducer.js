@@ -115,7 +115,14 @@ function buildNameMaps(projects) {
 }
 
 function appendStageItem(items, item) {
-  return [...items, { ...item, _id: item._id || `si_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }]
+  // A streamed thinking trace is live-only and never replayed, so anything
+  // appended after it supersedes it; dropping it here keeps a live stage and a
+  // reloaded one identical.
+  const base =
+    items.length && items[items.length - 1].type === 'thinking_stream' && item.type !== 'thinking_stream'
+      ? items.slice(0, -1)
+      : items
+  return [...base, { ...item, _id: item._id || `si_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }]
 }
 
 function finalizeLastWorkGroup(items) {
@@ -422,6 +429,43 @@ export function reducer(state, action) {
       const last = items[items.length - 1]
       if (!last || last.type !== 'assistant_stream') return state
       return { ...state, stageItems: items.slice(0, -1) }
+    }
+
+    case 'APPEND_THINKING_DELTA': {
+      const items = state.stageItems
+      const last = items[items.length - 1]
+      if (last && last.type === 'thinking_stream') {
+        const updated = [...items]
+        updated[updated.length - 1] = { ...last, markdown: last.markdown + action.payload }
+        return { ...state, stageItems: updated }
+      }
+      return {
+        ...state,
+        stageItems: appendStageItem(items, { type: 'thinking_stream', markdown: action.payload }),
+      }
+    }
+
+    case 'CLEAR_THINKING_STREAM': {
+      const items = state.stageItems
+      const last = items[items.length - 1]
+      if (!last || last.type !== 'thinking_stream') return state
+      return { ...state, stageItems: items.slice(0, -1) }
+    }
+
+    case 'APPEND_THINKING': {
+      // A turn produces many reasoning chunks; merge consecutive ones into a
+      // single block so the stage does not fill with collapsed stubs.
+      const items = state.stageItems
+      const last = items[items.length - 1]
+      if (last && last.type === 'thinking') {
+        const updated = [...items]
+        updated[updated.length - 1] = { ...last, markdown: `${last.markdown}\n\n${action.payload}` }
+        return { ...state, stageItems: updated }
+      }
+      return {
+        ...state,
+        stageItems: appendStageItem(items, { type: 'thinking', markdown: action.payload }),
+      }
     }
 
     case 'APPEND_TOOL_CALL': {

@@ -162,6 +162,7 @@ test('run_finished clears running indicators and silent command state', () => {
 
   assert.deepEqual(ctx.actions.map(a => a.type), [
     'CLEAR_ASSISTANT_STREAM',
+    'CLEAR_THINKING_STREAM',
     'FINALIZE_WORK_GROUP',
     'APPEND_STAGE_ITEM',
     'SET_IDLE',
@@ -299,4 +300,25 @@ test('new Codex file cards do not duplicate dedicated change records', () => {
     'APPEND_STAGE_ITEM',
     'APPEND_FILE_CHANGE',
   ])
+})
+
+test('thinking_delta streams live and is dropped during replay', () => {
+  const ctx = collect()
+  handleSessionEvent({ type: 'thinking_delta', data: { text: 'Che' } }, ctx.dispatch, ctx.stateRef)
+  handleSessionEvent({ type: 'thinking_delta', data: { text: 'cking' } }, ctx.dispatch, ctx.stateRef)
+
+  const deltas = ctx.actions.filter(a => a.type === 'APPEND_THINKING_DELTA')
+  assert.deepEqual(deltas.map(a => a.payload), ['Che', 'cking'])
+
+  const replaying = collect({ isReplaying: true })
+  handleSessionEvent({ type: 'thinking_delta', data: { text: 'ghost' } }, replaying.dispatch, replaying.stateRef)
+  assert.equal(replaying.actions.filter(a => a.type === 'APPEND_THINKING_DELTA').length, 0)
+})
+
+test('a completed thinking event replaces the streamed trace', () => {
+  const ctx = collect()
+  handleSessionEvent({ type: 'thinking', data: { markdown: 'full reasoning' } }, ctx.dispatch, ctx.stateRef)
+
+  assert.deepEqual(ctx.actions.map(a => a.type), ['CLEAR_THINKING_STREAM', 'APPEND_THINKING'])
+  assert.equal(ctx.actions.at(-1).payload, 'full reasoning')
 })

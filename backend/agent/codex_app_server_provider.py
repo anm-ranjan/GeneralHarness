@@ -520,6 +520,13 @@ def _workspace_for_meta(meta) -> str:
     return utils.ALLOWED_PATHS[0] if utils.ALLOWED_PATHS else os.getcwd()
 
 
+def _stream(ui, method_name: str, text: str) -> None:
+    """Call an optional streaming hook; UIs without live streaming omit it."""
+    hook = getattr(ui, method_name, None)
+    if callable(hook):
+        hook(text)
+
+
 def _is_server_request(msg: dict[str, Any]) -> bool:
     return "id" in msg and "method" in msg and "result" not in msg and "error" not in msg
 
@@ -775,6 +782,7 @@ class CodexAppServerProvider:
         final_messages: list[str] = []
         deltas: list[str] = []
         agent_message_phases: dict[str, str] = {}
+        pending_deltas: dict[str, list[str]] = {}
         stream_started_at = time.perf_counter()
         first_response_seen = False
         self._show_verbose_status(ui, "Waiting for Codex response…")
@@ -833,7 +841,7 @@ class CodexAppServerProvider:
                     before_final_count = len(final_messages)
                     store.append_codex_raw_event(meta.id, persisted_msg)
                     self._emit_ui_event(
-                        msg, ui, final_messages, deltas, agent_message_phases
+                        msg, ui, final_messages, deltas, agent_message_phases, pending_deltas
                     )
                     if (
                         not first_response_seen
@@ -930,6 +938,15 @@ class CodexAppServerProvider:
         )
 
     @staticmethod
+    def _route_delta(ui, phase: str, delta: str, deltas: list[str]) -> None:
+        """Send one streamed chunk to the answer stream or the thinking trace."""
+        if phase == "final_answer":
+            deltas.append(delta)
+            _stream(ui, "show_assistant_delta", delta)
+        else:
+            _stream(ui, "show_thinking_delta", delta)
+
+    @staticmethod
     def _verbose(ui) -> bool:
         run_settings = getattr(ui, "run_settings", {}) or {}
         value = run_settings.get("verbose_tools")
@@ -982,6 +999,7 @@ class CodexAppServerProvider:
         final_messages: list[str],
         deltas: list[str],
         agent_message_phases: dict[str, str],
+        pending_deltas: dict[str, list[str]],
     ) -> None:
         method = msg.get("method", "")
         params = msg.get("params") or {}
@@ -994,10 +1012,18 @@ class CodexAppServerProvider:
 
         if method == "item/agentMessage/delta":
             delta = params.get("delta") or params.get("text") or ""
+            if not isinstance(delta, str) or not delta:
+                return
             item_id = params.get("itemId") or params.get("item_id")
-            phase = agent_message_phases.get(item_id, "") if isinstance(item_id, str) else ""
-            if phase == "final_answer" and isinstance(delta, str):
-                deltas.append(delta)
+            key = item_id if isinstance(item_id, str) else ""
+            phase = agent_message_phases.get(key, "")
+            if not phase:
+                # A message's phase arrives with the item itself, which may not
+                # have been seen yet. Hold the delta until we know whether it is
+                # the final answer or reasoning, then flush it to the right sink.
+                pending_deltas.setdefault(key, []).append(delta)
+                return
+            self._route_delta(ui, phase, delta, deltas)
             return
 
         item = params.get("item") if isinstance(params, dict) else None
@@ -1005,12 +1031,22 @@ class CodexAppServerProvider:
             item_type = item.get("type", "")
             text = item.get("text") or item.get("message") or item.get("content")
             item_id = item.get("id")
-            if item_type in {"agent_message", "agentMessage"} and isinstance(text, str):
+            if item_type in {"agent_message", "agentMessage"}:
                 phase = item.get("phase", "")
-                if isinstance(item_id, str) and isinstance(phase, str):
-                    agent_message_phases[item_id] = phase
-                if phase == "final_answer":
-                    final_messages.append(text)
+                if not isinstance(phase, str):
+                    phase = ""
+                if phase:
+                    key = item_id if isinstance(item_id, str) else ""
+                    agent_message_phases[key] = phase
+                    for held in pending_deltas.pop(key, []):
+                        self._route_delta(ui, phase, held, deltas)
+                if isinstance(text, str) and text:
+                    if phase == "final_answer":
+                        final_messages.append(text)
+                    elif method == "item/completed":
+                        # Reasoning summary: the persisted counterpart of the
+                        # thinking deltas streamed above.
+                        ui.show_thinking(text)
                 return
             if (
                 item_type in {"file_change", "fileChange"}
@@ -1021,13 +1057,16 @@ class CodexAppServerProvider:
                     if verbose:
                         ui.show_codex_file_change(path, action)
                 return
-            if not verbose:
+            if item_type in {"command_execution", "commandExecution"}:
+                # Surfaced on start as well as completion, so a long-running
+                # command is visible while it runs rather than only after it.
+                if method in {"item/started", "item/completed"} and verbose:
+                    ui.show_codex_command(
+                        item.get("command", ""),
+                        item.get("status") or ("running" if method == "item/started" else "completed"),
+                    )
                 return
-            if (
-                item_type in {"command_execution", "commandExecution"}
-                and method == "item/completed"
-            ):
-                ui.show_codex_command(item.get("command", ""), item.get("status", "running"))
+            if not verbose:
                 return
             ui.show_codex_item(item_type or method, msg)
             return

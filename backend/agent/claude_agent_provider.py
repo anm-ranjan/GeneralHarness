@@ -92,6 +92,38 @@ Don't redo completed work.
 """
 
 
+def _verbose(ui) -> bool:
+    """Per-run verbosity, falling back to the global default."""
+    run_settings = getattr(ui, "run_settings", {}) or {}
+    value = run_settings.get("verbose_tools")
+    return value if isinstance(value, bool) else utils.UI_VERBOSE_TOOLS
+
+
+def _stream(ui, method_name: str, text: str) -> None:
+    """Call an optional streaming hook; UIs without live streaming omit it."""
+    hook = getattr(ui, method_name, None)
+    if callable(hook):
+        hook(text)
+
+
+def _emit_stream_delta(ui, event: dict[str, Any]) -> None:
+    """Forward one raw Anthropic stream event to the live answer or trace."""
+    if not isinstance(event, dict) or event.get("type") != "content_block_delta":
+        return
+    delta = event.get("delta")
+    if not isinstance(delta, dict):
+        return
+    kind = delta.get("type")
+    if kind == "text_delta":
+        text = delta.get("text")
+        if isinstance(text, str) and text:
+            _stream(ui, "show_assistant_delta", text)
+    elif kind == "thinking_delta":
+        thought = delta.get("thinking")
+        if isinstance(thought, str) and thought:
+            _stream(ui, "show_thinking_delta", thought)
+
+
 def _permission_mode_for(approval_mode: str) -> str:
     configured = (utils.CLAUDE_AGENT_PERMISSION_MODE or "").strip()
     if configured:
@@ -141,6 +173,7 @@ class ClaudeAgentProvider:
         display_images: list[dict] | None = None,
     ) -> None:
         try:
+            import claude_agent_sdk as sdk
             from claude_agent_sdk import (
                 AssistantMessage,
                 ClaudeAgentOptions,
@@ -148,6 +181,7 @@ class ClaudeAgentProvider:
                 PermissionResultAllow,
                 PermissionResultDeny,
                 ResultMessage,
+                StreamEvent,
                 SystemMessage,
                 TextBlock,
                 ThinkingBlock,
@@ -182,8 +216,12 @@ class ClaudeAgentProvider:
             store.update_session(meta)
 
         run_started_at = time.perf_counter()
-        verbose = utils.UI_VERBOSE_TOOLS
+        verbose = _verbose(ui)
         permission_mode = _permission_mode_for(self.approval_mode)
+        streaming = any(
+            callable(getattr(ui, hook, None))
+            for hook in ("show_assistant_delta", "show_thinking_delta")
+        )
 
         async def can_use_tool(tool_name: str, tool_input: dict[str, Any], context):
             # Harness-level approval gate; only consulted for calls the SDK
@@ -214,6 +252,7 @@ class ClaudeAgentProvider:
             cli_path=self.cli_path,
             can_use_tool=can_use_tool if permission_mode not in ("bypassPermissions",) else None,
             setting_sources=[],
+            include_partial_messages=streaming,
         )
 
         ui.show_user_message(display_prompt if display_prompt is not None else user_prompt, display_images)
@@ -246,8 +285,9 @@ class ClaudeAgentProvider:
                                         final_texts.append(block.text)
                                         ui.show_assistant_markdown(block.text)
                                     elif isinstance(block, ThinkingBlock):
-                                        if verbose and getattr(block, "thinking", "").strip():
-                                            ui.show_status("Claude is thinking…")
+                                        thought = getattr(block, "thinking", "") or ""
+                                        if thought.strip():
+                                            ui.show_thinking(thought)
                                     elif isinstance(block, ToolUseBlock) and verbose:
                                         if block.name == "Bash":
                                             ui.show_codex_command(
@@ -262,6 +302,8 @@ class ClaudeAgentProvider:
                                                 f"claude_tool:{block.name}",
                                                 {"name": block.name, "input": block.input},
                                             )
+                            elif isinstance(message, StreamEvent):
+                                _emit_stream_delta(ui, message.event)
                             elif isinstance(message, SystemMessage):
                                 if message.subtype == "init":
                                     session_id = (message.data or {}).get("session_id")

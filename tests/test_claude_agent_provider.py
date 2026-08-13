@@ -17,10 +17,14 @@ import claude_agent_provider as provider_module
 
 
 class FakeUI:
-    def __init__(self):
+    def __init__(self, run_settings=None):
         self.assistant = []
         self.errors = []
         self.finished = []
+        self.thinking = []
+        self.thinking_deltas = []
+        self.assistant_deltas = []
+        self.run_settings = run_settings or {}
 
     def show_user_message(self, *_args):
         pass
@@ -36,6 +40,15 @@ class FakeUI:
 
     def show_agent_finished(self, reason):
         self.finished.append(reason)
+
+    def show_thinking(self, text):
+        self.thinking.append(text)
+
+    def show_thinking_delta(self, text):
+        self.thinking_deltas.append(text)
+
+    def show_assistant_delta(self, text):
+        self.assistant_deltas.append(text)
 
     def show_api_metrics(self, *_args):
         pass
@@ -80,7 +93,8 @@ def fake_sdk(captured):
             self.text = text
 
     class ThinkingBlock:
-        thinking = ""
+        def __init__(self, thinking=""):
+            self.thinking = thinking
 
     class ToolUseBlock:
         pass
@@ -88,6 +102,10 @@ def fake_sdk(captured):
     class AssistantMessage:
         def __init__(self, content):
             self.content = content
+
+    class StreamEvent:
+        def __init__(self, event):
+            self.event = event
 
     class SystemMessage:
         def __init__(self, subtype, data):
@@ -127,13 +145,15 @@ def fake_sdk(captured):
 
         async def receive_response(self):
             yield SystemMessage("init", {"session_id": "claude-init-session"})
-            yield AssistantMessage([TextBlock("Completed work.")])
+            for event in captured.get("stream_events", []):
+                yield StreamEvent(event)
+            yield AssistantMessage(captured.get("blocks") or [TextBlock("Completed work.")])
             yield ResultMessage()
 
     for value in (
         AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, PermissionResultAllow,
-        PermissionResultDeny, ResultMessage, SystemMessage, TextBlock, ThinkingBlock,
-        ToolUseBlock,
+        PermissionResultDeny, ResultMessage, StreamEvent, SystemMessage, TextBlock,
+        ThinkingBlock, ToolUseBlock,
     ):
         setattr(module, value.__name__, value)
     return module
@@ -194,6 +214,54 @@ class ClaudeAgentProviderTests(unittest.TestCase):
         self.assertEqual(ui.assistant, ["Completed work."])
         self.assertEqual(ui.finished, ["completed"])
         self.assertEqual(store.summary["provider"], provider_module.CLAUDE_PROVIDER_ID)
+        self.assertTrue(options["include_partial_messages"])
+
+    def test_reasoning_and_answer_stream_to_their_own_surfaces(self):
+        captured = {
+            "stream_events": [
+                {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "Weigh"}},
+                {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "ing it"}},
+                {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Done"}},
+                {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "{"}},
+                {"type": "message_stop"},
+            ],
+        }
+        store = FakeStore()
+        ui = FakeUI()
+        meta = SimpleNamespace(
+            id="ses_claude", project_id="project", task_id="task", kind="project",
+            message_count=1, claude_state={},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            sdk = fake_sdk(captured)
+            captured["blocks"] = [sdk.ThinkingBlock("Weighing it"), sdk.TextBlock("Done")]
+            with (
+                patch.dict(sys.modules, {"claude_agent_sdk": sdk}),
+                patch.object(provider_module.utils, "UI_VERBOSE_TOOLS", False),
+                patch.object(provider_module.utils, "CLAUDE_AGENT_PERMISSION_MODE", ""),
+            ):
+                provider = provider_module.ClaudeAgentProvider(
+                    timeout_seconds=30, allowed_roots=[tmp], approval_mode="always_ask",
+                )
+                asyncio.run(provider.run(
+                    meta=meta, user_prompt="Continue", workspace=tmp, ui=ui,
+                    cancel_event=threading.Event(), store=store,
+                ))
+
+        self.assertEqual(ui.thinking_deltas, ["Weigh", "ing it"])
+        self.assertEqual(ui.assistant_deltas, ["Done"])
+        # Reasoning is surfaced regardless of tool verbosity, and the completed
+        # block carries the full text for replay.
+        self.assertEqual(ui.thinking, ["Weighing it"])
+        self.assertEqual(ui.assistant, ["Done"])
+
+    def test_verbosity_follows_the_run_setting_over_the_global_default(self):
+        with patch.object(provider_module.utils, "UI_VERBOSE_TOOLS", True):
+            self.assertFalse(provider_module._verbose(FakeUI({"verbose_tools": False})))
+            self.assertTrue(provider_module._verbose(FakeUI({})))
+        with patch.object(provider_module.utils, "UI_VERBOSE_TOOLS", False):
+            self.assertTrue(provider_module._verbose(FakeUI({"verbose_tools": True})))
+            self.assertFalse(provider_module._verbose(FakeUI({})))
 
 
 if __name__ == "__main__":

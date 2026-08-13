@@ -219,3 +219,44 @@ test('SET_HOST_STATUS returns the same state when nothing changed', () => {
   const second = reducer(first, { type: 'SET_HOST_STATUS', payload: { hostId: 'workstation', status: { ...status } } })
   assert.equal(second, first)
 })
+
+test('thinking deltas accumulate into one live trace item', () => {
+  const next = ['Loo', 'king at ', 'the parser'].reduce(
+    (state, payload) => reducer(state, { type: 'APPEND_THINKING_DELTA', payload }),
+    initialState,
+  )
+
+  assert.deepEqual(next.stageItems.map(i => i.type), ['thinking_stream'])
+  assert.equal(next.stageItems[0].markdown, 'Looking at the parser')
+})
+
+test('consecutive completed thinking events merge into one block', () => {
+  const next = ['first thought', 'second thought'].reduce(
+    (state, payload) => reducer(state, { type: 'APPEND_THINKING', payload }),
+    initialState,
+  )
+
+  assert.deepEqual(next.stageItems.map(i => i.type), ['thinking'])
+  assert.equal(next.stageItems[0].markdown, 'first thought\n\nsecond thought')
+})
+
+test('a live trace is superseded by whatever follows it', () => {
+  const streamed = reducer(initialState, { type: 'APPEND_THINKING_DELTA', payload: 'partial' })
+  const answered = reducer(streamed, {
+    type: 'APPEND_STAGE_ITEM',
+    payload: { type: 'assistant_message', markdown: 'done' },
+  })
+
+  assert.deepEqual(answered.stageItems.map(i => i.type), ['assistant_message'])
+})
+
+test('CLEAR_THINKING_STREAM only drops a trailing live trace', () => {
+  const streamed = reducer(initialState, { type: 'APPEND_THINKING_DELTA', payload: 'partial' })
+  assert.deepEqual(reducer(streamed, { type: 'CLEAR_THINKING_STREAM' }).stageItems, [])
+
+  const settled = reducer(initialState, {
+    type: 'APPEND_STAGE_ITEM',
+    payload: { type: 'assistant_message', markdown: 'done' },
+  })
+  assert.equal(reducer(settled, { type: 'CLEAR_THINKING_STREAM' }), settled)
+})

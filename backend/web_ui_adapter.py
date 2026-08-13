@@ -132,6 +132,13 @@ class WebUI:
     def show_thinking(self, text: str) -> None:
         self._emit(EventType.THINKING, {"markdown": text})
 
+    def show_thinking_delta(self, text: str) -> None:
+        # Live-only, mirroring show_assistant_delta: reasoning deltas are
+        # broadcast but never persisted. The completed thinking event carries
+        # the full markdown for replay.
+        event = EventEnvelope(session_id=self._sid, type=EventType.THINKING_DELTA, data={"text": text})
+        self._manager.emit_event(event)
+
     def show_tool_call(
         self, name: str, args: dict, status_line: str, verbose: bool
     ) -> None:

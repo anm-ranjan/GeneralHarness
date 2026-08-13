@@ -52,6 +52,7 @@ class FakeClient:
         self.next_thread_id = "thr_new"
         self.next_status = "completed"
         self.emit_items = []
+        self.emit_messages = []
 
     async def initialize(self, _experimental=False):
         pass
@@ -72,6 +73,9 @@ class FakeClient:
             raise self.turn_error
         turn_id = f"turn_{len(self.turn_calls)}"
         queue = self.transport.queues[thread_id]
+        for message in self.emit_messages:
+            params = {"threadId": thread_id, "turnId": turn_id, **message.get("params", {})}
+            await queue.put({"method": message["method"], "params": params})
         for item in self.emit_items:
             await queue.put(
                 {
@@ -143,6 +147,9 @@ class FakeUI:
         self.codex_files = []
         self.observed_files = []
         self.warnings = []
+        self.thinking = []
+        self.thinking_deltas = []
+        self.assistant_deltas = []
 
     def show_user_message(self, *_args):
         pass
@@ -158,6 +165,15 @@ class FakeUI:
 
     def show_agent_finished(self, reason):
         self.finished.append(reason)
+
+    def show_thinking(self, text):
+        self.thinking.append(text)
+
+    def show_thinking_delta(self, text):
+        self.thinking_deltas.append(text)
+
+    def show_assistant_delta(self, text):
+        self.assistant_deltas.append(text)
 
     def show_api_metrics(self, *_args):
         pass
@@ -366,6 +382,55 @@ class CodexAppServerProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ui.statuses)
         self.assertEqual(ui.commands, [("npm test", "completed")])
         self.assertEqual(ui.codex_files, [("src/app.js", "modified")])
+
+    async def test_reasoning_is_surfaced_as_a_thinking_trace(self):
+        provider, _transport, client = make_provider()
+        client.emit_messages = [
+            {"method": "item/started", "params": {"item": {"id": "r1", "type": "agent_message", "phase": "reasoning"}}},
+            {"method": "item/agentMessage/delta", "params": {"itemId": "r1", "delta": "Read"}},
+            {"method": "item/agentMessage/delta", "params": {"itemId": "r1", "delta": "ing tests"}},
+            {"method": "item/completed", "params": {"item": {"id": "r1", "type": "agent_message", "phase": "reasoning", "text": "Reading tests"}}},
+            {"method": "item/started", "params": {"item": {"id": "a1", "type": "agent_message", "phase": "final_answer"}}},
+            {"method": "item/agentMessage/delta", "params": {"itemId": "a1", "delta": "All "}},
+            {"method": "item/agentMessage/delta", "params": {"itemId": "a1", "delta": "green."}},
+        ]
+        ui = FakeUI(verbose=False)
+
+        await self.run_provider(provider, make_meta(), ui, FakeStore())
+
+        self.assertEqual(ui.thinking_deltas, ["Read", "ing tests"])
+        self.assertEqual(ui.thinking, ["Reading tests"])
+        self.assertEqual(ui.assistant_deltas, ["All ", "green."])
+        self.assertEqual(ui.assistant, ["All green."])
+
+    async def test_deltas_arriving_before_their_item_are_routed_once_known(self):
+        provider, _transport, client = make_provider()
+        client.emit_messages = [
+            {"method": "item/agentMessage/delta", "params": {"itemId": "a1", "delta": "Ans"}},
+            {"method": "item/agentMessage/delta", "params": {"itemId": "r1", "delta": "Thi"}},
+            {"method": "item/started", "params": {"item": {"id": "r1", "type": "agent_message", "phase": "reasoning"}}},
+            {"method": "item/started", "params": {"item": {"id": "a1", "type": "agent_message", "phase": "final_answer"}}},
+            {"method": "item/agentMessage/delta", "params": {"itemId": "a1", "delta": "wer"}},
+        ]
+        ui = FakeUI(verbose=False)
+
+        await self.run_provider(provider, make_meta(), ui, FakeStore())
+
+        self.assertEqual(ui.thinking_deltas, ["Thi"])
+        self.assertEqual(ui.assistant_deltas, ["Ans", "wer"])
+        self.assertEqual(ui.assistant, ["Answer"])
+
+    async def test_commands_are_shown_while_running_not_only_once_finished(self):
+        provider, _transport, client = make_provider()
+        client.emit_messages = [
+            {"method": "item/started", "params": {"item": {"id": "c1", "type": "commandExecution", "command": "npm test"}}},
+            {"method": "item/completed", "params": {"item": {"id": "c1", "type": "commandExecution", "command": "npm test", "status": "completed"}}},
+        ]
+        ui = FakeUI(verbose=True)
+
+        await self.run_provider(provider, make_meta(), ui, FakeStore())
+
+        self.assertEqual(ui.commands, [("npm test", "running"), ("npm test", "completed")])
 
     async def test_transport_eof_fails_pending_requests_and_active_turns(self):
         class EmptyStdout:

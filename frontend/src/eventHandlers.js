@@ -100,7 +100,16 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
     }
 
     case 'thinking':
-      dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'thinking', markdown: data.markdown } })
+      // Persisted counterpart of any streamed trace; replaces it so replays
+      // and live runs end up with the same stage.
+      dispatch({ type: 'CLEAR_THINKING_STREAM' })
+      dispatch({ type: 'APPEND_THINKING', payload: data.markdown || '' })
+      break
+
+    case 'thinking_delta':
+      // Live-only streamed reasoning; never part of stored replays.
+      if (stateRef.current.isReplaying) break
+      dispatch({ type: 'APPEND_THINKING_DELTA', payload: data.text || '' })
       break
 
     case 'queue_updated':
@@ -207,6 +216,7 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
 
     case 'error':
       dispatch({ type: 'CLEAR_ASSISTANT_STREAM' })
+      dispatch({ type: 'CLEAR_THINKING_STREAM' })
       dispatch({ type: 'CLEAR_ITERATION' })
       dispatch({ type: 'HIDE_CODEX_RUNNING' })
       dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: data.text } })
@@ -288,6 +298,7 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
 
     case 'run_finished':
       dispatch({ type: 'CLEAR_ASSISTANT_STREAM' })
+      dispatch({ type: 'CLEAR_THINKING_STREAM' })
       dispatch({ type: 'FINALIZE_WORK_GROUP' })
       if (data.reason === 'max iterations reached') {
         dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: 'Max iterations were reached and no response was generated. Increase the limit with /maxiters n and try again.' } })
