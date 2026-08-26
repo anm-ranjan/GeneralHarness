@@ -7,7 +7,8 @@ local backend or one on another machine.
 
 It shows backend health and the project/task/session tree, creates and deletes
 projects/tasks/sessions, sends or queues prompts, resolves approvals, cancels
-runs, and renders replay plus live events over WebSocket.
+runs, answers agent questions, shows live task plans, and renders replay plus
+live events over WebSocket.
 
 ## Run
 
@@ -93,3 +94,10 @@ current. Messages
 sent during an active run are queued. Approval
 prompts use `y` to approve, `n` to deny, or `c` to cancel the run. Deletion removes
 MyHarness metadata and session data; it never deletes project workspace files.
+
+When an agent asks a question, the TUI opens a blocking question dialog instead
+of queuing the answer as another message. Use `Up`/`Down` or `Tab` to select an
+offered option, type to provide a custom answer when allowed, and press `Enter`
+to submit. `Ctrl+C` cancels the run. Agent `plan_update` calls appear in a
+compact dock above the composer and are restored when reconnecting to a session;
+the dock closes after every plan item is completed.

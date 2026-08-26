@@ -401,11 +401,39 @@ pub struct ApprovalPrompt {
     pub state: FormState,
 }
 
+#[derive(Clone, Debug)]
+pub struct QuestionPrompt {
+    pub session_id: String,
+    pub question_id: String,
+    pub question: String,
+    pub options: Vec<String>,
+    pub allow_free_text: bool,
+    pub selected_option: usize,
+    pub answer: ComposerState,
+}
+
+impl QuestionPrompt {
+    pub fn response(&self) -> Option<String> {
+        let free_text = self.answer.text.trim();
+        if !free_text.is_empty() {
+            return Some(free_text.to_owned());
+        }
+        self.options.get(self.selected_option).cloned()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlanItem {
+    pub content: String,
+    pub status: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunState {
     Idle,
     Running,
     WaitingApproval,
+    WaitingInput,
     Cancelling,
 }
 
@@ -415,6 +443,7 @@ impl RunState {
             Self::Idle => "idle",
             Self::Running => "running",
             Self::WaitingApproval => "waiting approval",
+            Self::WaitingInput => "waiting input",
             Self::Cancelling => "cancelling",
         }
     }
@@ -471,6 +500,8 @@ pub struct App {
     pub queue_items: Vec<QueueItem>,
     pub queue_overlay: Option<usize>,
     pub pending_approval: Option<ApprovalPrompt>,
+    pub pending_question: Option<QuestionPrompt>,
+    pub plan_items: Vec<PlanItem>,
     pub verbose_tools: bool,
     pub context_percent: Option<f64>,
     pub event_offset: usize,
@@ -549,6 +580,8 @@ impl App {
             queue_items: Vec::new(),
             queue_overlay: None,
             pending_approval: None,
+            pending_question: None,
+            plan_items: Vec::new(),
             verbose_tools,
             context_percent: None,
             event_offset: 0,
@@ -563,6 +596,14 @@ impl App {
 
     pub fn selected(&self) -> Option<&NavRow> {
         self.rows.get(self.cursor)
+    }
+
+    pub fn has_active_plan(&self) -> bool {
+        !self.plan_items.is_empty()
+            && self
+                .plan_items
+                .iter()
+                .any(|item| item.status != "completed")
     }
 
     pub fn selected_session_id(&self) -> Option<String> {
@@ -756,6 +797,8 @@ impl App {
         self.run_state = RunState::Idle;
         self.queue_items.clear();
         self.pending_approval = None;
+        self.pending_question = None;
+        self.plan_items.clear();
         self.context_percent = None;
         self.event_offset = 0;
         self.event_total = 0;
@@ -791,7 +834,15 @@ impl App {
         } else {
             None
         };
-        self.run_state = if self.pending_approval.is_some() {
+        self.pending_question = if is_running {
+            unmatched_question(&loaded.events, &loaded.meta.id)
+        } else {
+            None
+        };
+        self.plan_items = latest_plan(&loaded.events);
+        self.run_state = if self.pending_question.is_some() {
+            RunState::WaitingInput
+        } else if self.pending_approval.is_some() {
             RunState::WaitingApproval
         } else if is_running {
             RunState::Running
@@ -956,6 +1007,28 @@ impl App {
                 }
                 self.run_state = RunState::Running;
             }
+            "question_required" => {
+                self.run_state = RunState::WaitingInput;
+                self.pending_question = question_from_event(event);
+            }
+            "question_resolved" => {
+                let resolved_id = event
+                    .data
+                    .get("question_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                if self
+                    .pending_question
+                    .as_ref()
+                    .is_some_and(|question| question.question_id == resolved_id)
+                {
+                    self.pending_question = None;
+                }
+                self.run_state = RunState::Running;
+            }
+            "plan_update" => {
+                self.plan_items = plan_items_from_event(event);
+            }
             "queue_updated" => {
                 self.queue_items = event
                     .data
@@ -967,6 +1040,7 @@ impl App {
             "run_finished" => {
                 self.run_state = RunState::Idle;
                 self.pending_approval = None;
+                self.pending_question = None;
             }
             _ => {}
         }
@@ -1174,6 +1248,8 @@ impl App {
         self.run_state = RunState::Idle;
         self.queue_items.clear();
         self.pending_approval = None;
+        self.pending_question = None;
+        self.plan_items.clear();
         self.context_percent = None;
         self.event_offset = 0;
         self.event_total = 0;
@@ -1283,6 +1359,110 @@ fn unmatched_approval(events: &[EventEnvelope], session_id: &str) -> Option<Appr
         approval.session_id = session_id.to_owned();
     }
     pending
+}
+
+fn question_from_event(event: &EventEnvelope) -> Option<QuestionPrompt> {
+    let text = |key: &str| {
+        event
+            .data
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_owned()
+    };
+    let question_id = text("question_id");
+    let question = text("question");
+    if question_id.is_empty() || question.is_empty() {
+        return None;
+    }
+    let options = event
+        .data
+        .get("options")
+        .and_then(serde_json::Value::as_array)
+        .map_or_else(Vec::new, |values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|option| !option.is_empty())
+                .map(str::to_owned)
+                .collect()
+        });
+    let allow_free_text = event
+        .data
+        .get("allow_free_text")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true)
+        || options.is_empty();
+    Some(QuestionPrompt {
+        session_id: event.session_id.clone(),
+        question_id,
+        question,
+        options,
+        allow_free_text,
+        selected_option: 0,
+        answer: ComposerState::default(),
+    })
+}
+
+fn unmatched_question(events: &[EventEnvelope], session_id: &str) -> Option<QuestionPrompt> {
+    let mut pending = None;
+    for event in events {
+        match event.event_type.as_str() {
+            "question_required" => pending = question_from_event(event),
+            "question_resolved" => {
+                let resolved_id = event
+                    .data
+                    .get("question_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                if pending
+                    .as_ref()
+                    .is_some_and(|question: &QuestionPrompt| question.question_id == resolved_id)
+                {
+                    pending = None;
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(question) = pending.as_mut() {
+        question.session_id = session_id.to_owned();
+    }
+    pending
+}
+
+fn plan_items_from_event(event: &EventEnvelope) -> Vec<PlanItem> {
+    event
+        .data
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .map_or_else(Vec::new, |values| {
+            values
+                .iter()
+                .filter_map(|value| {
+                    let content = value.get("content")?.as_str()?.trim();
+                    if content.is_empty() {
+                        return None;
+                    }
+                    Some(PlanItem {
+                        content: content.to_owned(),
+                        status: value
+                            .get("status")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("pending")
+                            .to_owned(),
+                    })
+                })
+                .collect()
+        })
+}
+
+fn latest_plan(events: &[EventEnvelope]) -> Vec<PlanItem> {
+    events
+        .iter()
+        .rfind(|event| event.event_type == "plan_update")
+        .map_or_else(Vec::new, plan_items_from_event)
 }
 
 fn flatten_tree(tree: &SessionTree, collapsed: &std::collections::HashSet<NavKey>) -> Vec<NavRow> {
@@ -1577,8 +1757,7 @@ mod tests {
             "its project unfolds so the session is visible"
         );
         assert!(
-            !app
-                .rows
+            !app.rows
                 .iter()
                 .any(|row| matches!(row, NavRow::Session(s) if s.meta.id == "alpha-session")),
             "unrelated projects stay folded"
@@ -1705,6 +1884,20 @@ mod tests {
         }
     }
 
+    fn question_event(event_type: &str, question_id: &str) -> EventEnvelope {
+        EventEnvelope {
+            session_id: "ses_1".to_owned(),
+            event_type: event_type.to_owned(),
+            data: serde_json::json!({
+                "question_id": question_id,
+                "question": "Which branch?",
+                "options": ["main", "release"],
+                "allow_free_text": true
+            }),
+            ..EventEnvelope::default()
+        }
+    }
+
     #[test]
     fn idle_loaded_session_ignores_stale_unresolved_approval() {
         let mut app = empty_app();
@@ -1746,6 +1939,99 @@ mod tests {
     }
 
     #[test]
+    fn running_loaded_session_restores_only_unresolved_question() {
+        let mut app = empty_app();
+        app.apply_loaded(SessionLoaded {
+            meta: SessionMeta {
+                id: "ses_1".to_owned(),
+                status: "running".to_owned(),
+                ..SessionMeta::default()
+            },
+            events: vec![question_event("question_required", "qst_1")],
+            ..SessionLoaded::default()
+        });
+        assert_eq!(app.run_state, RunState::WaitingInput);
+        let question = app.pending_question.as_ref().unwrap();
+        assert_eq!(question.question_id, "qst_1");
+        assert_eq!(question.options, vec!["main", "release"]);
+
+        app.apply_event(&question_event("question_resolved", "qst_1"));
+        assert!(app.pending_question.is_none());
+        assert_eq!(app.run_state, RunState::Running);
+    }
+
+    #[test]
+    fn idle_loaded_session_ignores_stale_unresolved_question() {
+        let mut app = empty_app();
+        app.apply_loaded(SessionLoaded {
+            meta: SessionMeta {
+                id: "ses_1".to_owned(),
+                status: "idle".to_owned(),
+                ..SessionMeta::default()
+            },
+            events: vec![question_event("question_required", "qst_1")],
+            ..SessionLoaded::default()
+        });
+        assert_eq!(app.run_state, RunState::Idle);
+        assert!(app.pending_question.is_none());
+    }
+
+    #[test]
+    fn latest_plan_is_restored_and_live_updates_replace_it() {
+        let mut app = empty_app();
+        let plan = |items| EventEnvelope {
+            event_type: "plan_update".to_owned(),
+            data: serde_json::json!({"items": items}),
+            ..EventEnvelope::default()
+        };
+        app.apply_loaded(SessionLoaded {
+            meta: SessionMeta {
+                id: "ses_1".to_owned(),
+                ..SessionMeta::default()
+            },
+            events: vec![
+                plan(serde_json::json!([
+                    {"content": "Inspect", "status": "in_progress"}
+                ])),
+                plan(serde_json::json!([
+                    {"content": "Inspect", "status": "completed"},
+                    {"content": "Implement", "status": "in_progress"}
+                ])),
+            ],
+            ..SessionLoaded::default()
+        });
+        assert_eq!(app.plan_items.len(), 2);
+        assert_eq!(app.plan_items[1].content, "Implement");
+        assert_eq!(app.plan_items[1].status, "in_progress");
+        assert!(app.has_active_plan());
+
+        app.apply_event(&plan(serde_json::json!([
+            {"content": "Done", "status": "completed"}
+        ])));
+        assert_eq!(
+            app.plan_items,
+            vec![PlanItem {
+                content: "Done".to_owned(),
+                status: "completed".to_owned()
+            }]
+        );
+        assert!(!app.has_active_plan());
+    }
+
+    #[test]
+    fn question_response_prefers_custom_text_then_selected_option() {
+        let mut question = question_from_event(&question_event("question_required", "qst_1"))
+            .expect("valid question");
+        question.selected_option = 1;
+        assert_eq!(question.response().as_deref(), Some("release"));
+        question.answer.insert_str("  feature  ");
+        assert_eq!(question.response().as_deref(), Some("feature"));
+        question.answer.clear_text();
+        question.options.clear();
+        assert_eq!(question.response(), None);
+    }
+
+    #[test]
     fn live_queue_and_run_finished_update_state() {
         let mut app = empty_app();
         app.apply_event(&EventEnvelope {
@@ -1764,6 +2050,7 @@ mod tests {
         });
         assert_eq!(app.run_state, RunState::Idle);
         assert!(app.pending_approval.is_none());
+        assert!(app.pending_question.is_none());
     }
 
     #[test]

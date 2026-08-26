@@ -60,7 +60,7 @@ pub fn render_event(event: &EventEnvelope, verbose_tools: bool) -> Option<Transc
     let data = &event.data;
     let text = |key: &str| data.get(key).and_then(Value::as_str).unwrap_or("");
     let entry = match event.event_type.as_str() {
-        "session_loaded" | "assistant_delta" => return None,
+        "session_loaded" | "assistant_delta" | "plan_update" => return None,
         "user_message" => TranscriptEntry::new(EntryKind::User, format!("You\n{}", text("text"))),
         "assistant_message" => TranscriptEntry::new(
             EntryKind::Assistant,
@@ -109,6 +109,23 @@ pub fn render_event(event: &EventEnvelope, verbose_tools: bool) -> Option<Transc
                     "Approval approved"
                 } else {
                     "Approval denied"
+                },
+            )
+        }
+        "question_required" => {
+            TranscriptEntry::new(EntryKind::Status, format!("Question\n{}", text("question")))
+        }
+        "question_resolved" => {
+            let answered = data
+                .get("answered")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            TranscriptEntry::new(
+                EntryKind::Status,
+                if answered {
+                    format!("Answer\n{}", text("answer"))
+                } else {
+                    "Question was not answered".to_owned()
                 },
             )
         }
@@ -246,6 +263,47 @@ mod tests {
         assert_eq!(rendered.kind, EntryKind::Muted);
         assert!(rendered.text.contains("future_event"));
         assert!(rendered.text.contains("42"));
+    }
+
+    #[test]
+    fn plan_updates_are_owned_by_the_plan_panel() {
+        assert_eq!(
+            render_event(
+                &event(
+                    "plan_update",
+                    json!({"items": [{"content": "Inspect", "status": "in_progress"}]})
+                ),
+                false,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn questions_render_as_readable_transcript_entries() {
+        assert_eq!(
+            render_event(
+                &event(
+                    "question_required",
+                    json!({"question_id": "qst_1", "question": "Which branch?"})
+                ),
+                false,
+            ),
+            Some(TranscriptEntry::new(
+                EntryKind::Status,
+                "Question\nWhich branch?"
+            ))
+        );
+        assert_eq!(
+            render_event(
+                &event(
+                    "question_resolved",
+                    json!({"question_id": "qst_1", "answer": "main", "answered": true})
+                ),
+                false,
+            ),
+            Some(TranscriptEntry::new(EntryKind::Status, "Answer\nmain"))
+        );
     }
 
     #[test]

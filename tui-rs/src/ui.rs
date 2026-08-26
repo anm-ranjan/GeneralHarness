@@ -53,6 +53,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if let Some(scroll) = app.commands_scroll {
         draw_commands_pane(frame, scroll);
     }
+    if let Some(question) = &app.pending_question {
+        draw_question(frame, question);
+    }
 }
 
 fn draw_queue_pane(frame: &mut Frame, app: &App, selected: usize) {
@@ -108,7 +111,10 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         app.health.app_name.as_str()
     };
     let line = Line::from(vec![
-        Span::styled(app_name.to_owned(), Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            app_name.to_owned(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Span::raw(format!(" · {}  ", app.backend_url)),
         Span::raw(format!(
             "approval: {}",
@@ -166,21 +172,89 @@ fn draw_conversation(frame: &mut Frame, area: Rect, app: &App) {
     // whatever is left, up to COMPOSER_MAX_ROWS, and scrolls beyond that.
     let room = area.height.saturating_sub(8).clamp(1, COMPOSER_MAX_ROWS);
     let draft_rows = (rows.len().min(u16::MAX as usize) as u16).clamp(1, room);
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
+    let show_plan = app.has_active_plan();
+    let plan_height = if show_plan {
+        (app.plan_items.len() as u16).saturating_add(2).min(8)
+    } else {
+        0
+    };
+    let constraints = if show_plan {
+        vec![
+            Constraint::Min(5),
+            Constraint::Length(plan_height),
+            Constraint::Length(draft_rows + 2),
+            Constraint::Length(1),
+        ]
+    } else {
+        vec![
             Constraint::Min(5),
             Constraint::Length(draft_rows + 2),
             Constraint::Length(1),
-        ])
+        ]
+    };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
         .split(area);
     draw_transcript(frame, chunks[0], app);
-    draw_inline_composer(frame, chunks[1], app, &rows);
-    if let Some(search) = &app.search {
-        draw_search_bar(frame, chunks[2], search);
+    let composer_index = if show_plan {
+        draw_plan(frame, chunks[1], app);
+        2
     } else {
-        draw_composer_status(frame, chunks[2], app);
+        1
+    };
+    draw_inline_composer(frame, chunks[composer_index], app, &rows);
+    if let Some(search) = &app.search {
+        draw_search_bar(frame, chunks[composer_index + 1], search);
+    } else {
+        draw_composer_status(frame, chunks[composer_index + 1], app);
     }
+}
+
+fn draw_plan(frame: &mut Frame, area: Rect, app: &App) {
+    let lines: Vec<Line> = app
+        .plan_items
+        .iter()
+        .map(|item| {
+            let (marker, color) = match item.status.as_str() {
+                "completed" => ("✓", Color::Green),
+                "in_progress" => ("●", Color::Cyan),
+                _ => ("○", Color::DarkGray),
+            };
+            Line::from(vec![
+                Span::styled(format!(" {marker} "), Style::default().fg(color)),
+                Span::styled(
+                    item.content.as_str(),
+                    if item.status == "in_progress" {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    },
+                ),
+            ])
+        })
+        .collect();
+    let viewport = area.height.saturating_sub(2) as usize;
+    let active = app
+        .plan_items
+        .iter()
+        .position(|item| item.status == "in_progress")
+        .unwrap_or_else(|| app.plan_items.len().saturating_sub(1));
+    let scroll = active
+        .saturating_sub(viewport.saturating_sub(1))
+        .min(u16::MAX as usize) as u16;
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .title(" Plan ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
+            )
+            .scroll((scroll, 0))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 /// Columns available to draft text inside the composer block.
@@ -276,7 +350,11 @@ fn draw_inline_composer(frame: &mut Frame, area: Rect, app: &App, rows: &[Range<
         format!(
             " Message ({} image{} attached, Backspace on empty line to remove) ",
             app.composer.images.len(),
-            if app.composer.images.len() == 1 { "" } else { "s" }
+            if app.composer.images.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
         )
     };
     frame.render_widget(
@@ -565,6 +643,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
 fn footer_right(app: &App) -> String {
     if app.search.is_some() {
         "Enter/↑ prev · ↓ next · Esc close search ".to_owned()
+    } else if app.pending_question.is_some() {
+        "Enter answer · ↑/↓ select · Ctrl+C cancel run ".to_owned()
     } else if app.pending_approval.is_some() {
         "y approve · n deny · c cancel · q quit ".to_owned()
     } else if matches!(app.modal, Some(Modal::Delete(_))) {
@@ -800,6 +880,76 @@ fn command_help_lines() -> Vec<Line<'static>> {
     ]
 }
 
+fn draw_question(frame: &mut Frame, question: &crate::app::QuestionPrompt) {
+    let area = centered_rect(78, 72, frame.area());
+    frame.render_widget(Clear, area);
+    let mut lines = vec![
+        Line::styled(
+            question.question.clone(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::default(),
+    ];
+    for (index, option) in question.options.iter().enumerate() {
+        let selected = index == question.selected_option && question.answer.text.trim().is_empty();
+        lines.push(Line::styled(
+            format!(
+                "{} {}. {option}",
+                if selected { ">" } else { " " },
+                index + 1
+            ),
+            if selected {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default()
+            },
+        ));
+    }
+    if question.allow_free_text {
+        if !question.options.is_empty() {
+            lines.push(Line::default());
+        }
+        let mut answer = question.answer.text.clone();
+        if !question.answer.state.submitting {
+            answer.insert(question.answer.cursor.min(answer.len()), '│');
+        }
+        lines.push(Line::from(vec![
+            Span::styled("Answer: ", Style::default().fg(Color::Cyan)),
+            Span::raw(answer),
+        ]));
+    }
+    lines.push(Line::default());
+    if question.answer.state.submitting {
+        lines.push(Line::styled(
+            "Sending answer…",
+            Style::default().fg(Color::Yellow),
+        ));
+    } else if let Some(error) = &question.answer.state.error {
+        lines.push(Line::styled(error.clone(), Style::default().fg(Color::Red)));
+    }
+    let hint = match (question.options.is_empty(), question.allow_free_text) {
+        (false, true) => {
+            "↑/↓ or Tab select · type for a custom answer · Enter submit · Ctrl+C cancel run"
+        }
+        (false, false) => "↑/↓ or Tab select · Enter submit · Ctrl+C cancel run",
+        (true, _) => "Type an answer · Enter submit · Ctrl+C cancel run",
+    };
+    lines.push(Line::styled(hint, Style::default().fg(Color::DarkGray)));
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .title(" Question — waiting for you ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
+            )
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
 fn draw_approval(frame: &mut Frame, approval: &crate::app::ApprovalPrompt) {
     let area = centered_rect(78, 72, frame.area());
     frame.render_widget(Clear, area);
@@ -923,6 +1073,18 @@ fn value_or<'a>(value: &'a str, fallback: &'a str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::{ComposerState, PlanItem, QuestionPrompt};
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn rendered_text(terminal: &Terminal<TestBackend>) -> String {
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
 
     #[test]
     fn user_lines_are_right_aligned() {
@@ -944,6 +1106,50 @@ mod tests {
 
         assert_eq!(lines[0].alignment, Some(Alignment::Left));
         assert_eq!(lines[1].alignment, Some(Alignment::Left));
+    }
+
+    #[test]
+    fn plan_dock_and_question_dialog_render_without_raw_json() {
+        let mut app = App::new(
+            "http://localhost".to_owned(),
+            crate::api::Health::default(),
+            crate::api::SessionTree::default(),
+            None,
+        );
+        app.active_session_id = Some("ses_1".to_owned());
+        app.composer.session_id = Some("ses_1".to_owned());
+        app.plan_items = vec![
+            PlanItem {
+                content: "Inspect events".to_owned(),
+                status: "completed".to_owned(),
+            },
+            PlanItem {
+                content: "Implement dialog".to_owned(),
+                status: "in_progress".to_owned(),
+            },
+        ];
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        let rendered = rendered_text(&terminal);
+        assert!(rendered.contains("Plan"));
+        assert!(rendered.contains("Implement dialog"));
+        assert!(!rendered.contains("plan_update"));
+
+        app.pending_question = Some(QuestionPrompt {
+            session_id: "ses_1".to_owned(),
+            question_id: "qst_1".to_owned(),
+            question: "Which branch?".to_owned(),
+            options: vec!["main".to_owned(), "release".to_owned()],
+            allow_free_text: true,
+            selected_option: 0,
+            answer: ComposerState::default(),
+        });
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        let rendered = rendered_text(&terminal);
+        assert!(rendered.contains("Question — waiting for you"));
+        assert!(rendered.contains("Which branch?"));
+        assert!(rendered.contains("main"));
+        assert!(rendered.contains("Answer:"));
     }
 
     #[test]

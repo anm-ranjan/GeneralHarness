@@ -89,6 +89,10 @@ enum ActionUpdate {
         request_id: u64,
         approved: bool,
     },
+    QuestionAnswered {
+        request_id: u64,
+        answer: String,
+    },
     Cancelled {
         session_id: String,
     },
@@ -206,6 +210,13 @@ async fn run_ui(
             InputUpdate::Error(detail) => anyhow::bail!("terminal input failed: {detail}"),
         };
         if let Event::Paste(text) = event {
+            if let Some(question) = app.pending_question.as_mut() {
+                if question.allow_free_text && !question.answer.state.submitting {
+                    let sanitized = text.replace(['\r', '\n'], " ");
+                    question.answer.insert_str(&sanitized);
+                }
+                continue;
+            }
             if app.commands_scroll.is_some() {
                 continue;
             }
@@ -236,6 +247,10 @@ async fn run_ui(
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('f') {
             app.open_search();
+            continue;
+        }
+        if app.pending_question.is_some() {
+            handle_question_key(app, key, client, actions_tx);
             continue;
         }
         if app.commands_scroll.is_some() {
@@ -1001,6 +1016,110 @@ fn handle_approval_key(
     });
 }
 
+fn handle_question_key(
+    app: &mut App,
+    key: crossterm::event::KeyEvent,
+    client: &api::MyHarnessClient,
+    actions: &mpsc::UnboundedSender<ActionUpdate>,
+) {
+    let Some(question) = app.pending_question.as_mut() else {
+        return;
+    };
+    if question.answer.state.submitting {
+        return;
+    }
+    match key.code {
+        KeyCode::Up | KeyCode::BackTab if !question.options.is_empty() => {
+            question.selected_option = question.selected_option.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Tab if !question.options.is_empty() => {
+            question.selected_option =
+                (question.selected_option + 1).min(question.options.len().saturating_sub(1));
+        }
+        KeyCode::Enter => submit_question(app, client.clone(), actions.clone()),
+        KeyCode::Left if question.allow_free_text => question.answer.move_left(),
+        KeyCode::Right if question.allow_free_text => question.answer.move_right(),
+        KeyCode::Backspace
+            if question.allow_free_text && key.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            question.answer.delete_word_back();
+        }
+        KeyCode::Backspace if question.allow_free_text => question.answer.backspace(),
+        KeyCode::Delete if question.allow_free_text => question.answer.delete_forward(),
+        KeyCode::Char('u')
+            if question.allow_free_text && key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            question.answer.clear_text();
+        }
+        KeyCode::Char('a')
+            if question.allow_free_text && key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            question.answer.move_line_start();
+        }
+        KeyCode::Char('e')
+            if question.allow_free_text && key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            question.answer.move_line_end();
+        }
+        KeyCode::Char('w')
+            if question.allow_free_text && key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            question.answer.delete_word_back();
+        }
+        KeyCode::Char(character) if question.allow_free_text && is_text_input(key.modifiers) => {
+            question.answer.insert_char(character);
+        }
+        KeyCode::Esc => {
+            question.answer.state.error =
+                Some("Answer the question or press Ctrl+C to cancel the run.".to_owned());
+        }
+        _ => {}
+    }
+}
+
+fn submit_question(
+    app: &mut App,
+    client: api::MyHarnessClient,
+    actions: mpsc::UnboundedSender<ActionUpdate>,
+) {
+    let Some(question) = app.pending_question.as_ref() else {
+        return;
+    };
+    if question.answer.state.submitting {
+        return;
+    }
+    let Some(answer) = question.response() else {
+        if let Some(question) = app.pending_question.as_mut() {
+            question.answer.state.error = Some("Enter an answer before submitting.".to_owned());
+        }
+        return;
+    };
+    let session_id = question.session_id.clone();
+    let question_id = question.question_id.clone();
+    let request_id = app.allocate_request_id();
+    if let Some(question) = app.pending_question.as_mut() {
+        question.answer.state.submitting = true;
+        question.answer.state.request_id = request_id;
+        question.answer.state.error = None;
+    }
+    tokio::spawn(async move {
+        match client
+            .answer_question(&session_id, &question_id, &answer)
+            .await
+        {
+            Ok(_) => {
+                let _ = actions.send(ActionUpdate::QuestionAnswered { request_id, answer });
+            }
+            Err(error) => {
+                let _ = actions.send(ActionUpdate::Failed {
+                    request_id,
+                    detail: error.to_string(),
+                });
+            }
+        }
+    });
+}
+
 enum CreationRequest {
     Project {
         name: String,
@@ -1236,6 +1355,17 @@ fn apply_action(
                 prompt.state.error = Some(detail);
             }
         }
+        ActionUpdate::Failed { request_id, detail }
+            if app
+                .pending_question
+                .as_ref()
+                .is_some_and(|question| question.answer.state.request_id == request_id) =>
+        {
+            if let Some(question) = app.pending_question.as_mut() {
+                question.answer.state.submitting = false;
+                question.answer.state.error = Some(detail);
+            }
+        }
         ActionUpdate::MessageSent {
             request_id,
             session_id,
@@ -1278,6 +1408,16 @@ fn apply_action(
             } else {
                 "Approval denied.".to_owned()
             });
+        }
+        ActionUpdate::QuestionAnswered { request_id, answer }
+            if app
+                .pending_question
+                .as_ref()
+                .is_some_and(|question| question.answer.state.request_id == request_id) =>
+        {
+            app.pending_question = None;
+            app.run_state = RunState::Running;
+            app.notice = Some(format!("Question answered: {answer}"));
         }
         ActionUpdate::Cancelled { session_id }
             if app.active_session_id.as_deref() == Some(session_id.as_str()) =>
@@ -1375,6 +1515,7 @@ fn apply_cancel_failure(app: &mut App, previous_state: RunState, detail: String)
     if detail.contains("No active run") {
         app.run_state = RunState::Idle;
         app.pending_approval = None;
+        app.pending_question = None;
     } else {
         app.run_state = previous_state;
     }
@@ -1593,11 +1734,12 @@ impl Drop for TerminalSession {
 mod tests {
     use super::{
         apply_cancel_failure, handle_commands_key_with_max, handle_conversation_key,
-        is_commands_command, project_creation_notice, submit_inline_composer, toggle_pane_focus,
+        handle_question_key, is_commands_command, project_creation_notice, submit_inline_composer,
+        submit_question, toggle_pane_focus,
     };
     use crate::{
-        api::{Health, SessionTree, MyHarnessClient},
-        app::{App, PaneFocus, RunState},
+        api::{Health, MyHarnessClient, SessionTree},
+        app::{App, ComposerState, PaneFocus, QuestionPrompt, RunState},
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use tokio::sync::mpsc;
@@ -1647,6 +1789,80 @@ mod tests {
         assert_eq!(app.pane_focus, PaneFocus::Conversation);
         toggle_pane_focus(&mut app);
         assert_eq!(app.pane_focus, PaneFocus::Navigator);
+    }
+
+    #[test]
+    fn question_input_supports_custom_text_and_option_navigation() {
+        let mut app = App::new(
+            "http://localhost".to_owned(),
+            Health::default(),
+            SessionTree::default(),
+            None,
+        );
+        app.pending_question = Some(QuestionPrompt {
+            session_id: "ses_1".to_owned(),
+            question_id: "qst_1".to_owned(),
+            question: "Which branch?".to_owned(),
+            options: vec!["main".to_owned(), "release".to_owned()],
+            allow_free_text: true,
+            selected_option: 0,
+            answer: ComposerState::default(),
+        });
+        let client = MyHarnessClient::new("http://localhost:8420").unwrap();
+        let (actions, _rx) = mpsc::unbounded_channel();
+
+        handle_question_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+            &client,
+            &actions,
+        );
+        assert_eq!(app.pending_question.as_ref().unwrap().answer.text, "x");
+        handle_question_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            &client,
+            &actions,
+        );
+        handle_question_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            &client,
+            &actions,
+        );
+        let question = app.pending_question.as_ref().unwrap();
+        assert!(question.answer.text.is_empty());
+        assert_eq!(question.selected_option, 1);
+    }
+
+    #[test]
+    fn blank_free_text_question_is_not_submitted() {
+        let mut app = App::new(
+            "http://localhost".to_owned(),
+            Health::default(),
+            SessionTree::default(),
+            None,
+        );
+        app.pending_question = Some(QuestionPrompt {
+            session_id: "ses_1".to_owned(),
+            question_id: "qst_1".to_owned(),
+            question: "Name it".to_owned(),
+            options: Vec::new(),
+            allow_free_text: true,
+            selected_option: 0,
+            answer: ComposerState::default(),
+        });
+        let client = MyHarnessClient::new("http://localhost:8420").unwrap();
+        let (actions, _rx) = mpsc::unbounded_channel();
+
+        submit_question(&mut app, client, actions);
+
+        let question = app.pending_question.as_ref().unwrap();
+        assert!(!question.answer.state.submitting);
+        assert_eq!(
+            question.answer.state.error.as_deref(),
+            Some("Enter an answer before submitting.")
+        );
     }
 
     #[test]

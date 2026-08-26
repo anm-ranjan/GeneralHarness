@@ -220,6 +220,19 @@ impl MyHarnessClient {
         .await
     }
 
+    pub async fn answer_question(
+        &self,
+        session_id: &str,
+        question_id: &str,
+        answer: &str,
+    ) -> Result<Value> {
+        self.post_json(
+            &format!("api/sessions/{session_id}/question"),
+            &json!({ "question_id": question_id, "answer": answer }),
+        )
+        .await
+    }
+
     pub async fn delete_queued_message(
         &self,
         session_id: &str,
