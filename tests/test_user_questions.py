@@ -4,6 +4,9 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
+
+from fastapi import HTTPException
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
@@ -14,9 +17,12 @@ for path in (BACKEND, AGENT):
 
 import codex_app_server_provider as codex_provider
 import harness_agent as agent
+import web_app
 from web_models import EventType
 from web_session import ActiveRun, SessionManager
 from web_ui_adapter import WebUI
+
+run_routes = web_app.web_routes.runs
 
 
 class ActiveRunQuestionTests(unittest.TestCase):
@@ -25,9 +31,9 @@ class ActiveRunQuestionTests(unittest.TestCase):
         answered = []
 
         def responder():
-            while run._pending_question_id is None:
+            while run.pending_question_id is None:
                 pass
-            answered.append(run.answer_question(run._pending_question_id, "use the parser"))
+            answered.append(run.answer_question(run.pending_question_id, "use the parser"))
 
         thread = threading.Thread(target=responder)
         thread.start()
@@ -36,16 +42,29 @@ class ActiveRunQuestionTests(unittest.TestCase):
 
         self.assertEqual(result, "use the parser")
         self.assertEqual(answered, [True])
-        self.assertIsNone(run._pending_question_id)
+        self.assertIsNone(run.pending_question_id)
+
+    def test_an_immediate_answer_after_registration_is_not_lost(self):
+        run = ActiveRun("ses_1")
+        self.assertTrue(run.begin_question("qst_1"))
+        self.assertTrue(run.answer_question("qst_1", "fast"))
+        self.assertEqual(run.wait_for_question("qst_1", timeout=0), "fast")
 
     def test_an_unanswered_question_times_out_as_no_answer(self):
         run = ActiveRun("ses_1")
         self.assertIsNone(run.ask_question("qst_1", timeout=0.05))
-        self.assertIsNone(run._pending_question_id)
+        self.assertIsNone(run.pending_question_id)
 
     def test_a_stale_question_id_is_rejected(self):
         run = ActiveRun("ses_1")
         self.assertFalse(run.answer_question("qst_gone", "hi"))
+
+    def test_cancellation_releases_the_question_as_unanswered(self):
+        run = ActiveRun("ses_1")
+        self.assertTrue(run.begin_question("qst_1"))
+        self.assertTrue(run.cancel_question("qst_1"))
+        self.assertIsNone(run.wait_for_question("qst_1", timeout=0))
+        self.assertIsNone(run.pending_question_id)
 
     def test_sessions_awaiting_an_answer_are_listed(self):
         manager = SessionManager()
@@ -53,7 +72,7 @@ class ActiveRunQuestionTests(unittest.TestCase):
         manager.start_run("ses_b")
         self.assertEqual(manager.pending_question_session_ids(), [])
 
-        run._pending_question_id = "qst_1"
+        run.begin_question("qst_1")
         self.assertEqual(manager.pending_question_session_ids(), ["ses_a"])
 
 
@@ -205,9 +224,15 @@ class ScriptedRun:
         self.answer = answer
         self.asked = []
 
-    def ask_question(self, question_id):
+    def begin_question(self, question_id):
         self.asked.append(question_id)
+        return True
+
+    def wait_for_question(self, question_id):
         return self.answer
+
+    def clear_question(self, question_id):
+        return True
 
 
 class WebQuestionRoundTripTests(unittest.TestCase):
@@ -244,6 +269,80 @@ class WebQuestionRoundTripTests(unittest.TestCase):
     def test_free_text_stays_available_when_no_options_are_offered(self):
         _result, manager, _run = self._ask("x", options=[], allow_free_text=False)
         self.assertTrue(manager.events[0].data["allow_free_text"])
+
+    def test_the_question_is_registered_before_it_is_published(self):
+        run = ActiveRun("ses_1")
+
+        class ImmediateAnswerStore:
+            def append_event(self, event):
+                if event.type == EventType.QUESTION_REQUIRED:
+                    self.accepted = run.answer_question(event.data["question_id"], "immediate")
+
+        store = ImmediateAnswerStore()
+        manager = RecordingManager()
+        ui = WebUI("ses_1", manager, run, store)
+
+        self.assertEqual(ui.ask_user_question("Which parser?"), "immediate")
+        self.assertTrue(store.accepted)
+
+    def test_publication_failure_cleans_up_the_registered_question(self):
+        run = ActiveRun("ses_1")
+
+        class FailingStore:
+            def append_event(self, _event):
+                raise OSError("disk unavailable")
+
+        ui = WebUI("ses_1", RecordingManager(), run, FailingStore())
+        with self.assertRaisesRegex(OSError, "disk unavailable"):
+            ui.ask_user_question("Which parser?")
+        self.assertIsNone(run.pending_question_id)
+
+    def test_cancelled_question_emits_an_unanswered_resolution(self):
+        run = ActiveRun("ses_1")
+        manager = RecordingManager()
+        ui = WebUI("ses_1", manager, run, RecordingStore())
+        result = []
+        worker = threading.Thread(target=lambda: result.append(ui.ask_user_question("Continue?")))
+        worker.start()
+        while run.pending_question_id is None:
+            pass
+        run.cancel_question(run.pending_question_id)
+        worker.join(timeout=2)
+
+        self.assertEqual(result, [None])
+        self.assertEqual(manager.events[-1].type, EventType.QUESTION_RESOLVED)
+        self.assertEqual(manager.events[-1].data["answered"], False)
+        self.assertIsNone(manager.events[-1].data["answer"])
+
+
+class QuestionRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_blank_answers_are_rejected_without_resolving_the_question(self):
+        run = ActiveRun("ses_1")
+        run.begin_question("qst_1")
+        with patch.object(run_routes.web_app._manager, "get_active_run", return_value=run):
+            with self.assertRaises(HTTPException) as ctx:
+                await run_routes.answer_question(
+                    "ses_1", SimpleNamespace(question_id="qst_1", answer="   ")
+                )
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertEqual(run.pending_question_id, "qst_1")
+
+    async def test_stale_ids_are_rejected(self):
+        run = ActiveRun("ses_1")
+        run.begin_question("qst_live")
+        with patch.object(run_routes.web_app._manager, "get_active_run", return_value=run):
+            with self.assertRaises(HTTPException) as ctx:
+                await run_routes.answer_question(
+                    "ses_1", SimpleNamespace(question_id="qst_stale", answer="yes")
+                )
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    async def test_cancel_route_releases_a_question_without_an_answer(self):
+        run = ActiveRun("ses_1")
+        run.begin_question("qst_1")
+        with patch.object(run_routes.web_app._manager, "get_active_run", return_value=run):
+            self.assertEqual(await run_routes.cancel_run("ses_1"), {"status": "cancelling"})
+        self.assertIsNone(run.wait_for_question("qst_1", timeout=0))
 
 
 if __name__ == "__main__":

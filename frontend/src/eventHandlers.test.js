@@ -349,6 +349,8 @@ test('question_required clears live streams and appends an unanswered question',
     allowFreeText: true,
     answer: null,
     answered: null,
+    submitting: false,
+    submissionError: null,
   })
 })
 
@@ -366,4 +368,40 @@ test('question_resolved records the answer, including when there was none', () =
     data: { question_id: 'qst_2', answer: null, answered: false },
   }, timedOut.dispatch, timedOut.stateRef)
   assert.deepEqual(timedOut.actions[0].payload, { questionId: 'qst_2', answer: '', answered: false })
+})
+
+test('idle replay settles an interrupted unresolved question as unanswered', () => {
+  const ctx = collect()
+  handleSessionEvent({
+    type: 'session_loaded',
+    data: {
+      meta: { status: 'idle' },
+      events: [{
+        type: 'question_required',
+        data: { question_id: 'qst_interrupted', question: 'Continue?', options: [] },
+      }],
+    },
+  }, ctx.dispatch, ctx.stateRef)
+
+  const actions = flatten(ctx.actions)
+  const resolution = actions.find(action => action.type === 'RESOLVE_QUESTION')
+  assert.deepEqual(resolution.payload, {
+    questionId: 'qst_interrupted', answer: '', answered: false,
+  })
+})
+
+test('running replay keeps an unresolved live question interactive', () => {
+  const ctx = collect()
+  handleSessionEvent({
+    type: 'session_loaded',
+    data: {
+      meta: { status: 'running' },
+      events: [{
+        type: 'question_required',
+        data: { question_id: 'qst_live', question: 'Continue?', options: [] },
+      }],
+    },
+  }, ctx.dispatch, ctx.stateRef)
+
+  assert.equal(flatten(ctx.actions).some(action => action.type === 'RESOLVE_QUESTION'), false)
 })

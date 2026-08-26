@@ -149,7 +149,10 @@ async def answer_question(session_id: str, req: QuestionResponse):
     run = web_app._manager.get_active_run(session_id)
     if run is None:
         raise HTTPException(status_code=404, detail="No active run")
-    ok = run.answer_question(req.question_id, req.answer)
+    answer = req.answer.strip()
+    if not answer:
+        raise HTTPException(status_code=422, detail="Question answer cannot be blank")
+    ok = run.answer_question(req.question_id, answer)
     if not ok:
         raise HTTPException(status_code=400, detail="Question ID mismatch or expired")
     return {"status": "answered"}
@@ -209,8 +212,9 @@ async def cancel_run(session_id: str):
     run.cancel_event.set()
     if run._pending_approval_id:
         run.resolve_approval(run._pending_approval_id, False)
-    if run._pending_question_id:
+    question_id = run.pending_question_id
+    if question_id:
         # Release the run thread; it is blocked on the answer and would
         # otherwise sit there until the question timeout despite the cancel.
-        run.answer_question(run._pending_question_id, "")
+        run.cancel_question(question_id)
     return {"status": "cancelling"}

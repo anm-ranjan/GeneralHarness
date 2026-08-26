@@ -304,3 +304,54 @@ test('RESOLVE_QUESTION marks only the matching question', () => {
   assert.deepEqual(next.stageItems.map(i => i.answer), ['strict', null])
   assert.deepEqual(next.stageItems.map(i => i.answered), [true, null])
 })
+
+test('question submission failure remains interactive and can be retried', () => {
+  const asked = reducer(initialState, {
+    type: 'APPEND_STAGE_ITEM',
+    payload: {
+      type: 'question', questionId: 'qst_1', question: 'q', answer: null,
+      answered: null, submitting: false, submissionError: null,
+    },
+  })
+  const submitting = reducer(asked, {
+    type: 'SUBMIT_QUESTION', payload: { questionId: 'qst_1' },
+  })
+  assert.equal(submitting.stageItems[0].submitting, true)
+
+  const failed = reducer(submitting, {
+    type: 'QUESTION_SUBMISSION_FAILED',
+    payload: { questionId: 'qst_1', error: 'Network unavailable' },
+  })
+  assert.equal(failed.stageItems[0].answered, null)
+  assert.equal(failed.stageItems[0].submitting, false)
+  assert.equal(failed.stageItems[0].submissionError, 'Network unavailable')
+
+  const retried = reducer(failed, {
+    type: 'SUBMIT_QUESTION', payload: { questionId: 'qst_1' },
+  })
+  assert.equal(retried.stageItems[0].submitting, true)
+  assert.equal(retried.stageItems[0].submissionError, null)
+})
+
+test('successful question resolution clears submission state', () => {
+  const asked = reducer(initialState, {
+    type: 'APPEND_STAGE_ITEM',
+    payload: {
+      type: 'question', questionId: 'qst_1', question: 'q', answer: null,
+      answered: null, submitting: true, submissionError: 'old error',
+    },
+  })
+  const resolved = reducer(asked, {
+    type: 'RESOLVE_QUESTION',
+    payload: { questionId: 'qst_1', answer: 'strict', answered: true },
+  })
+  assert.deepEqual(
+    {
+      answer: resolved.stageItems[0].answer,
+      answered: resolved.stageItems[0].answered,
+      submitting: resolved.stageItems[0].submitting,
+      submissionError: resolved.stageItems[0].submissionError,
+    },
+    { answer: 'strict', answered: true, submitting: false, submissionError: null },
+  )
+})

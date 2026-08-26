@@ -3,15 +3,34 @@ import { memo, useState } from 'react'
 // One clarifying question from the agent. Offered options are shortcuts, not a
 // closed set: free text stays available so the user is never forced to pick a
 // wrong answer to get the run moving again.
-function QuestionCard({ questionId, question, options, allowFreeText, answer, answered, onRespond }) {
+function QuestionCard({
+  questionId,
+  question,
+  options,
+  allowFreeText,
+  answer,
+  answered,
+  submitting,
+  submissionError,
+  onRespond,
+}) {
   const [draft, setDraft] = useState('')
+  const [locallySubmitting, setLocallySubmitting] = useState(false)
   const resolved = answered !== undefined && answered !== null
   const choices = options || []
+  const answerInFlight = submitting || locallySubmitting
 
-  function submit(text) {
+  async function submit(text) {
+    if (answerInFlight) return
     const value = (text ?? draft).trim()
     if (!value) return
-    onRespond(questionId, value)
+    setLocallySubmitting(true)
+    let accepted = false
+    try {
+      accepted = await onRespond(questionId, value)
+    } finally {
+      if (!accepted) setLocallySubmitting(false)
+    }
   }
 
   return (
@@ -39,7 +58,8 @@ function QuestionCard({ questionId, question, options, allowFreeText, answer, an
                 <button
                   key={option}
                   onClick={() => submit(option)}
-                  className="px-3 py-1 text-[12px] font-medium text-text border border-line/50 rounded hover:border-accent/50 hover:bg-accent-soft transition-colors"
+                  disabled={answerInFlight}
+                  className="px-3 py-1 text-[12px] font-medium text-text border border-line/50 rounded hover:border-accent/50 hover:bg-accent-soft transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
                 >
                   {option}
                 </button>
@@ -51,6 +71,7 @@ function QuestionCard({ questionId, question, options, allowFreeText, answer, an
               <input
                 autoFocus
                 value={draft}
+                disabled={answerInFlight}
                 onChange={e => setDraft(e.target.value)}
                 onKeyDown={e => {
                   if (e.key === 'Enter' && !e.shiftKey) {
@@ -59,15 +80,20 @@ function QuestionCard({ questionId, question, options, allowFreeText, answer, an
                   }
                 }}
                 placeholder={choices.length > 0 ? 'Or answer in your own words…' : 'Your answer…'}
-                className="flex-1 px-2 py-1 text-[13px] bg-surface border border-line/50 rounded text-text placeholder:text-faint focus:outline-none focus:border-accent/50"
+                className="flex-1 px-2 py-1 text-[13px] bg-surface border border-line/50 rounded text-text placeholder:text-faint focus:outline-none focus:border-accent/50 disabled:opacity-60"
               />
               <button
                 onClick={() => submit()}
-                disabled={!draft.trim()}
+                disabled={answerInFlight || !draft.trim()}
                 className="px-3 py-1 text-[12px] font-medium text-accent border border-accent/30 rounded hover:bg-accent-soft transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
               >
-                Answer
+                {answerInFlight ? 'Submitting…' : 'Answer'}
               </button>
+            </div>
+          )}
+          {submissionError && (
+            <div role="alert" className="mt-2 text-[12px] text-danger">
+              {submissionError} Your answer was not submitted; please try again.
             </div>
           )}
         </>

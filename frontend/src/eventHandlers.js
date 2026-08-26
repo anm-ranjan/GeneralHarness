@@ -59,8 +59,11 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       collect({ type: 'SET_EVENT_WINDOW', payload: { offset, total: data.event_total ?? null } })
       const replayStateRef = { current: { ...stateRef.current, isReplaying: true } }
       const events = data.events || []
+      const unresolvedQuestions = new Set()
       for (let i = 0; i < events.length; i++) {
         const e = events[i]
+        if (e.type === 'question_required') unresolvedQuestions.add(e.data?.question_id)
+        if (e.type === 'question_resolved') unresolvedQuestions.delete(e.data?.question_id)
         collect({ type: 'INCREMENT_REPLAYED_EVENTS' })
         if (e.type !== 'run_finished' || data.meta?.status !== 'running') {
           handleSessionEvent(e, indexedDispatch(collect, offset + i), replayStateRef)
@@ -68,6 +71,14 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       }
       collect({ type: 'SET_REPLAYING', payload: false })
       if (data.meta?.status !== 'running') {
+        for (const questionId of unresolvedQuestions) {
+          if (questionId) {
+            collect({
+              type: 'RESOLVE_QUESTION',
+              payload: { questionId, answer: '', answered: false },
+            })
+          }
+        }
         collect({ type: 'SET_REPLAY_IDLE' })
       }
       dispatch({ type: 'BATCH', payload: batch })
@@ -204,6 +215,8 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
           allowFreeText: data.allow_free_text !== false,
           answer: null,
           answered: null,
+          submitting: false,
+          submissionError: null,
         },
       })
       break

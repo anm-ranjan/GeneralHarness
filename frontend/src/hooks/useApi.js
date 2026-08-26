@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { api } from '../api'
 import { useAppDispatch, useAppStateRef } from '../context/AppContext'
+import { submitQuestion } from './questionSubmission.js'
 
 // Deliberately non-reactive: these callbacks read state on invocation rather
 // than subscribing, so every component using them keeps stable handlers and
@@ -42,12 +43,7 @@ export default function useApi() {
   }, [dispatch])
 
   const answerQuestion = useCallback(async (sessionId, questionId, answer) => {
-    dispatch({ type: 'RESOLVE_QUESTION', payload: { questionId, answer, answered: true } })
-    try {
-      await api('POST', `/api/sessions/${encodeURIComponent(sessionId)}/question`, { question_id: questionId, answer })
-    } catch (err) {
-      dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: err.detail || err.message } })
-    }
+    return submitQuestion(dispatch, api, sessionId, questionId, answer)
   }, [dispatch])
 
   const cancelRun = useCallback(async (sessionId) => {

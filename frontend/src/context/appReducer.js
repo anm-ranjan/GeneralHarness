@@ -653,7 +653,27 @@ export function reducer(state, action) {
       const { questionId, answer, answered } = action.payload
       const items = state.stageItems.map(item =>
         item.type === 'question' && item.questionId === questionId
-          ? { ...item, answer, answered }
+          ? { ...item, answer, answered, submitting: false, submissionError: null }
+          : item
+      )
+      return { ...state, stageItems: items }
+    }
+
+    case 'SUBMIT_QUESTION': {
+      const { questionId } = action.payload
+      const items = state.stageItems.map(item =>
+        item.type === 'question' && item.questionId === questionId && item.answered == null
+          ? { ...item, submitting: true, submissionError: null }
+          : item
+      )
+      return { ...state, stageItems: items }
+    }
+
+    case 'QUESTION_SUBMISSION_FAILED': {
+      const { questionId, error } = action.payload
+      const items = state.stageItems.map(item =>
+        item.type === 'question' && item.questionId === questionId && item.answered == null
+          ? { ...item, submitting: false, submissionError: error }
           : item
       )
       return { ...state, stageItems: items }

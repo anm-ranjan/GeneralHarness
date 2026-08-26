@@ -268,17 +268,23 @@ class WebUI:
         """
         question_id = f"qst_{uuid.uuid4().hex[:8]}"
         choices = [str(option) for option in (options or []) if str(option).strip()]
-        self._emit(
-            EventType.QUESTION_REQUIRED,
-            {
-                "question_id": question_id,
-                "question": question,
-                "options": choices,
-                "allow_free_text": bool(allow_free_text) or not choices,
-            },
-        )
+        if not self._run.begin_question(question_id):
+            raise RuntimeError("A user question is already pending for this run")
+        try:
+            self._emit(
+                EventType.QUESTION_REQUIRED,
+                {
+                    "question_id": question_id,
+                    "question": question,
+                    "options": choices,
+                    "allow_free_text": bool(allow_free_text) or not choices,
+                },
+            )
+        except Exception:
+            self._run.clear_question(question_id)
+            raise
         self._manager.notify_run_state(self._sid, "waiting_input")
-        answer = self._run.ask_question(question_id)
+        answer = self._run.wait_for_question(question_id)
         self._manager.notify_run_state(self._sid, "running")
         self._emit(
             EventType.QUESTION_RESOLVED,

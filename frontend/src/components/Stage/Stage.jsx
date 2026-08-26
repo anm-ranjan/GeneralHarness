@@ -155,6 +155,8 @@ export default function Stage() {
             allowFreeText={item.allowFreeText}
             answer={item.answer}
             answered={item.answered}
+            submitting={item.submitting}
+            submissionError={item.submissionError}
             onRespond={handleQuestion}
           />
         )
