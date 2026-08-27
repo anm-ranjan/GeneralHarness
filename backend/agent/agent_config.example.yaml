@@ -40,6 +40,15 @@ search:
   max_results: 100
   rg_path: ""
 
+web_fetch:
+  # Native provider only. Only public HTTP(S) destinations are allowed, and
+  # every redirect is resolved and checked before a connection is opened.
+  socket_timeout_seconds: 10
+  total_timeout_seconds: 30
+  max_response_bytes: 2000000
+  max_redirects: 5
+  max_pdf_pages: 50
+
 gather:
   # Max concurrent workers for one gather_context tool call. Clamped to 1..32.
   # The effective count is also bounded by the number of jobs in the batch.

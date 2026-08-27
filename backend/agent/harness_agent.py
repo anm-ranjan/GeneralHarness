@@ -961,7 +961,7 @@ def _build_chat_system_content(workspace_root: str | None = None) -> str:
         "You are a helpful, general-purpose assistant. Answer clearly and directly. "
         "You can hold ordinary conversations and help with a wide range of topics. "
         "You also have optional tools — file_read, file_list, file_search, content_search, "
-        "web_request, file_write, file_replace, apply_patch, and shell_run — but only reach for "
+        "web_fetch, file_write, file_replace, apply_patch, and shell_run — but only reach for "
         "them when the task actually calls for reading, writing, running, or fetching something. "
         "Most questions can be answered directly without any tool call. "
         + workspace_line
@@ -1059,12 +1059,12 @@ def _ask_user(arguments: dict, ui) -> str:
     return f"The user answered: {answer}"
 
 
-def execute_tool(name: str, arguments: dict, ui=None) -> str:
+def execute_tool(name: str, arguments: dict, ui=None, cancel_event=None) -> str:
     err = utils._check_required_args(name, arguments)
     if err:
         return err
-    if name in {"file_search", "file_list", "content_search", "file_read", "image_read", "web_request", "gather_context", "skill_list", "skill_read"}:
-        return utils.execute_read_only_tool(name, arguments)
+    if name in {"file_search", "file_list", "content_search", "file_read", "image_read", "web_fetch", "web_request", "gather_context", "skill_list", "skill_read"}:
+        return utils.execute_read_only_tool(name, arguments, cancel_event)
     if name == "shell_check":
         return utils.tool_shell_check(job_id=arguments["job_id"], tail_lines=arguments.get("tail_lines", 200))
     if name == "plan_update":
@@ -1303,8 +1303,8 @@ def _tool_status_line(func_name: str, func_args: dict) -> str:
         return f"Plan: {n} step{'s' if n != 1 else ''}"
     if func_name == "ask_user":
         return f"Ask: {func_args.get('question', '')}"
-    if func_name == "web_request":
-        return f"Fetch {func_args.get('url', '')}"
+    if func_name in {"web_fetch", "web_request"}:
+        return f"Fetch {utils.redact_web_url(func_args.get('url', ''))}"
     if func_name == "skill_list":
         return "Skills: list installed skills"
     if func_name == "skill_read":
@@ -1440,7 +1440,7 @@ def run_agent(
                     sig_parts = [func_name, func_args.get("directory", ""), func_args.get("pattern", "")]
                     call_sig = ":".join(sig_parts)
                     tool_call_counts[call_sig] = tool_call_counts.get(call_sig, 0) + 1
-                elif func_name == "web_request":
+                elif func_name in {"web_fetch", "web_request"}:
                     sig_parts = [func_name, func_args.get("url", "")]
                     call_sig = ":".join(sig_parts)
                     tool_call_counts[call_sig] = tool_call_counts.get(call_sig, 0) + 1
@@ -1479,9 +1479,9 @@ def run_agent(
                         ui.show_status(f"Nudge: repeated file_search ({tool_call_counts[call_sig]}x)")
                     continue
 
-                if call_sig and func_name == "web_request" and tool_call_counts[call_sig] >= MAX_REPEAT_TOOL_CALLS:
+                if call_sig and func_name in {"web_fetch", "web_request"} and tool_call_counts[call_sig] >= MAX_REPEAT_TOOL_CALLS:
                     nudge_msg = (
-                        f"WARNING: You have called web_request with the same URL "
+                        f"WARNING: You have fetched the same URL "
                         f"{tool_call_counts[call_sig]} times. The response will not change. "
                         f"Use the result you already received, or try a different URL."
                     )
@@ -1493,7 +1493,7 @@ def run_agent(
                     messages.append(tool_msg)
                     turn_messages.append(tool_msg)
                     if ui:
-                        ui.show_status(f"Nudge: repeated web_request ({tool_call_counts[call_sig]}x)")
+                        ui.show_status(f"Nudge: repeated web fetch ({tool_call_counts[call_sig]}x)")
                     continue
 
                 if call_sig and func_name == "file_read" and tool_call_counts[call_sig] >= MAX_REPEAT_TOOL_CALLS:
@@ -1550,7 +1550,10 @@ def run_agent(
                 status_line = _tool_status_line(func_name, func_args)
 
                 if ui:
-                    ui.show_tool_call(func_name, func_args, status_line, verbose_tools)
+                    display_args = func_args
+                    if func_name in {"web_fetch", "web_request"}:
+                        display_args = {**func_args, "url": utils.redact_web_url(func_args.get("url", ""))}
+                    ui.show_tool_call(func_name, display_args, status_line, verbose_tools)
                 elif verbose_tools:
                     ui_panel("Tool call", func_name, style="magenta")
                     ui_code(json.dumps(func_args, indent=2, ensure_ascii=False), "json")
@@ -1567,7 +1570,7 @@ def run_agent(
                 )
 
                 try:
-                    tool_result = execute_tool(func_name, func_args, ui=ui)
+                    tool_result = execute_tool(func_name, func_args, ui=ui, cancel_event=cancel_event)
                 except Exception as e:
                     tool_result = f"ERROR: Tool '{func_name}' raised: {e}"
 
