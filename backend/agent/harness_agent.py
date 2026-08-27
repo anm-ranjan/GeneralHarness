@@ -824,6 +824,33 @@ def _web_output_fragment() -> str:
     )
 
 
+def _native_execution_fragment() -> str:
+    """Describe the exact interpreter and shell used by native shell_run calls."""
+    # Keep the configured path human-readable in the prompt. JSON encoding would
+    # double Windows separators, obscuring the exact command the model should use.
+    interpreter = f'"{utils.PYTHON_INTERPRETER}"'
+    if sys.platform == "win32":
+        shell_guidance = (
+            "shell_run uses Windows cmd.exe. Join dependent commands with && (or separate independent "
+            "commands with &); never use the POSIX semicolon separator, because cmd.exe passes it through "
+            "as part of an argument. "
+        )
+    else:
+        shell_guidance = "shell_run uses the platform POSIX shell. "
+    return (
+        "PYTHON AND SHELL: If you run Python through shell_run, always use this exact configured interpreter "
+        f"path instead of bare python, python3, py, or interpreter discovery: {interpreter}. Quote the path "
+        "when the shell requires it. "
+        + shell_guidance
+        + "Do not use shell redirection, an inline Python -c program, PowerShell file-writing commands, or "
+        "another shell workaround to create or edit source files. For a non-trivial or multi-line script, "
+        "create it with file_write or apply_patch, edit it with file_replace or apply_patch, and then execute "
+        "the saved script with the configured interpreter. A compressed tool argument marked as a placeholder "
+        "is not literal file content and must never be supplied as file_replace old_text; use apply_patch or "
+        "read the relevant file range to recover exact text. "
+    )
+
+
 def _plan_fragment() -> str:
     return (
         "PLAN DISCIPLINE: For multi-step work, publish a short checklist with plan_update. Once published, "
@@ -866,6 +893,7 @@ def _build_managed_system_content(workspace_root: str | None = None) -> str:
         + f"You can only access these directories: {', '.join(utils.ALLOWED_PATHS)}. "
         + _workspace_fragment(workspace_root)
         + _web_output_fragment()
+        + _native_execution_fragment()
         + f"OS: {_platform_info()}. "
         + "Always search before reading if you don't know the exact path. After edits, verify when feasible. "
         + "FILE SIZE RULE: Before reading any file, check its size — use file_list on its parent "
@@ -901,11 +929,12 @@ def _build_native_system_content(workspace_root: str | None = None) -> str:
         + f"You can only access these directories: {', '.join(utils.ALLOWED_PATHS)}. "
         + _workspace_fragment(workspace_root)
         + _web_output_fragment()
+        + _native_execution_fragment()
         + "After edits, verify when feasible. "
         "EFFICIENCY: Minimize iterations. Prefer file_list over repeated file_search calls to "
-        "discover files. IMPORTANT: file_write puts the ENTIRE file content into the conversation "
-        "history, consuming context window on every subsequent call. ALWAYS prefer file_replace "
-        "or apply_patch for edits — they only add the changed text to history. To create a "
+        "discover files. IMPORTANT: file_write initially sends the entire file content, and MyHarness may "
+        "replace a successful large write in later model history with an explicitly marked non-literal "
+        "placeholder. ALWAYS prefer file_replace or apply_patch for edits. To create a "
         "modified copy, use shell_run to copy the file then file_replace to change the specific "
         "lines. Only use file_write for small new files that do not already exist. "
         "After completing the task, respond immediately — do not add extra verification "
@@ -937,6 +966,7 @@ def _build_chat_system_content(workspace_root: str | None = None) -> str:
         "Most questions can be answered directly without any tool call. "
         + workspace_line
         + _web_output_fragment()
+        + _native_execution_fragment()
         + f"OS: {_platform_info()}. "
         + "Never run destructive commands (rm -rf, format, etc.). "
         "When you do use a tool, use its real result — never fabricate file contents or command output."

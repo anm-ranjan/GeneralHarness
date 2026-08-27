@@ -2329,6 +2329,18 @@ def summarize_tool_result(content: str, source_tool: str = "") -> str:
     return truncate_output(content)
 
 
+def _compressed_argument_placeholder(argument_name: str, content: str) -> str:
+    """Return a summary that cannot be mistaken for literal tool input."""
+    return (
+        "[MYHARNESS COMPRESSED PLACEHOLDER - NOT LITERAL FILE CONTENT]\n"
+        f"The original {argument_name} was removed from model history after the tool call succeeded. "
+        "Never use this placeholder as file_replace old_text or write it into a file. "
+        "Read the relevant file range for exact text, or use apply_patch.\n"
+        f"Original SHA-256: {hashlib.sha256(content.encode('utf-8')).hexdigest()}\n"
+        f"Summary only:\n{_summarize_content(content)}"
+    )
+
+
 def compress_file_write_args(assistant_msg: dict, tool_call_id: str):
     """Replace the content arg of a successful file_write tool call with a short summary."""
     tool_calls = assistant_msg.get("tool_calls", [])
@@ -2343,7 +2355,7 @@ def compress_file_write_args(assistant_msg: dict, tool_call_id: str):
         if len(content) <= TOOL_COMPRESS_THRESHOLD:
             return
         args["_content_sha256"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        args["content"] = _summarize_content(content)
+        args["content"] = _compressed_argument_placeholder("file_write content", content)
         tool_calls[i] = {
             **tc,
             "function": {**tc["function"], "arguments": json.dumps(args, ensure_ascii=False)},
@@ -2394,7 +2406,9 @@ def compress_turn_tool_results(messages: list, turn_start_index: int, end_index:
                     val = args.get(arg_key, "")
                     if isinstance(val, str) and len(val) > TOOL_COMPRESS_THRESHOLD:
                         args[f"_{arg_key}_sha256"] = hashlib.sha256(val.encode("utf-8")).hexdigest()
-                        args[arg_key] = _summarize_content(val)
+                        args[arg_key] = _compressed_argument_placeholder(
+                            f"{func_name} {arg_key}", val
+                        )
                         changed = True
                 if changed:
                     compressed_calls.append({

@@ -303,7 +303,11 @@ WRITE_TOOLS = [
         "type": "function",
         "function": {
             "name": "file_write",
-            "description": "Create or overwrite a text file inside the allowed paths.",
+            "description": (
+                "Create a new text file inside the allowed paths. If the file already exists, use "
+                "file_replace for a small exact edit or apply_patch for a multi-line edit. Set "
+                "overwrite=true only when intentionally replacing the entire file."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -363,7 +367,14 @@ WRITE_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "Command to run."},
+                    "command": {
+                        "type": "string",
+                        "description": (
+                            "Command to run in the platform default shell (cmd.exe on Windows). "
+                            "On Windows use && or & between commands, never a POSIX semicolon. "
+                            "Do not use shell commands or inline scripts to create or edit source files."
+                        ),
+                    },
                     "working_directory": {"type": "string", "description": "Allowed directory where command should run."},
                     "timeout": {"type": "integer", "description": "Timeout in seconds for a foreground run. Default: 120. Ignored when background=true."},
                     "background": {
