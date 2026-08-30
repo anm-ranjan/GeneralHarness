@@ -10,10 +10,11 @@ import time
 import utils
 import harness_agent as agent
 import skill_registry
+from orchestration import CombinedCancelEvent, NativeOrchestrator
 from codex_app_server_provider import CodexAppServerRuntime
 from claude_agent_provider import CLAUDE_PROVIDER_ID, ClaudeAgentProvider
 from web_models import EventType
-from web_ui_adapter import WebUI
+from web_ui_adapter import SubagentUI, WebUI
 
 import web_app
 import web_helpers
@@ -341,8 +342,37 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
             web_ui = WebUI(session_id, web_app._manager, run, web_app._store, run_settings=run_settings)
             run_started = time.monotonic()
             run_failed = False
+            orchestrator = None
             try:
                 user_content = web_helpers._native_user_content(text, saved_attachments)
+                if utils.MULTI_AGENT_ENABLED:
+                    def run_child(node):
+                        child_ui = SubagentUI(web_ui, node.path)
+                        child_messages = [agent.build_system_message(workspace_root, getattr(meta, "kind", "project"))]
+                        child_prompt = (
+                            f"You are {node.path}, a {node.role} child agent. Complete only this task and return a concise result to your parent.\n\n"
+                            f"Task: {node.task}"
+                        )
+                        agent.run_agent(
+                            child_prompt,
+                            child_messages,
+                            ui=child_ui,
+                            cancel_event=CombinedCancelEvent(run.cancel_event, node.cancel_event),
+                            orchestrator=orchestrator,
+                            agent_path=node.path,
+                            tool_policy=node.tool_policy,
+                            show_user=False,
+                        )
+                        return child_ui.result
+
+                    orchestrator = NativeOrchestrator(
+                        run_child,
+                        event_callback=web_ui.show_agent_event,
+                        cancel_event=run.cancel_event,
+                        max_concurrent=utils.MAX_CONCURRENT_SUBAGENTS,
+                        max_total=utils.MAX_TOTAL_SUBAGENTS,
+                        max_depth=utils.MAX_SUBAGENT_DEPTH,
+                    )
                 agent.run_agent(
                     text,
                     messages,
@@ -351,6 +381,7 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
                     user_content=user_content,
                     display_images=saved_attachments,
                     tools_enabled=True,
+                    orchestrator=orchestrator,
                 )
                 web_app._session_messages[session_id] = agent.compact_agent_history_if_needed(
                     messages,
@@ -365,6 +396,8 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
                 web_app._session_messages[session_id] = messages
                 web_ui.show_error(f"Agent error: {e}")
             finally:
+                if orchestrator and run.cancel_event.is_set():
+                    orchestrator.cancel_all()
                 if run.cancel_event.is_set() and not web_ui.finished_reason:
                     web_ui.show_agent_finished("interrupted")
                 elif run_failed and not web_ui.finished_reason:

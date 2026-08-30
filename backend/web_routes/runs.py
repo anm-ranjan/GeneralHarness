@@ -210,11 +210,5 @@ async def cancel_run(session_id: str):
     if run is None:
         raise HTTPException(status_code=404, detail="No active run")
     run.cancel_event.set()
-    if run._pending_approval_id:
-        run.resolve_approval(run._pending_approval_id, False)
-    question_id = run.pending_question_id
-    if question_id:
-        # Release the run thread; it is blocked on the answer and would
-        # otherwise sit there until the question timeout despite the cancel.
-        run.cancel_question(question_id)
+    run.cancel_waiters()
     return {"status": "cancelling"}

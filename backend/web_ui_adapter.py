@@ -95,6 +95,8 @@ class WebUI:
         }
         self.finished_reason: str | None = None
         self._active_tool_calls: dict[str, list[tuple[str, float]]] = {}
+        self._approval_prompt_lock = threading.Lock()
+        self._question_prompt_lock = threading.Lock()
         with _snapshots_lock:
             if session_id not in _file_snapshots:
                 _file_snapshots[session_id] = {}
@@ -235,7 +237,21 @@ class WebUI:
         tool_name: str,
         args_json: str,
         diff_preview: str | None,
+        source_agent: str | None = None,
     ) -> bool:
+        with self._approval_prompt_lock:
+            if getattr(self._run, "cancel_event", None) and self._run.cancel_event.is_set():
+                return False
+            return self._request_approval(tool_name, args_json, diff_preview, source_agent)
+
+    def _request_approval(
+        self,
+        tool_name: str,
+        args_json: str,
+        diff_preview: str | None,
+        source_agent: str | None,
+    ) -> bool:
+        """Publish and resolve one serialized approval prompt."""
         approval_id = f"apr_{uuid.uuid4().hex[:8]}"
         self._emit(
             EventType.APPROVAL_REQUIRED,
@@ -244,6 +260,7 @@ class WebUI:
                 "tool_name": tool_name,
                 "args_json": args_json,
                 "diff_preview": diff_preview,
+                "source_agent": source_agent,
             },
         )
         self._manager.notify_run_state(self._sid, "waiting_approval")
@@ -254,6 +271,21 @@ class WebUI:
             {"approval_id": approval_id, "approved": approved},
         )
         return approved
+
+    def request_approval_for_agent(
+        self,
+        tool_name: str,
+        args_json: str,
+        diff_preview: str | None,
+        source: dict,
+    ) -> bool:
+        """Request approval while preserving the provider agent source."""
+        return self.request_approval(
+            tool_name,
+            args_json,
+            diff_preview,
+            source_agent=source.get("agent_path") or source.get("agent_id"),
+        )
 
     def ask_user_question(
         self,
@@ -266,9 +298,23 @@ class WebUI:
         Returns the answer text, or None if it went unanswered — callers tell
         the model to proceed on its own judgement rather than inventing one.
         """
+        with self._question_prompt_lock:
+            if getattr(self._run, "cancel_event", None) and self._run.cancel_event.is_set():
+                return None
+            return self._ask_user_question(question, options, allow_free_text)
+
+    def _ask_user_question(
+        self,
+        question: str,
+        options: list[str] | None,
+        allow_free_text: bool,
+    ) -> str | None:
+        """Publish and resolve one serialized user question."""
         question_id = f"qst_{uuid.uuid4().hex[:8]}"
         choices = [str(option) for option in (options or []) if str(option).strip()]
         if not self._run.begin_question(question_id):
+            if getattr(self._run, "cancel_event", None) and self._run.cancel_event.is_set():
+                return None
             raise RuntimeError("A user question is already pending for this run")
         try:
             self._emit(
@@ -385,8 +431,82 @@ class WebUI:
     def show_codex_item(self, item_type: str, raw: dict) -> None:
         self._emit(EventType.CODEX_ITEM, {"item_type": item_type, "raw": raw})
 
+    def show_agent_event(self, action: str | dict, data: dict | None = None, **fields) -> None:
+        """Persist a provider-neutral subagent lifecycle event."""
+        if isinstance(action, dict):
+            payload = dict(action)
+            action = str(payload.pop("action", "updated"))
+        else:
+            payload = dict(data or {})
+        payload.update(fields)
+        payload["action"] = action
+        self._emit(EventType.AGENT_EVENT, payload)
+
     def show_provider_warning(self, message: str, detail: str = "") -> None:
         self._emit(EventType.PROVIDER_WARNING, {"message": message, "detail": detail})
 
     def prompt_user_input(self, prompt_text: str) -> str:
         raise EOFError("Web UI does not support interactive input prompts")
+
+
+class SubagentUI:
+    def __init__(self, parent: WebUI, agent_path: str):
+        """Create a transcript-isolated UI for a native child agent."""
+        self.parent = parent
+        self.agent_path = agent_path
+        self.run_settings = parent.run_settings
+        self.result = ""
+
+    def show_user_message(self, text: str, images=None) -> None:
+        pass
+
+    def show_assistant_markdown(self, text: str) -> None:
+        self.result = text
+
+    def show_assistant_delta(self, text: str) -> None:
+        pass
+
+    def show_thinking(self, text: str) -> None:
+        pass
+
+    def show_thinking_delta(self, text: str) -> None:
+        pass
+
+    def show_iteration(self, n: int) -> None:
+        pass
+
+    def show_status(self, text: str, style: str = "") -> None:
+        self.parent.show_agent_event("status", {"agent_id": self.agent_path, "text": text})
+
+    def show_error(self, text: str) -> None:
+        self.parent.show_agent_event("error", {"agent_id": self.agent_path, "error": text})
+
+    def show_tool_call(self, name: str, args: dict, status_line: str, verbose: bool) -> None:
+        self.parent.show_agent_event("tool_call", {"agent_id": self.agent_path, "tool": name, "text": status_line})
+
+    def show_tool_result(self, name: str, result_preview: str, verbose: bool) -> None:
+        self.parent.show_agent_event("tool_result", {"agent_id": self.agent_path, "tool": name, "ok": not result_preview.startswith("ERROR")})
+
+    def request_approval(self, tool_name: str, args_json: str, diff_preview: str | None) -> bool:
+        return self.parent.request_approval(tool_name, args_json, diff_preview, source_agent=self.agent_path)
+
+    def ask_user_question(self, question: str, options=None, allow_free_text: bool = True):
+        return self.parent.ask_user_question(question, options, allow_free_text)
+
+    def snapshot_file_before_write(self, path: str) -> None:
+        self.parent.snapshot_file_before_write(path)
+
+    def show_file_change(self, path: str, action: str, tool: str) -> None:
+        self.parent.show_file_change(path, action, tool)
+
+    def show_generated_artifact(self, path: str, media_type: str) -> None:
+        self.parent.show_generated_artifact(path, media_type)
+
+    def show_plan_update(self, items: list[dict]) -> None:
+        self.parent.show_agent_event("plan", {"agent_id": self.agent_path, "items": items})
+
+    def show_api_metrics(self, metrics: dict) -> None:
+        pass
+
+    def show_agent_finished(self, reason: str) -> None:
+        pass

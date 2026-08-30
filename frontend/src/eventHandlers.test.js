@@ -37,6 +37,18 @@ test('toolDetail prefers useful fields', () => {
   assert.equal(toolDetail('content_search', { query: 'needle' }), 'needle')
 })
 
+test('subagent lifecycle events render as compact status items', () => {
+  const ctx = collect()
+  handleSessionEvent({
+    type: 'agent_event',
+    data: { agent_path: '/root/reviewer', action: 'completed', result: 'Looks good' },
+  }, ctx.dispatch, ctx.stateRef)
+  assert.deepEqual(ctx.actions[0], {
+    type: 'APPEND_STAGE_ITEM',
+    payload: { type: 'status', text: '[/root/reviewer] completed: Looks good' },
+  })
+})
+
 test('Codex protocol statuses are hidden only when verbose mode is off', () => {
   assert.equal(isCodexProtocolStatus('Codex turn accepted in 0.4s.'), true)
   assert.equal(isCodexProtocolStatus('Codex app-server resume failed.'), false)

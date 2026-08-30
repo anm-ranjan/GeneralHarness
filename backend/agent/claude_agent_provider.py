@@ -8,9 +8,12 @@ Code login (subscription) or ANTHROPIC_API_KEY — no key is stored here.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
+import re
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -196,6 +199,256 @@ _READ_ONLY_TOOLS = {
 }
 
 
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _message_blocks(message: Any) -> list[Any]:
+    content = _field(message, "content", [])
+    if isinstance(content, (list, tuple)):
+        return list(content)
+    return [content] if content else []
+
+
+def _block_name(block: Any) -> str:
+    return str(_field(block, "name", "") or "")
+
+
+def _is_task_tool(name: str) -> bool:
+    return name.rsplit("__", 1)[-1] in {"Task", "Agent"}
+
+
+def _task_details(block: Any) -> tuple[str, str, str, dict[str, Any]]:
+    raw_input = _field(block, "input", {})
+    task_input = dict(raw_input) if isinstance(raw_input, Mapping) else {}
+    task = ""
+    for key in ("prompt", "task", "description"):
+        value = task_input.get(key)
+        if value:
+            task = str(value).strip()
+            break
+    role = ""
+    for key in ("subagent_type", "agent_type", "role", "name"):
+        value = task_input.get(key)
+        if value:
+            role = str(value).strip()
+            break
+    tool_id = str(
+        _field(block, "id", None)
+        or _field(block, "tool_use_id", None)
+        or ""
+    ).strip()
+    return tool_id, task, role, task_input
+
+
+def _slug(value: str) -> str:
+    value = re.sub(r"[^a-zA-Z0-9]+", "-", value.strip().lower()).strip("-")
+    return value[:48] or "agent"
+
+
+def _emit_agent_event(ui, event: dict[str, Any]) -> None:
+    """Call optional ``ui.show_agent_event(event: dict[str, Any])`` hook."""
+    hook = getattr(ui, "show_agent_event", None)
+    if callable(hook):
+        try:
+            parameters = inspect.signature(hook).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+        if "action" in parameters and "data" in parameters:
+            hook(event["action"], event)
+        else:
+            hook(event)
+
+
+class _ClaudeAgentTree:
+    def __init__(self, ui):
+        self._ui = ui
+        self._sequence = 0
+        self._tasks: dict[str, dict[str, Any]] = {}
+        self._active: set[str] = set()
+
+    def _new_id(self) -> str:
+        self._sequence += 1
+        return f"claude-agent-{self._sequence}"
+
+    def _parent(self, parent_tool_use_id: str | None) -> tuple[str, str]:
+        parent = self._tasks.get(parent_tool_use_id or "")
+        if parent:
+            return parent["agent_id"], parent["agent_path"]
+        return "root", "/root"
+
+    def _event(self, action: str, node: dict[str, Any], **extra: Any) -> None:
+        event = {
+            "provider": CLAUDE_PROVIDER_ID,
+            "action": action,
+            "agent_id": node["agent_id"],
+            "parent_id": node["parent_id"],
+            "agent_path": node["agent_path"],
+            "status": node["status"],
+            "tool_use_id": node.get("tool_use_id"),
+        }
+        event.update({key: value for key, value in extra.items() if value is not None})
+        _emit_agent_event(self._ui, event)
+
+    def start(
+        self,
+        tool_id: str,
+        parent_tool_use_id: str | None,
+        task: str = "",
+        role: str = "",
+        task_input: dict[str, Any] | None = None,
+    ) -> str:
+        tool_id = tool_id or self._new_id()
+        existing = self._tasks.get(tool_id)
+        if existing:
+            if task and not existing.get("task"):
+                existing["task"] = task
+            if role and not existing.get("role"):
+                existing["role"] = role
+            return existing["agent_id"]
+        parent_id, parent_path = self._parent(parent_tool_use_id)
+        agent_id = tool_id
+        label = _slug(role or task[:48] or agent_id)
+        siblings = [node for node in self._tasks.values() if node["parent_id"] == parent_id]
+        if any(node["agent_path"].rsplit("/", 1)[-1] == label for node in siblings):
+            label = f"{label}-{len(siblings) + 1}"
+        node = {
+            "agent_id": agent_id,
+            "parent_id": parent_id,
+            "parent_tool_use_id": parent_tool_use_id,
+            "agent_path": f"{parent_path}/{label}",
+            "tool_use_id": tool_id,
+            "task": task,
+            "role": role,
+            "input": task_input or {},
+            "status": "running",
+        }
+        self._tasks[tool_id] = node
+        self._active.add(tool_id)
+        self._event("started", node, task=task, role=role)
+        return agent_id
+
+    def update(self, tool_id: str, task: str = "", role: str = "") -> None:
+        node = self._tasks.get(tool_id)
+        if not node:
+            return
+        changed = False
+        if task and not node.get("task"):
+            node["task"] = task
+            changed = True
+        if role and not node.get("role"):
+            node["role"] = role
+            changed = True
+        if changed:
+            self._event("updated", node, task=node.get("task"), role=node.get("role"))
+
+    def finish(self, tool_id: str, failed: bool = False, result: Any = None) -> None:
+        node = self._tasks.get(tool_id)
+        if not node or tool_id not in self._active:
+            return
+        node["status"] = "failed" if failed else "completed"
+        self._active.discard(tool_id)
+        self._event("failed" if failed else "completed", node, result=result)
+
+    def observe_tool_use(self, block: Any, parent_tool_use_id: str | None) -> None:
+        name = _block_name(block)
+        if not _is_task_tool(name):
+            return
+        tool_id, task, role, task_input = _task_details(block)
+        self.start(tool_id, parent_tool_use_id, task, role, task_input)
+
+    def observe_tool_result(self, block: Any) -> None:
+        tool_id = str(
+            _field(block, "tool_use_id", None)
+            or _field(block, "toolUseId", None)
+            or ""
+        ).strip()
+        if not tool_id:
+            return
+        failed = bool(
+            _field(block, "is_error", False)
+            or _field(block, "isError", False)
+            or _field(block, "error", False)
+        )
+        self.finish(tool_id, failed, _field(block, "content", None))
+
+    def observe_message(self, message: Any) -> None:
+        parent_tool_use_id = _field(message, "parent_tool_use_id", None)
+        for block in _message_blocks(message):
+            self.observe_tool_use(block, parent_tool_use_id)
+            if str(_field(block, "type", "") or "") in {"tool_result", "toolResult"}:
+                self.observe_tool_result(block)
+        result = _field(message, "tool_use_result", None)
+        if isinstance(result, Mapping):
+            self.observe_tool_result(result)
+
+    def observe_stream(self, event: Any, parent_tool_use_id: str | None = None) -> None:
+        if not isinstance(event, Mapping):
+            return
+        content_block = event.get("content_block")
+        if event.get("type") == "content_block_start" and content_block is not None:
+            parent = parent_tool_use_id or event.get("parent_tool_use_id")
+            self.observe_tool_use(content_block, parent)
+            if str(_field(content_block, "type", "") or "") in {"tool_result", "toolResult"}:
+                self.observe_tool_result(content_block)
+        elif event.get("type") in {"tool_result", "toolResult"}:
+            self.observe_tool_result(event)
+
+    def observe_result(self, message: Any) -> None:
+        parent_tool_use_id = _field(message, "parent_tool_use_id", None)
+        if parent_tool_use_id:
+            self.finish(
+                parent_tool_use_id,
+                bool(_field(message, "is_error", False)),
+                _field(message, "result", None),
+            )
+
+    def source_for(self, context: Any) -> dict[str, Any]:
+        parent_tool_use_id = _field(context, "parent_tool_use_id", None)
+        tool_use_id = _field(context, "tool_use_id", None)
+        node = self._tasks.get(str(parent_tool_use_id or ""))
+        source = {
+            "provider": CLAUDE_PROVIDER_ID,
+            "agent_id": node["agent_id"] if node else "root",
+            "agent_path": node["agent_path"] if node else "/root",
+        }
+        if parent_tool_use_id:
+            source["parent_tool_use_id"] = str(parent_tool_use_id)
+        if tool_use_id:
+            source["tool_use_id"] = str(tool_use_id)
+        for key in ("agent_id", "agent_path"):
+            value = _field(context, key, None)
+            if value:
+                source[key] = str(value)
+        return source
+
+    def interrupt_all(self) -> None:
+        for tool_id in list(self._active):
+            node = self._tasks[tool_id]
+            node["status"] = "interrupted"
+            self._active.discard(tool_id)
+            self._event("interrupted", node)
+
+
+def _request_approval(ui, tool_name: str, detail: str, source: dict[str, Any]) -> bool:
+    """Use ``request_approval_for_agent`` when available, then legacy approval."""
+    hook = getattr(ui, "request_approval_for_agent", None)
+    if callable(hook):
+        return bool(hook(tool_name, detail, None, source))
+    hook = ui.request_approval
+    try:
+        parameters = inspect.signature(hook).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    if "source_agent" in parameters:
+        return bool(hook(tool_name, detail, None, source_agent=source.get("agent_path")))
+    if "source" in parameters:
+        return bool(hook(tool_name, detail, None, source=source))
+    return bool(hook(tool_name, detail, None))
+
+
 class ClaudeAgentProvider:
     def __init__(
         self,
@@ -272,6 +525,7 @@ class ClaudeAgentProvider:
         run_started_at = time.perf_counter()
         verbose = _verbose(ui)
         permission_mode = _permission_mode_for(self.approval_mode)
+        agent_tree = _ClaudeAgentTree(ui)
         ask_server = _build_ask_server(ui, sdk)
         # Registering the server is enough to make the tool callable; it is
         # auto-approved in can_use_tool below rather than through allowed_tools,
@@ -294,7 +548,10 @@ class ClaudeAgentProvider:
             if self.approval_mode == "shell_only" and tool_name != "Bash":
                 return PermissionResultAllow()
             detail = json.dumps(tool_input, indent=2, ensure_ascii=False)
-            approved = await asyncio.to_thread(ui.request_approval, tool_name, detail, None)
+            source = agent_tree.source_for(context)
+            approved = await asyncio.to_thread(
+                _request_approval, ui, tool_name, detail, source
+            )
             if approved:
                 return PermissionResultAllow()
             return PermissionResultDeny(message="The user declined this tool call.")
@@ -344,7 +601,9 @@ class ClaudeAgentProvider:
                         await client.query(prompt)
                         async for message in client.receive_response():
                             if isinstance(message, AssistantMessage):
+                                parent_tool_use_id = _field(message, "parent_tool_use_id", None)
                                 for block in message.content:
+                                    agent_tree.observe_tool_use(block, parent_tool_use_id)
                                     if isinstance(block, TextBlock) and block.text.strip():
                                         final_texts.append(block.text)
                                         ui.show_assistant_markdown(block.text)
@@ -367,7 +626,13 @@ class ClaudeAgentProvider:
                                                 {"name": block.name, "input": block.input},
                                             )
                             elif isinstance(message, StreamEvent):
+                                agent_tree.observe_stream(
+                                    message.event,
+                                    _field(message, "parent_tool_use_id", None),
+                                )
                                 _emit_stream_delta(ui, message.event)
+                            elif message.__class__.__name__ == "UserMessage":
+                                agent_tree.observe_message(message)
                             elif isinstance(message, SystemMessage):
                                 if message.subtype == "init":
                                     session_id = (message.data or {}).get("session_id")
@@ -378,19 +643,23 @@ class ClaudeAgentProvider:
                                 elif verbose:
                                     ui.show_codex_item(f"claude_system:{message.subtype}", message.data or {})
                             elif isinstance(message, ResultMessage):
+                                agent_tree.observe_result(message)
                                 result_msg = message
                     finally:
                         cancel_task.cancel()
         except asyncio.TimeoutError:
+            agent_tree.interrupt_all()
             ui.show_error(f"Claude run timed out after {self.timeout_seconds}s.")
             return
         except Exception as exc:
             if interrupt_requested or cancel_event.is_set():
+                agent_tree.interrupt_all()
                 ui.show_error("Claude run cancelled.")
                 return
             raise ClaudeAgentRunError(str(exc)) from exc
 
         if interrupt_requested or cancel_event.is_set():
+            agent_tree.interrupt_all()
             ui.show_error("Claude run cancelled.")
             return
 

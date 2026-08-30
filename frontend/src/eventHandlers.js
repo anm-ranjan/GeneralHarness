@@ -190,6 +190,7 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
           type: 'approval',
           approvalId: data.approval_id,
           toolName: data.tool_name,
+          sourceAgent: data.source_agent,
           argsJson: data.args_json,
           diffPreview: data.diff_preview,
           resolved: null,
@@ -307,6 +308,14 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
     case 'codex_item':
       dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'codex_item', itemType: data.item_type, raw: data.raw } })
       break
+
+    case 'agent_event': {
+      const agent = data.agent_path || data.agent_id || 'agent'
+      const detail = data.error || data.result || data.text || data.task || data.status || ''
+      const text = `[${agent}] ${data.action || 'updated'}${detail ? `: ${detail}` : ''}`
+      dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: data.action === 'error' || data.action === 'failed' ? 'error' : 'status', text } })
+      break
+    }
 
     case 'provider_warning':
       dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'status', text: data.message } })

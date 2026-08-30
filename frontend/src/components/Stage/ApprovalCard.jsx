@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { truncate } from '../../utils'
 
-function ApprovalCard({ approvalId, toolName, argsJson, diffPreview, resolved, onRespond }) {
+function ApprovalCard({ approvalId, toolName, sourceAgent, argsJson, diffPreview, resolved, onRespond }) {
   return (
     <div className={`border rounded-md my-2 px-4 py-3 ${
       resolved === 'approved' ? 'border-ok/30 bg-ok-soft'
@@ -15,6 +15,7 @@ function ApprovalCard({ approvalId, toolName, argsJson, diffPreview, resolved, o
         <span className="text-[13px] font-medium text-text-bright">
           Approval: {toolName}
         </span>
+        {sourceAgent && <span className="text-[11px] text-muted">{sourceAgent}</span>}
         {resolved && (
           <span className={`text-[11px] ml-auto ${resolved === 'approved' ? 'text-ok' : 'text-danger'}`}>
             {resolved}

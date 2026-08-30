@@ -69,29 +69,48 @@ class ActiveRun:
         self.session_id = session_id
         self.cancel_event = threading.Event()
         self.thread: threading.Thread | None = None
-        self._pending_approval_id: str | None = None
-        self._approval_event = threading.Event()
-        self._approval_result: bool = False
+        self._approval_lock = threading.Lock()
+        self._approvals: dict[str, dict] = {}
         self._question_lock = threading.Lock()
-        self._pending_question_id: str | None = None
-        self._question_event = threading.Event()
-        self._question_answer: str | None = None
-        self._question_answered = False
+        self._questions: dict[str, dict] = {}
+
+    @property
+    def pending_approval_ids(self) -> list[str]:
+        with self._approval_lock:
+            return list(self._approvals)
+
+    @property
+    def _pending_approval_id(self) -> str | None:
+        ids = self.pending_approval_ids
+        return ids[0] if ids else None
+
+    @_pending_approval_id.setter
+    def _pending_approval_id(self, value: str | None) -> None:
+        with self._approval_lock:
+            self._approvals.clear()
+            if value:
+                self._approvals[value] = {"event": threading.Event(), "result": False}
 
     @property
     def pending_question_id(self) -> str | None:
         with self._question_lock:
-            return self._pending_question_id
+            return next(iter(self._questions), None)
+
+    @property
+    def pending_question_ids(self) -> list[str]:
+        with self._question_lock:
+            return list(self._questions)
 
     def begin_question(self, question_id: str) -> bool:
         """Register a question before it becomes visible to clients."""
         with self._question_lock:
-            if self._pending_question_id is not None:
+            if self.cancel_event.is_set() or question_id in self._questions:
                 return False
-            self._pending_question_id = question_id
-            self._question_answer = None
-            self._question_answered = False
-            self._question_event.clear()
+            self._questions[question_id] = {
+                "event": threading.Event(),
+                "answer": None,
+                "answered": False,
+            }
             return True
 
     def wait_for_question(
@@ -106,13 +125,16 @@ class ActiveRun:
         Timeout and cancellation both return None, which the caller reports as
         unanswered rather than treating either as an empty answer.
         """
-        self._question_event.wait(timeout=timeout)
         with self._question_lock:
-            if self._pending_question_id != question_id:
+            waiter = self._questions.get(question_id)
+        if waiter is None:
+            return None
+        waiter["event"].wait(timeout=timeout)
+        with self._question_lock:
+            waiter = self._questions.pop(question_id, None)
+            if waiter is None:
                 return None
-            answer = self._question_answer if self._question_answered else None
-            self._clear_question_locked()
-            return answer
+            return waiter["answer"] if waiter["answered"] else None
 
     def ask_question(self, question_id: str, timeout: float = QUESTION_TIMEOUT_SECONDS) -> str | None:
         """Compatibility wrapper for non-web callers and focused unit tests."""
@@ -122,54 +144,56 @@ class ActiveRun:
 
     def answer_question(self, question_id: str, answer: str) -> bool:
         with self._question_lock:
-            if self._pending_question_id != question_id or self._question_event.is_set():
+            waiter = self._questions.get(question_id)
+            if waiter is None or waiter["event"].is_set():
                 return False
-            self._question_answer = answer
-            self._question_answered = True
-            self._question_event.set()
+            waiter["answer"] = answer
+            waiter["answered"] = True
+            waiter["event"].set()
             return True
 
     def cancel_question(self, question_id: str) -> bool:
         """Release a pending question without manufacturing an answer."""
         with self._question_lock:
-            if self._pending_question_id != question_id or self._question_event.is_set():
+            waiter = self._questions.get(question_id)
+            if waiter is None or waiter["event"].is_set():
                 return False
-            self._question_answer = None
-            self._question_answered = False
-            self._question_event.set()
+            waiter["event"].set()
             return True
 
     def clear_question(self, question_id: str) -> bool:
         """Remove a question that could not be published."""
         with self._question_lock:
-            if self._pending_question_id != question_id:
-                return False
-            self._clear_question_locked()
-            return True
-
-    def _clear_question_locked(self) -> None:
-        self._pending_question_id = None
-        self._question_answer = None
-        self._question_answered = False
-        self._question_event.clear()
+            return self._questions.pop(question_id, None) is not None
 
     def request_approval(self, approval_id: str) -> bool:
-        self._pending_approval_id = approval_id
-        self._approval_event.clear()
-        self._approval_event.wait(timeout=300)
-        if not self._approval_event.is_set():
-            self._pending_approval_id = None
-            return False
-        result = self._approval_result
-        self._pending_approval_id = None
-        return result
+        waiter = {"event": threading.Event(), "result": False}
+        with self._approval_lock:
+            if self.cancel_event.is_set() or approval_id in self._approvals:
+                return False
+            self._approvals[approval_id] = waiter
+        waiter["event"].wait(timeout=300)
+        with self._approval_lock:
+            stored = self._approvals.pop(approval_id, None)
+        return bool(stored and stored["event"].is_set() and stored["result"])
 
     def resolve_approval(self, approval_id: str, approved: bool) -> bool:
-        if self._pending_approval_id != approval_id:
-            return False
-        self._approval_result = approved
-        self._approval_event.set()
-        return True
+        with self._approval_lock:
+            waiter = self._approvals.get(approval_id)
+            if waiter is None or waiter["event"].is_set():
+                return False
+            waiter["result"] = approved
+            waiter["event"].set()
+            return True
+
+    def cancel_waiters(self) -> None:
+        """Release every approval and question waiter."""
+        with self._approval_lock:
+            for waiter in self._approvals.values():
+                waiter["event"].set()
+        with self._question_lock:
+            for waiter in self._questions.values():
+                waiter["event"].set()
 
 
 class SessionManager:
@@ -228,12 +252,12 @@ class SessionManager:
         return [
             session_id
             for session_id, run in self._active_runs.items()
-            if run._pending_approval_id
+            if run.pending_approval_ids
         ]
 
     def pending_question_session_ids(self) -> list[str]:
         return [
             session_id
             for session_id, run in self._active_runs.items()
-            if run.pending_question_id
+            if run.pending_question_ids
         ]

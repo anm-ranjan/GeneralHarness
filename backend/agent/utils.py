@@ -288,6 +288,10 @@ MAX_BACKGROUND_JOBS = config_int(CONFIG, ["shell", "max_background_jobs"], 10)
 BACKGROUND_OUTPUT_MAX_LINES = config_int(CONFIG, ["shell", "background_output_max_lines"], 2000)
 MAX_AGENT_ITERATIONS = config_int(CONFIG, ["agent", "max_iterations"], 20)
 TOOL_CALL_CHECKPOINT = config_int(CONFIG, ["agent", "tool_call_checkpoint"], 20)
+MULTI_AGENT_ENABLED = str(nested_get(CONFIG, ["agent", "multi_agent_enabled"], "true")).lower() in ("true", "1", "yes")
+MAX_CONCURRENT_SUBAGENTS = config_int(CONFIG, ["agent", "max_concurrent_subagents"], 3)
+MAX_TOTAL_SUBAGENTS = config_int(CONFIG, ["agent", "max_total_subagents"], 12)
+MAX_SUBAGENT_DEPTH = config_int(CONFIG, ["agent", "max_subagent_depth"], 2)
 MAX_SEARCH_RESULTS = config_int(CONFIG, ["search", "max_results"], 100)
 
 # Absolute Python interpreter recommended for shell_run python invocations.
@@ -2809,6 +2813,12 @@ _REQUIRED_ARGS = {
     "shell_check": ["job_id"],
     "shell_kill": ["job_id"],
     "plan_update": ["items"],
+    "spawn_agent": ["task"],
+    "send_message": ["target", "message"],
+    "followup_task": ["target", "task"],
+    "wait_agent": [],
+    "interrupt_agent": ["target"],
+    "list_agents": [],
 }
 
 

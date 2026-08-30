@@ -441,3 +441,65 @@ WRITE_TOOLS = [
 
 TOOLS = READ_ONLY_TOOLS + WRITE_TOOLS
 WRITE_TOOL_NAMES = frozenset(t["function"]["name"] for t in WRITE_TOOLS)
+
+COLLABORATION_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_agent",
+            "description": "Start an independent child agent for a bounded subtask.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string"},
+                    "name": {"type": "string"},
+                    "role": {"type": "string"},
+                    "tool_policy": {"type": "string", "enum": ["read_only", "all"]},
+                },
+                "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_message",
+            "description": "Send information to a live agent.",
+            "parameters": {"type": "object", "properties": {"target": {"type": "string"}, "message": {"type": "string"}}, "required": ["target", "message"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "followup_task",
+            "description": "Give an existing agent a follow-up task.",
+            "parameters": {"type": "object", "properties": {"target": {"type": "string"}, "task": {"type": "string"}}, "required": ["target", "task"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "wait_agent",
+            "description": "Wait for one of the selected agents to finish.",
+            "parameters": {"type": "object", "properties": {"targets": {"type": "array", "items": {"type": "string"}}, "timeout": {"type": "number"}}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "interrupt_agent",
+            "description": "Cancel an agent and its descendants.",
+            "parameters": {"type": "object", "properties": {"target": {"type": "string"}}, "required": ["target"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_agents",
+            "description": "List the current run's agent tree and status.",
+            "parameters": {"type": "object", "properties": {"path_prefix": {"type": "string"}}},
+        },
+    },
+]
+
+COLLABORATION_TOOL_NAMES = frozenset(t["function"]["name"] for t in COLLABORATION_TOOLS)

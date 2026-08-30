@@ -497,6 +497,10 @@ class RemoteCliApp:
             print(f"File {data.get('action', 'changed')}: {data.get('path', '')}")
         elif event_type == "generated_artifact":
             print(f"Generated artifact: {data.get('path', '')}")
+        elif event_type == "agent_event":
+            agent = data.get("agent_path") or data.get("agent_id") or "agent"
+            detail = data.get("error") or data.get("result") or data.get("text") or data.get("status") or ""
+            print(f"[{agent}] {data.get('action', 'updated')}{': ' + str(detail) if detail else ''}")
         elif event_type == "run_finished":
             print(f"Run finished: {data.get('reason', 'completed')}")
 
@@ -506,6 +510,8 @@ class RemoteCliApp:
             return
         print("\nApproval required")
         print(f"Tool: {data.get('tool_name', '')}")
+        if data.get("source_agent"):
+            print(f"Agent: {data['source_agent']}")
         args_json = data.get("args_json") or ""
         if args_json:
             print(args_json[:4000])

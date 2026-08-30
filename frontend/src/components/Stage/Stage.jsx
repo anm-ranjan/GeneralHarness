@@ -140,6 +140,7 @@ export default function Stage() {
           <ApprovalCard
             approvalId={item.approvalId}
             toolName={item.toolName}
+            sourceAgent={item.sourceAgent}
             argsJson={item.argsJson}
             diffPreview={item.diffPreview}
             resolved={item.resolved}

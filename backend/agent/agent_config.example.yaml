@@ -65,6 +65,11 @@ agent:
   default_provider: native
   max_iterations: 20
   tool_call_checkpoint: 20
+  # Native-mode child-agent scheduler limits. Codex and Claude use their provider schedulers.
+  multi_agent_enabled: true
+  max_concurrent_subagents: 3
+  max_total_subagents: 12
+  max_subagent_depth: 2
 
 shell:
   default_timeout: 120

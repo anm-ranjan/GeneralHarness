@@ -94,10 +94,14 @@ pub fn render_event(event: &EventEnvelope, verbose_tools: bool) -> Option<Transc
             TranscriptEntry::new(EntryKind::Tool, format!("  {marker}: {preview}"))
         }
         "tool_result" => return None,
-        "approval_required" => TranscriptEntry::new(
-            EntryKind::Status,
-            format!("Approval required: {}", text("tool_name")),
-        ),
+        "approval_required" => {
+            let source = first_text(data, &["source_agent"])
+                .map_or(String::new(), |value| format!(" from {value}"));
+            TranscriptEntry::new(
+                EntryKind::Status,
+                format!("Approval required{source}: {}", text("tool_name")),
+            )
+        }
         "approval_resolved" => {
             let approved = data
                 .get("approved")
@@ -161,6 +165,13 @@ pub fn render_event(event: &EventEnvelope, verbose_tools: bool) -> Option<Transc
             EntryKind::Tool,
             format!("Generated artifact: {}", text("path")),
         ),
+        "agent_event" => {
+            let agent = first_text(data, &["agent_path", "agent_id"]).unwrap_or("agent");
+            let action = fallback(text("action"), "updated");
+            let detail = first_text(data, &["error", "result", "text", "status"]);
+            let suffix = detail.map_or(String::new(), |value| format!(": {value}"));
+            TranscriptEntry::new(EntryKind::Status, format!("[{agent}] {action}{suffix}"))
+        }
         "run_finished" => TranscriptEntry::new(
             EntryKind::Status,
             format!("Run finished: {}", fallback(text("reason"), "completed")),
@@ -253,6 +264,23 @@ mod tests {
             Some(TranscriptEntry::new(
                 EntryKind::Assistant,
                 "Assistant\nHello"
+            ))
+        );
+    }
+
+    #[test]
+    fn renders_agent_event() {
+        assert_eq!(
+            render_event(
+                &event(
+                    "agent_event",
+                    json!({"agent_path": "/root/reviewer", "action": "completed", "result": "ok"})
+                ),
+                false,
+            ),
+            Some(TranscriptEntry::new(
+                EntryKind::Status,
+                "[/root/reviewer] completed: ok"
             ))
         );
     }

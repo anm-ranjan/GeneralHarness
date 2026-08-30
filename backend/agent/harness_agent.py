@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import threading
 from datetime import datetime
 
 _BULLET = "*" if sys.platform == "win32" else "●"
@@ -35,7 +36,13 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 
 import utils
-from tool_defs import READ_ONLY_TOOLS, TOOLS, WRITE_TOOL_NAMES
+from tool_defs import (
+    COLLABORATION_TOOLS,
+    COLLABORATION_TOOL_NAMES,
+    READ_ONLY_TOOLS,
+    TOOLS,
+    WRITE_TOOL_NAMES,
+)
 
 CONSOLE = Console() if Console is not None and utils.UI_USE_RICH != "false" else None
 
@@ -156,12 +163,23 @@ def choose_model_for_tools(tools: list = None, model: str = None) -> str:
 # API
 # ---------------------------------------------------------------------------
 
-_last_api_metrics: dict = {}
-_last_api_failure: str | None = None
+_api_state = threading.local()
 
 
 def get_last_api_metrics() -> dict:
-    return _last_api_metrics.copy()
+    return dict(getattr(_api_state, "metrics", {}))
+
+
+def _set_api_failure(value: str | None) -> None:
+    _api_state.failure = value
+
+
+def _get_api_failure() -> str | None:
+    return getattr(_api_state, "failure", None)
+
+
+def _set_api_metrics(value: dict) -> None:
+    _api_state.metrics = value
 
 
 class _DeltaStreamer:
@@ -307,7 +325,6 @@ _STREAM_UNSUPPORTED = object()
 def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int):
     """Streaming variant of call_api. Returns _STREAM_UNSUPPORTED when the
     provider rejects the streaming request so the caller can retry plainly."""
-    global _last_api_metrics, _last_api_failure
     import time
     stream_payload = {**payload, "stream": True}
     t0 = time.monotonic()
@@ -320,18 +337,18 @@ def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int):
             stream=True,
         )
     except requests.exceptions.Timeout:
-        _last_api_failure = "timeout"
+        _set_api_failure("timeout")
         msg = f"API request timed out after 120s (payload {payload_size // 1024}KB). Try again."
         if ui:
             ui.show_error(msg)
         return None
     except requests.exceptions.ConnectionError as e:
-        _last_api_failure = "connection"
+        _set_api_failure("connection")
         if ui:
             ui.show_error(f"API connection failed: {e}")
         return None
     except requests.exceptions.RequestException as e:
-        _last_api_failure = "request"
+        _set_api_failure("request")
         if ui:
             ui.show_error(f"API request failed: {e}")
         return None
@@ -356,7 +373,7 @@ def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int):
             cancellable_lines(), streamer
         )
     except requests.exceptions.RequestException as e:
-        _last_api_failure = "request"
+        _set_api_failure("request")
         if ui:
             ui.show_error(f"API stream failed: {e}")
         return None
@@ -364,7 +381,7 @@ def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int):
         response.close()
 
     if cancel_event is not None and cancel_event.is_set():
-        _last_api_failure = "cancelled"
+        _set_api_failure("cancelled")
         return None
 
     elapsed = time.monotonic() - t0
@@ -372,15 +389,16 @@ def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int):
     prompt_tokens = usage.get("prompt_tokens", 0)
     total_tokens = usage.get("total_tokens", 0) or (prompt_tokens + completion_tokens)
     tps = completion_tokens / elapsed if elapsed > 0 and completion_tokens > 0 else 0
-    _last_api_metrics = {
+    metrics = {
         "elapsed": round(elapsed, 1),
         "tps": round(tps, 1),
         "completion_tokens": completion_tokens,
         "prompt_tokens": prompt_tokens,
         "total_tokens": total_tokens,
     }
+    _set_api_metrics(metrics)
     if ui and hasattr(ui, "show_api_metrics"):
-        ui.show_api_metrics(_last_api_metrics)
+        ui.show_api_metrics(metrics)
 
     return {
         "choices": [{"message": message, "finish_reason": finish_reason or "stop"}],
@@ -390,8 +408,7 @@ def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int):
 
 
 def call_api(messages: list, tools: list = None, model: str = None, ui=None, cancel_event=None) -> dict:
-    global _last_api_metrics, _last_api_failure
-    _last_api_failure = None
+    _set_api_failure(None)
     selected_model = choose_model_for_tools(tools, model)
     payload = {"model": selected_model, "messages": messages, "max_tokens": 65000, "temperature": 0.3}
     provider_preferences = utils.build_openrouter_provider_preferences()
@@ -419,7 +436,7 @@ def call_api(messages: list, tools: list = None, model: str = None, ui=None, can
             timeout=utils.NATIVE_API_TIMEOUT,
         )
     except requests.exceptions.Timeout:
-        _last_api_failure = "timeout"
+        _set_api_failure("timeout")
         msg = f"API request timed out after 120s (payload {payload_size // 1024}KB). Try again."
         if ui:
             ui.show_error(msg)
@@ -427,7 +444,7 @@ def call_api(messages: list, tools: list = None, model: str = None, ui=None, can
             ui_print(msg, style="red")
         return None
     except requests.exceptions.ConnectionError as e:
-        _last_api_failure = "connection"
+        _set_api_failure("connection")
         msg = f"API connection failed: {e}"
         if ui:
             ui.show_error(msg)
@@ -435,7 +452,7 @@ def call_api(messages: list, tools: list = None, model: str = None, ui=None, can
             ui_print(msg, style="red")
         return None
     except requests.exceptions.RequestException as e:
-        _last_api_failure = "request"
+        _set_api_failure("request")
         msg = f"API request failed: {e}"
         if ui:
             ui.show_error(msg)
@@ -445,7 +462,7 @@ def call_api(messages: list, tools: list = None, model: str = None, ui=None, can
     elapsed = time.monotonic() - t0
 
     if response.status_code != 200:
-        _last_api_failure = "status"
+        _set_api_failure("status")
         msg = f"API Error ({response.status_code}), payload {payload_size // 1024}KB: {response.text[:300]}"
         if ui:
             ui.show_error(msg)
@@ -460,16 +477,17 @@ def call_api(messages: list, tools: list = None, model: str = None, ui=None, can
     total_tokens = usage.get("total_tokens", 0)
     tps = completion_tokens / elapsed if elapsed > 0 and completion_tokens > 0 else 0
 
-    _last_api_metrics = {
+    metrics = {
         "elapsed": round(elapsed, 1),
         "tps": round(tps, 1),
         "completion_tokens": completion_tokens,
         "prompt_tokens": prompt_tokens,
         "total_tokens": total_tokens,
     }
+    _set_api_metrics(metrics)
 
     if ui and hasattr(ui, "show_api_metrics"):
-        ui.show_api_metrics(_last_api_metrics)
+        ui.show_api_metrics(metrics)
 
     return data
 
@@ -1059,10 +1077,43 @@ def _ask_user(arguments: dict, ui) -> str:
     return f"The user answered: {answer}"
 
 
-def execute_tool(name: str, arguments: dict, ui=None, cancel_event=None) -> str:
+def execute_tool(
+    name: str,
+    arguments: dict,
+    ui=None,
+    cancel_event=None,
+    orchestrator=None,
+    agent_path: str = "/root",
+) -> str:
     err = utils._check_required_args(name, arguments)
     if err:
         return err
+    if name in COLLABORATION_TOOL_NAMES:
+        if orchestrator is None:
+            return "ERROR: Multi-agent orchestration is unavailable for this run."
+        if name == "spawn_agent":
+            result = orchestrator.spawn_agent(
+                agent_path,
+                arguments["task"],
+                arguments.get("name", "agent"),
+                arguments.get("role", "researcher"),
+                arguments.get("tool_policy", "read_only"),
+            )
+        elif name == "send_message":
+            result = orchestrator.send_message(agent_path, arguments["target"], arguments["message"])
+        elif name == "followup_task":
+            result = orchestrator.followup_task(agent_path, arguments["target"], arguments["task"])
+        elif name == "wait_agent":
+            result = orchestrator.wait_agent(
+                agent_path,
+                arguments.get("targets"),
+                float(arguments.get("timeout", 30)),
+            )
+        elif name == "interrupt_agent":
+            result = orchestrator.interrupt_agent(agent_path, arguments["target"])
+        else:
+            result = orchestrator.list_agents(arguments.get("path_prefix", ""))
+        return json.dumps(result, ensure_ascii=False)
     if name in {"file_search", "file_list", "content_search", "file_read", "image_read", "web_fetch", "web_request", "gather_context", "skill_list", "skill_read"}:
         return utils.execute_read_only_tool(name, arguments, cancel_event)
     if name == "shell_check":
@@ -1322,13 +1373,29 @@ def run_agent(
     display_images=None,
     api_caller=None,
     tools_enabled: bool = True,
+    orchestrator=None,
+    agent_path: str = "/root",
+    tool_policy: str = "all",
+    show_user: bool = True,
 ):
     if max_iterations is None:
         max_iterations = int(_run_setting(ui, "max_iterations", utils.MAX_AGENT_ITERATIONS))
     verbose_tools = bool(_run_setting(ui, "verbose_tools", utils.UI_VERBOSE_TOOLS))
-    if ui:
+    orchestration_marker = "MULTI-AGENT:"
+    if orchestrator is not None and messages and messages[0].get("role") == "system":
+        content = str(messages[0].get("content", ""))
+        if orchestration_marker not in content:
+            messages[0] = {
+                **messages[0],
+                "content": content + (
+                    " MULTI-AGENT: Use spawn_agent only for concrete independent subtasks. "
+                    "Use list_agents and wait_agent to collect results before answering. "
+                    "Use send_message for coordination, followup_task for more work, and interrupt_agent to stop children."
+                ),
+            }
+    if ui and show_user:
         ui.show_user_message(user_query, display_images)
-    else:
+    elif not ui:
         ui_panel("User", user_query, style="blue")
 
     user_msg = {"role": "user", "content": user_content if user_content is not None else user_query}
@@ -1357,12 +1424,23 @@ def run_agent(
             if ui:
                 ui.show_status("[Interrupted]")
             break
+        if orchestrator is not None and agent_path != "/root":
+            mailbox = orchestrator.drain_mailbox(agent_path)
+            if mailbox:
+                messages.append({
+                    "role": "user",
+                    "content": "Messages from other agents:\n" + "\n".join(f"- {message}" for message in mailbox),
+                })
         if ui:
             ui.show_iteration(iteration + 1)
         elif verbose_tools:
             ui_print(f"Iteration {iteration + 1}", style="dim")
 
         active_tools = select_tools(messages) if tools_enabled else []
+        if tool_policy == "read_only":
+            active_tools = READ_ONLY_TOOLS
+        if orchestrator is not None:
+            active_tools = active_tools + COLLABORATION_TOOLS
         result = model_call(messages, tools=active_tools, ui=ui)
         if cancel_event and cancel_event.is_set():
             interrupted = True
@@ -1370,7 +1448,7 @@ def run_agent(
                 ui.show_status("[Interrupted]")
             break
         if result is None:
-            if _last_api_failure == "timeout":
+            if _get_api_failure() == "timeout":
                 if ui:
                     ui.show_agent_finished("api timeout")
                 break
@@ -1382,7 +1460,7 @@ def run_agent(
                     ui_print(retry_msg, style="yellow")
                 utils._aggressive_compress_tool_results(messages, turn_start_index)
                 result = model_call(messages, tools=active_tools, ui=ui)
-                if _last_api_failure == "timeout":
+                if _get_api_failure() == "timeout":
                     if ui:
                         ui.show_agent_finished("api timeout")
                     break
@@ -1570,7 +1648,25 @@ def run_agent(
                 )
 
                 try:
-                    tool_result = execute_tool(func_name, func_args, ui=ui, cancel_event=cancel_event)
+                    if func_name in WRITE_TOOL_NAMES and orchestrator is not None and agent_path != "/root":
+                        with orchestrator.write_lock:
+                            tool_result = execute_tool(
+                                func_name,
+                                func_args,
+                                ui=ui,
+                                cancel_event=cancel_event,
+                                orchestrator=orchestrator,
+                                agent_path=agent_path,
+                            )
+                    else:
+                        tool_result = execute_tool(
+                            func_name,
+                            func_args,
+                            ui=ui,
+                            cancel_event=cancel_event,
+                            orchestrator=orchestrator,
+                            agent_path=agent_path,
+                        )
                 except Exception as e:
                     tool_result = f"ERROR: Tool '{func_name}' raised: {e}"
 
@@ -1660,6 +1756,12 @@ def run_agent(
                 elif verbose_tools:
                     ui_print(f"  {_BULLET} {status_text}", style="yellow")
         elif assistant_msg.get("content"):
+            if orchestrator is not None and orchestrator.has_live_children(agent_path):
+                messages.append({
+                    "role": "user",
+                    "content": "Child agents are still running. Use wait_agent, inspect their results, or interrupt them before finishing.",
+                })
+                continue
             # The plan is most often left stale right at the end of a turn: the
             # work is done but the last steps were never marked completed. Give
             # the model one chance to reconcile before the answer is shown.
@@ -1853,7 +1955,6 @@ def main():
         try:
             from tui_app import IpaAgentApp
         except ImportError:
-            import sys
             print("Textual is not installed. Install with: pip install 'textual>=0.79'")
             sys.exit(1)
         app = IpaAgentApp()

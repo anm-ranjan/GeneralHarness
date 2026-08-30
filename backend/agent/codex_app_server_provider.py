@@ -45,6 +45,22 @@ def _thread_id_from_message(msg: dict[str, Any]) -> str | None:
     return None
 
 
+def _parent_thread_id_from_message(msg: dict[str, Any]) -> str | None:
+    params = msg.get("params")
+    if not isinstance(params, dict):
+        return None
+    thread = params.get("thread")
+    if isinstance(thread, dict):
+        value = thread.get("parentThreadId") or thread.get("parent_thread_id")
+        if isinstance(value, str) and value:
+            return value
+    for key in ("parentThreadId", "parent_thread_id"):
+        value = params.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 class AppServerTransport:
     def __init__(
         self,
@@ -61,6 +77,7 @@ class AppServerTransport:
         self._next_id = 1
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._thread_queues: dict[str, asyncio.Queue[dict[str, Any] | BaseException]] = {}
+        self._thread_owners: dict[str, str] = {}
         self._writer_lock = asyncio.Lock()
         self._lifecycle_lock = asyncio.Lock()
         self._reader_task: asyncio.Task[None] | None = None
@@ -126,16 +143,48 @@ class AppServerTransport:
         self._fail_all(AppServerProtocolError("Codex app-server connection closed."))
 
     def subscribe_thread(
-        self, thread_id: str
+        self, thread_id: str, owner_thread_id: str | None = None
     ) -> asyncio.Queue[dict[str, Any] | BaseException]:
         if thread_id in self._thread_queues:
             raise AppServerProtocolError(f"Codex thread {thread_id} already has an active turn.")
         queue: asyncio.Queue[dict[str, Any] | BaseException] = asyncio.Queue()
         self._thread_queues[thread_id] = queue
+        self._thread_owners[thread_id] = owner_thread_id or thread_id
         return queue
 
     def unsubscribe_thread(self, thread_id: str) -> None:
         self._thread_queues.pop(thread_id, None)
+        for child_id, owner_id in list(self._thread_owners.items()):
+            if child_id == thread_id or owner_id == thread_id:
+                self._thread_owners.pop(child_id, None)
+
+    def _register_thread_owner(self, thread_id: str | None, owner_thread_id: str | None) -> None:
+        if thread_id and owner_thread_id:
+            self._thread_owners.setdefault(thread_id, owner_thread_id)
+
+    def _owner_for_message(self, msg: dict[str, Any]) -> str | None:
+        thread_id = _thread_id_from_message(msg)
+        owner_thread_id = self._thread_owners.get(thread_id or "")
+        parent_thread_id = _parent_thread_id_from_message(msg)
+        if parent_thread_id:
+            parent_owner = self._thread_owners.get(parent_thread_id)
+            if parent_owner is None and parent_thread_id in self._thread_queues:
+                parent_owner = parent_thread_id
+            if parent_owner:
+                self._register_thread_owner(thread_id, parent_owner)
+                owner_thread_id = parent_owner
+        params = msg.get("params")
+        item = params.get("item") if isinstance(params, dict) else None
+        if isinstance(item, dict) and item.get("type") == "collabAgentToolCall":
+            sender_thread_id = item.get("senderThreadId")
+            sender_owner = self._thread_owners.get(sender_thread_id or "")
+            if sender_owner is None and sender_thread_id in self._thread_queues:
+                sender_owner = sender_thread_id
+            if sender_owner:
+                for receiver_thread_id in item.get("receiverThreadIds") or []:
+                    self._register_thread_owner(receiver_thread_id, sender_owner)
+                owner_thread_id = owner_thread_id or sender_owner
+        return owner_thread_id
 
     def _fail_all(self, exc: BaseException) -> None:
         for future in list(self._pending.values()):
@@ -214,8 +263,8 @@ class AppServerTransport:
                     else:
                         future.set_result(msg.get("result") or {})
                     continue
-                thread_id = _thread_id_from_message(msg)
-                thread_queue = self._thread_queues.get(thread_id or "")
+                owner_thread_id = self._owner_for_message(msg)
+                thread_queue = self._thread_queues.get(owner_thread_id or "")
                 if thread_queue is not None:
                     await thread_queue.put(msg)
                 elif (
@@ -896,15 +945,17 @@ class CodexAppServerProvider:
     async def _handle_server_request(self, msg: dict[str, Any], ui) -> None:
         method = msg.get("method", "")
         params = msg.get("params") or {}
+        source = self._agent_source(msg)
         if method in {
             "item/commandExecution/requestApproval",
             "item/fileChange/requestApproval",
         }:
             approved = await asyncio.to_thread(
-                ui.request_approval,
+                self._request_approval,
+                ui,
                 method,
                 json.dumps(params, indent=2, ensure_ascii=False),
-                None,
+                source,
             )
             await self.transport.respond(
                 msg["id"], {"decision": "accept" if approved else "decline"}
@@ -912,10 +963,11 @@ class CodexAppServerProvider:
             return
         if method == "item/permissions/requestApproval":
             approved = await asyncio.to_thread(
-                ui.request_approval,
+                self._request_approval,
+                ui,
                 method,
                 json.dumps(params, indent=2, ensure_ascii=False),
-                None,
+                source,
             )
             await self.transport.respond(
                 msg["id"],
@@ -947,6 +999,25 @@ class CodexAppServerProvider:
         await self.transport.respond_error(
             msg["id"], -32601, f"MyHarness does not support server request {method}"
         )
+
+    def _agent_source(self, msg: dict[str, Any]) -> dict[str, Any]:
+        thread_id = _thread_id_from_message(msg) or "root"
+        owner_thread_id = getattr(self.transport, "_thread_owners", {}).get(thread_id)
+        source = {
+            "provider": "codex-app-server",
+            "agent_id": thread_id,
+            "agent_path": "/root" if thread_id == "root" else thread_id,
+        }
+        if owner_thread_id and owner_thread_id != thread_id:
+            source["parent_id"] = owner_thread_id
+        return source
+
+    @staticmethod
+    def _request_approval(ui, method: str, detail: str, source: dict[str, Any]) -> bool:
+        hook = getattr(ui, "request_approval_for_agent", None)
+        if callable(hook):
+            return bool(hook(method, detail, None, source))
+        return bool(ui.request_approval(method, detail, None))
 
     @staticmethod
     async def _ask_one(ui, question: str, options: list[str]) -> str | None:
@@ -1032,6 +1103,103 @@ class CodexAppServerProvider:
         return error if isinstance(error, str) else ""
 
     @staticmethod
+    def _show_agent_event(ui, event: dict[str, Any]) -> None:
+        hook = getattr(ui, "show_agent_event", None)
+        if callable(hook):
+            hook(event)
+
+    def _emit_agent_event(self, ui, action: str, **fields: Any) -> None:
+        event = {"provider": "codex-app-server", "action": action}
+        event.update({key: value for key, value in fields.items() if value is not None})
+        self._show_agent_event(ui, event)
+
+    def _emit_subagent_event(self, msg: dict[str, Any], ui) -> None:
+        method = msg.get("method", "")
+        params = msg.get("params") or {}
+        thread_id = _thread_id_from_message(msg)
+        item = params.get("item") if isinstance(params, dict) else None
+        if method == "thread/started" and isinstance(params.get("thread"), dict):
+            thread = params["thread"]
+            parent_thread_id = thread.get("parentThreadId") or thread.get("parent_thread_id")
+            if isinstance(parent_thread_id, str) and parent_thread_id:
+                status = thread.get("status")
+                status = status.get("type") if isinstance(status, dict) else status
+                self._emit_agent_event(
+                    ui,
+                    "started",
+                    agent_id=thread.get("id") or thread_id,
+                    thread_id=thread.get("id") or thread_id,
+                    parent_id=parent_thread_id,
+                    parent_thread_id=parent_thread_id,
+                    agent_path=thread.get("agentPath"),
+                    role=thread.get("agentRole"),
+                    nickname=thread.get("agentNickname"),
+                    status=status,
+                    source=method,
+                )
+            return
+        if method == "thread/status/changed" and thread_id:
+            owner_thread_id = getattr(self.transport, "_thread_owners", {}).get(thread_id)
+            if owner_thread_id and owner_thread_id != thread_id:
+                status = params.get("status")
+                status = status.get("type") if isinstance(status, dict) else status
+                self._emit_agent_event(
+                    ui,
+                    "status",
+                    agent_id=thread_id,
+                    thread_id=thread_id,
+                    parent_id=owner_thread_id,
+                    parent_thread_id=owner_thread_id,
+                    status=status,
+                    source=method,
+                )
+            return
+        if not isinstance(item, dict):
+            return
+        if item.get("type") == "subAgentActivity":
+            agent_thread_id = item.get("agentThreadId")
+            kind = item.get("kind")
+            if isinstance(agent_thread_id, str) and isinstance(kind, str):
+                self._emit_agent_event(
+                    ui,
+                    kind,
+                    agent_id=agent_thread_id,
+                    thread_id=agent_thread_id,
+                    parent_id=thread_id,
+                    parent_thread_id=thread_id,
+                    agent_path=item.get("agentPath"),
+                    source=method,
+                    item_id=item.get("id"),
+                )
+            return
+        if item.get("type") != "collabAgentToolCall":
+            return
+        tool = item.get("tool")
+        status = item.get("status")
+        action = {
+            "inProgress": "delegated",
+            "completed": "completed",
+            "failed": "error",
+        }.get(status, "updated")
+        receivers = item.get("receiverThreadIds") or []
+        if not receivers:
+            receivers = [None]
+        for receiver_thread_id in receivers:
+            self._emit_agent_event(
+                ui,
+                action,
+                agent_id=receiver_thread_id,
+                thread_id=receiver_thread_id,
+                parent_id=item.get("senderThreadId") or thread_id,
+                parent_thread_id=item.get("senderThreadId") or thread_id,
+                tool=tool,
+                status=status,
+                prompt=item.get("prompt"),
+                source=method,
+                item_id=item.get("id"),
+            )
+
+    @staticmethod
     def _file_changes(item: dict[str, Any]) -> list[tuple[str, str]]:
         changes: list[tuple[str, str]] = []
         for change in item.get("changes") or []:
@@ -1062,6 +1230,7 @@ class CodexAppServerProvider:
         method = msg.get("method", "")
         params = msg.get("params") or {}
         verbose = self._verbose(ui)
+        self._emit_subagent_event(msg, ui)
 
         if method in {"thread/started", "turn/started"}:
             if verbose:

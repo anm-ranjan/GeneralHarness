@@ -24,6 +24,7 @@ class FakeUI:
         self.thinking = []
         self.thinking_deltas = []
         self.assistant_deltas = []
+        self.agent_events = []
         self.run_settings = run_settings or {}
 
     def show_user_message(self, *_args):
@@ -64,6 +65,9 @@ class FakeUI:
 
     def request_approval(self, *_args):
         return True
+
+    def show_agent_event(self, event):
+        self.agent_events.append(event)
 
 
 class FakeStore:
@@ -177,6 +181,61 @@ def fake_sdk(captured):
 
 
 class ClaudeAgentProviderTests(unittest.TestCase):
+    def test_claude_task_events_keep_nested_parent_relationships(self):
+        ui = FakeUI()
+        tree = provider_module._ClaudeAgentTree(ui)
+        tree.observe_tool_use(
+            SimpleNamespace(
+                id="task_review",
+                name="Task",
+                input={"description": "Review the change", "subagent_type": "reviewer"},
+            ),
+            None,
+        )
+        tree.observe_stream(
+            {
+                "type": "content_block_start",
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "task_check",
+                    "name": "Task",
+                    "input": {"prompt": "Check the tests", "name": "tester"},
+                },
+            },
+            "task_review",
+        )
+        tree.observe_tool_result(SimpleNamespace(
+            tool_use_id="task_check", is_error=False, content="Tests pass."
+        ))
+
+        self.assertEqual(
+            [(event["action"], event["agent_id"], event["parent_id"]) for event in ui.agent_events],
+            [
+                ("started", "task_review", "root"),
+                ("started", "task_check", "task_review"),
+                ("completed", "task_check", "task_review"),
+            ],
+        )
+        self.assertEqual(ui.agent_events[1]["agent_path"], "/root/reviewer/tester")
+
+    def test_child_approval_hook_receives_sdk_agent_source(self):
+        class ApprovalUI(FakeUI):
+            def request_approval_for_agent(self, tool_name, args_json, diff_preview, source):
+                self.approval = (tool_name, args_json, diff_preview, source)
+                return True
+
+        ui = ApprovalUI()
+        tree = provider_module._ClaudeAgentTree(ui)
+        tree.start("task_review", None, "Review", "reviewer")
+        source = tree.source_for(SimpleNamespace(
+            parent_tool_use_id="task_review", tool_use_id="tool_write"
+        ))
+
+        self.assertTrue(provider_module._request_approval(ui, "Write", "{}", source))
+        self.assertEqual(ui.approval[3]["agent_id"], "task_review")
+        self.assertEqual(ui.approval[3]["agent_path"], "/root/reviewer")
+        self.assertEqual(ui.approval[3]["tool_use_id"], "tool_write")
+
     def test_permission_mode_derives_from_harness_setting(self):
         with patch.object(provider_module.utils, "CLAUDE_AGENT_PERMISSION_MODE", ""):
             self.assertEqual(provider_module._permission_mode_for("always_ask"), "default")

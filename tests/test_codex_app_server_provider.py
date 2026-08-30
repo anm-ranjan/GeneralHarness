@@ -19,16 +19,21 @@ class FakeTransport:
     def __init__(self):
         self.generation = 1
         self.queues = {}
+        self._thread_owners = {}
         self.responses = []
         self.errors = []
 
     def subscribe_thread(self, thread_id):
         queue = asyncio.Queue()
         self.queues[thread_id] = queue
+        self._thread_owners[thread_id] = thread_id
         return queue
 
     def unsubscribe_thread(self, thread_id):
         self.queues.pop(thread_id, None)
+
+    def _register_thread_owner(self, thread_id, owner_thread_id):
+        self._thread_owners[thread_id] = owner_thread_id
 
     async def respond(self, request_id, result):
         self.responses.append((request_id, result))
@@ -150,6 +155,7 @@ class FakeUI:
         self.thinking = []
         self.thinking_deltas = []
         self.assistant_deltas = []
+        self.agent_events = []
 
     def show_user_message(self, *_args):
         pass
@@ -189,6 +195,9 @@ class FakeUI:
 
     def show_codex_item(self, *_args):
         pass
+
+    def show_agent_event(self, event):
+        self.agent_events.append(event)
 
     def show_provider_warning(self, message, detail=""):
         self.warnings.append((message, detail))
@@ -329,6 +338,87 @@ class CodexAppServerProviderTests(unittest.IsolatedAsyncioTestCase):
             transport.responses,
             [(7, {"decision": "accept"}), (8, {"decision": "decline"})],
         )
+
+    async def test_child_approval_uses_optional_agent_approval_hook(self):
+        provider, transport, _client = make_provider()
+        ui = FakeUI(approval=True)
+        ui.request_approval_for_agent = lambda *args: ui.agent_events.append(args) or True
+        transport.subscribe_thread("thr_existing")
+        transport._register_thread_owner("child", "thr_existing")
+
+        await provider._handle_server_request(
+            {
+                "id": 9,
+                "method": "item/commandExecution/requestApproval",
+                "params": {"threadId": "child", "command": "pytest"},
+            },
+            ui,
+        )
+
+        self.assertEqual(transport.responses, [(9, {"decision": "accept"})])
+        self.assertEqual(ui.agent_events[0][-1]["agent_id"], "child")
+
+    async def test_transport_routes_child_messages_to_the_root_subscription(self):
+        class Stdout:
+            def __init__(self, messages):
+                self.messages = iter(messages)
+
+            async def readline(self):
+                try:
+                    return (json.dumps(next(self.messages)) + "\n").encode()
+                except StopIteration:
+                    return b""
+
+        import json
+
+        transport = provider_module.AppServerTransport()
+        root_queue = transport.subscribe_thread("root")
+        child_started = {
+            "method": "thread/started",
+            "params": {
+                "thread": {"id": "child", "parentThreadId": "root"},
+            },
+        }
+        child_request = {
+            "id": 3,
+            "method": "item/commandExecution/requestApproval",
+            "params": {"threadId": "child", "command": "pytest"},
+        }
+        transport.process = SimpleNamespace(stdout=Stdout([child_started, child_request]))
+
+        await transport._read_loop()
+
+        self.assertEqual((await root_queue.get())["method"], "thread/started")
+        self.assertEqual((await root_queue.get())["params"]["threadId"], "child")
+
+    async def test_codex_subagent_items_emit_optional_lifecycle_events(self):
+        provider, _transport, client = make_provider()
+        client.emit_items = [
+            {
+                "id": "activity",
+                "type": "subAgentActivity",
+                "agentThreadId": "child",
+                "agentPath": "/root/reviewer",
+                "kind": "started",
+            },
+            {
+                "id": "delegation",
+                "type": "collabAgentToolCall",
+                "senderThreadId": "thr_existing",
+                "receiverThreadIds": ["child"],
+                "tool": "spawnAgent",
+                "status": "inProgress",
+                "prompt": "Review the tests",
+            },
+        ]
+        ui = FakeUI()
+
+        await self.run_provider(provider, make_meta(), ui, FakeStore())
+
+        self.assertEqual(ui.agent_events[0]["action"], "started")
+        self.assertEqual(ui.agent_events[0]["agent_path"], "/root/reviewer")
+        self.assertEqual(ui.agent_events[1]["action"], "delegated")
+        self.assertEqual(ui.agent_events[1]["agent_id"], "child")
 
     async def test_non_verbose_hides_protocol_chatter_but_tracks_file_changes(self):
         provider, _transport, client = make_provider()
