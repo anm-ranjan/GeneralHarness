@@ -2,16 +2,17 @@ import { useEffect, useMemo, useState } from 'react'
 
 export default function MoveSessionModal({ moveRequest, projects, onClose, onMove }) {
   const [targetTaskId, setTargetTaskId] = useState('')
+  const [targetProjectId, setTargetProjectId] = useState(moveRequest.projectId)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   const project = useMemo(
-    () => projects.find(p => p.id === moveRequest.projectId),
-    [projects, moveRequest.projectId],
+    () => projects.find(p => p.id === targetProjectId),
+    [projects, targetProjectId],
   )
   const targetTasks = useMemo(
-    () => (project?.tasks || []).filter(task => task.id !== moveRequest.currentTaskId),
-    [project, moveRequest.currentTaskId],
+    () => (project?.tasks || []).filter(task => targetProjectId !== moveRequest.projectId || task.id !== moveRequest.currentTaskId),
+    [project, targetProjectId, moveRequest],
   )
 
   useEffect(() => {
@@ -24,7 +25,7 @@ export default function MoveSessionModal({ moveRequest, projects, onClose, onMov
     setBusy(true)
     setError('')
     try {
-      await onMove(moveRequest.session.id, moveRequest.projectId, targetTaskId)
+      await onMove(moveRequest.session.id, targetProjectId, targetTaskId)
       onClose()
     } catch (err) {
       setError(err.detail || err.message || 'Move failed')
@@ -54,6 +55,13 @@ export default function MoveSessionModal({ moveRequest, projects, onClose, onMov
         </div>
         <div className="px-5 py-4 space-y-3">
           <label className="block">
+            <span className="block text-[12px] font-medium text-faint mb-1.5">Project</span>
+            <select value={targetProjectId} onChange={e => setTargetProjectId(e.target.value)} disabled={busy}
+              className="w-full bg-surface border border-line rounded-md px-3 py-2 text-[13px] text-text-bright">
+              {projects.filter(p => p.id !== '__chats__').map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+          <label className="block">
             <span className="block text-[12px] font-medium text-faint mb-1.5">Label</span>
             <select
               value={targetTaskId}
@@ -67,8 +75,9 @@ export default function MoveSessionModal({ moveRequest, projects, onClose, onMov
             </select>
           </label>
           {targetTasks.length === 0 && (
-            <p className="text-[12px] text-faint">No other labels in this project.</p>
+            <p className="text-[12px] text-faint">No destination labels in this project.</p>
           )}
+          {targetProjectId !== moveRequest.projectId && <p className="text-[12px] text-muted">Future runs use the destination workspace. Existing files stay where they are.</p>}
           {error && (
             <p className="text-[12px] text-danger">{error}</p>
           )}

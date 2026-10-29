@@ -29,6 +29,14 @@ function collect(initialState = {}) {
   }
 }
 
+test('generated reports replay as preview links instead of images', () => {
+  const ctx = collect()
+  handleSessionEvent({ type: 'generated_artifact', data: { path: '/tmp/my report.html', name: 'my report.html', media_type: 'text/html' } }, ctx.dispatch, ctx.stateRef)
+  assert.match(ctx.actions[0].payload.markdown, /\[View my report.html\]/)
+  assert.doesNotMatch(ctx.actions[0].payload.markdown, /!\[/)
+  assert.equal(ctx.actions[1].payload.path, '/tmp/my report.html')
+})
+
 test('toolDetail prefers useful fields', () => {
   assert.equal(toolDetail('file_read', { file_path: '/tmp/source.py' }), '/tmp/source.py')
   assert.equal(toolDetail('file_search', { directory: '/tmp', pattern: '*.py' }), '/tmp · *.py')
@@ -47,6 +55,37 @@ test('subagent lifecycle events render as compact status items', () => {
     type: 'APPEND_STAGE_ITEM',
     payload: { type: 'status', text: '[/root/reviewer] completed: Looks good' },
   })
+})
+
+test('composer throughput shows only the generation speed', () => {
+  const ctx = collect()
+  handleSessionEvent({ type: 'api_metrics', data: {
+    input_tokens: 1000, output_tokens: 20, tps: 10,
+    cache_read_tokens: 0, cache_write_tokens: 800,
+    estimated_input: { instructions: 300, tool_results: 700, total: 1000 },
+  } }, ctx.dispatch, ctx.stateRef)
+  assert.deepEqual(ctx.actions, [{ type: 'SET_THROUGHPUT', payload: '10 tok/s' }])
+  const old = collect()
+  handleSessionEvent({ type: 'api_metrics', data: { input_tokens: 4 } }, old.dispatch, old.stateRef)
+  assert.deepEqual(old.actions, [], 'no speed, nothing to show')
+})
+
+test('compaction usage does not replace visible answer throughput', () => {
+  const ctx = collect()
+  handleSessionEvent({ type: 'api_metrics', data: {
+    purpose: 'history_compaction', input_tokens: 3000, output_tokens: 100,
+    estimated_input: { total: 3100 },
+  } }, ctx.dispatch, ctx.stateRef)
+  assert.deepEqual(ctx.actions, [])
+})
+
+test('child agent progress is hidden unless verbose', () => {
+  const ctx = collect()
+  handleSessionEvent({
+    type: 'agent_event',
+    data: { agent_path: '/root/reviewer', action: 'tool_call', text: 'Reading file' },
+  }, ctx.dispatch, ctx.stateRef)
+  assert.equal(ctx.actions.length, 0)
 })
 
 test('Codex protocol statuses are hidden only when verbose mode is off', () => {
@@ -127,6 +166,7 @@ test('session_loaded replays events and settles idle sessions', () => {
     'FINALIZE_WORK_GROUP',
     'HIDE_CODEX_RUNNING',
     'CLEAR_ITERATION',
+    'DROP_SHOWN_GENERATED_IMAGES',
     'APPEND_STAGE_ITEM',
     'SET_REPLAYING',
     'SET_REPLAY_IDLE',
@@ -158,7 +198,8 @@ test('session_loaded stamps replayed stage items with absolute event indices', (
   assert.deepEqual(appended.map(a => a.payload.eventIndex), [100, 103])
 
   const toolCall = replayed.find(a => a.type === 'APPEND_TOOL_CALL')
-  assert.equal(toolCall.payload.eventIndex, 101)
+  assert.equal(toolCall, undefined)
+  assert.ok(appended.every(a => a.payload.historical))
 })
 
 test('live events are not stamped with event indices', () => {
@@ -191,7 +232,7 @@ test('generated artifacts render as replayable assistant images', () => {
 
   assert.deepEqual(ctx.actions, [{
     type: 'APPEND_STAGE_ITEM',
-    payload: { type: 'assistant_message', markdown: '![result.png](/workspace/result.png?myharness_v=42-10)' },
+    payload: { type: 'assistant_message', markdown: '![result.png](/workspace/result.png?myharness_v=42-10)', generatedPath: '/workspace/result.png' },
   }])
 })
 
@@ -416,4 +457,36 @@ test('running replay keeps an unresolved live question interactive', () => {
   }, ctx.dispatch, ctx.stateRef)
 
   assert.equal(flatten(ctx.actions).some(action => action.type === 'RESOLVE_QUESTION'), false)
+})
+
+
+test('completed history hides tools while reconnecting active turn keeps tools and approval', () => {
+  const ctx = collect()
+  handleSessionEvent({ type: 'session_loaded', data: {
+    meta: { status: 'running' }, events: [
+      { type: 'user_message', data: { text: 'old question' } },
+      { type: 'tool_call', data: { verbose: true, call_id: 'old', name: 'shell_run' } },
+      { type: 'assistant_message', data: { markdown: 'old answer' } },
+      { type: 'run_finished', data: {} },
+      { type: 'user_message', data: { text: 'current question' } },
+      { type: 'tool_call', data: { verbose: true, call_id: 'live', name: 'shell_run' } },
+      { type: 'approval_required', data: { approval_id: 'approval', tool_name: 'shell_run' } },
+    ],
+  } }, ctx.dispatch, ctx.stateRef)
+  const actions = flatten(ctx.actions)
+  assert.deepEqual(actions.filter(a => a.type === 'APPEND_TOOL_CALL').map(a => a.payload.callId), ['live'])
+  assert.ok(actions.some(a => a.type === 'APPEND_STAGE_ITEM' && a.payload.type === 'approval'))
+})
+
+test('final answer embedding a generated image replaces the early preview', async () => {
+  const { reducer, initialState } = await import('./context/appReducer.js')
+  let state = initialState
+  const ctx = { dispatch: action => { state = reducer(state, action) }, stateRef: { get current() { return state } } }
+  handleSessionEvent({ type: 'generated_artifact', data: { path: '/w/a b.png', name: 'a b.png', media_type: 'image/png' } }, ctx.dispatch, ctx.stateRef)
+  handleSessionEvent({ type: 'generated_artifact', data: { path: '/w/other.png', name: 'other.png', media_type: 'image/png' } }, ctx.dispatch, ctx.stateRef)
+  handleSessionEvent({ type: 'assistant_message', data: { markdown: 'Chart: ![a](/w/a%20b.png)' } }, ctx.dispatch, ctx.stateRef)
+  const markdowns = state.stageItems.map(item => item.markdown)
+  assert.equal(markdowns.length, 2)
+  assert.match(markdowns[0], /other\.png/)
+  assert.equal(markdowns[1], 'Chart: ![a](/w/a%20b.png)')
 })

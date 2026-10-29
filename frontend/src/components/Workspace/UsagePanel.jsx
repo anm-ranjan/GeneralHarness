@@ -75,6 +75,27 @@ export default function UsagePanel() {
       </div>
 
       <div className="p-3">
+        {data.latest?.api_usage?.requests > 0 && (
+          <div className="mb-4 rounded border border-line p-3 text-[12px] text-muted">
+            <div className="text-[11px] uppercase tracking-wide mb-2">Latest run API usage (includes agents)</div>
+            {[
+              ['input_tokens', 'Input tokens'], ['output_tokens', 'Output tokens'],
+              ['cache_read_tokens', 'Cache read tokens'], ['cache_write_tokens', 'Cache write tokens'],
+              ['cost_usd', 'Reported cost'],
+            ].map(([key, label]) => {
+              const usage = data.latest.api_usage
+              const reported = usage.reported_requests?.[key] || 0
+              const value = usage[key]
+              return <div key={key} className="flex justify-between gap-2">
+                <span>{label}</span>
+                <span className="tabular-nums">
+                  {value == null ? 'Unavailable' : key === 'cost_usd' ? `$${value.toFixed(6)}` : value.toLocaleString()}
+                  {reported > 0 && reported < usage.requests ? ` (${reported}/${usage.requests} requests)` : ''}
+                </span>
+              </div>
+            })}
+          </div>
+        )}
         <div className="text-[11px] uppercase tracking-wide text-muted mb-2">Context per run</div>
         <div className="flex flex-col gap-1.5">
           {runs.map((run, i) => (
@@ -94,7 +115,7 @@ export default function UsagePanel() {
           ))}
         </div>
         <p className="mt-3 text-[10px] text-faint italic">
-          Token counts are estimates.
+          Context counts are estimates. API usage is provider-reported. Cached tokens still occupy context.
         </p>
       </div>
     </div>

@@ -9,6 +9,8 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 
 import utils
+import session_context
+from prompt_cache import UsageTotals
 from session_store import SessionStore
 from web_models import EventEnvelope, EventType
 from web_session import ActiveRun, SessionManager
@@ -94,6 +96,7 @@ class WebUI:
             "files": {},
         }
         self.finished_reason: str | None = None
+        self.api_usage = UsageTotals()
         self._active_tool_calls: dict[str, list[tuple[str, float]]] = {}
         self._approval_prompt_lock = threading.Lock()
         self._question_prompt_lock = threading.Lock()
@@ -121,6 +124,46 @@ class WebUI:
                 if str(item.get("mime", "")).startswith("image/")
             ]
         self._emit(EventType.USER_MESSAGE, data)
+
+    def peek_steering(self):
+        meta = self._store.load_session(self._sid)
+        return list(meta.steering_queue) if meta else []
+
+    def claim_steering(self):
+        import web_app
+        with web_app._run_lock_for(self._sid):
+            items = self.peek_steering()
+            self._run.steering_in_flight = {item.id for item in items}
+            return items
+
+    def release_steering(self):
+        import web_app
+        with web_app._run_lock_for(self._sid):
+            self._run.steering_in_flight = set()
+
+    def acknowledge_steering(self, items):
+        import web_app
+        with web_app._run_lock_for(self._sid):
+            meta = self._store.load_session(self._sid)
+            if meta is None:
+                return
+            ids = {item.id for item in items}
+            meta.steering_queue = [item for item in meta.steering_queue if item.id not in ids]
+            self._store.update_session(meta)
+            import web_helpers
+            web_helpers._emit_queue_updated(self._sid, meta)
+            for item in items:
+                self._emit(EventType.USER_MESSAGE, {"text": item.text, "steering": True})
+
+    def take_steering(self, close_if_empty=False, peek=False):
+        import web_app
+        with web_app._run_lock_for(self._sid):
+            items = self.peek_steering()
+            if not items and close_if_empty:
+                self._run.steering_open = False
+            if items and not peek:
+                self.acknowledge_steering(items)
+            return [item.text for item in items]
 
     def show_assistant_markdown(self, text: str) -> None:
         self._emit(EventType.ASSISTANT_MESSAGE, {"markdown": text})
@@ -223,6 +266,7 @@ class WebUI:
         self._emit(EventType.CONTEXT_USAGE, {"usage_str": usage_str})
 
     def show_api_metrics(self, metrics: dict) -> None:
+        self.api_usage.add(metrics)
         self._emit(EventType.API_METRICS, metrics)
 
     def show_run_metrics(self, metrics: dict) -> None:
@@ -431,6 +475,13 @@ class WebUI:
     def show_codex_item(self, item_type: str, raw: dict) -> None:
         self._emit(EventType.CODEX_ITEM, {"item_type": item_type, "raw": raw})
 
+    def run_myharness_context(self, arguments: dict) -> str:
+        """Execute the agent's read-only view of persisted MyHarness state."""
+        return session_context.execute(self._store, self._sid, arguments)
+
+    def archive_tool_evidence(self, name, arguments, result):
+        return self._store.native_evidence(self._sid).archive(name, arguments, result)
+
     def show_agent_event(self, action: str | dict, data: dict | None = None, **fields) -> None:
         """Persist a provider-neutral subagent lifecycle event."""
         if isinstance(action, dict):
@@ -453,6 +504,7 @@ class SubagentUI:
     def __init__(self, parent: WebUI, agent_path: str):
         """Create a transcript-isolated UI for a native child agent."""
         self.parent = parent
+        self._sid = parent._sid
         self.agent_path = agent_path
         self.run_settings = parent.run_settings
         self.result = ""
@@ -493,6 +545,12 @@ class SubagentUI:
     def ask_user_question(self, question: str, options=None, allow_free_text: bool = True):
         return self.parent.ask_user_question(question, options, allow_free_text)
 
+    def run_myharness_context(self, arguments: dict) -> str:
+        return self.parent.run_myharness_context(arguments)
+
+    def archive_tool_evidence(self, name, arguments, result):
+        return self.parent.archive_tool_evidence(name, arguments, result)
+
     def snapshot_file_before_write(self, path: str) -> None:
         self.parent.snapshot_file_before_write(path)
 
@@ -506,7 +564,7 @@ class SubagentUI:
         self.parent.show_agent_event("plan", {"agent_id": self.agent_path, "items": items})
 
     def show_api_metrics(self, metrics: dict) -> None:
-        pass
+        self.parent.api_usage.add(metrics)
 
     def show_agent_finished(self, reason: str) -> None:
         pass

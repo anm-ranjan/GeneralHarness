@@ -8,6 +8,7 @@ import {
   useSyncExternalStore,
 } from 'react'
 import { api, isAbandonedRequest } from '../api'
+import { rememberSession, saveSidebarPrefs } from '../sidebarState'
 import { initialState, reducer } from './appReducer'
 import useGlobalEvents from '../hooks/useGlobalEvents'
 import useFleet from '../hooks/useFleet'
@@ -24,9 +25,13 @@ function createStore() {
   return {
     getState: () => state,
     dispatch(action) {
+      if (action.type === 'SELECT_SESSION') rememberSession(action.payload.meta.id)
       const next = reducer(state, action)
       if (next === state) return
       state = next
+      if (action.type === 'TOGGLE_SIDEBAR' || action.type === 'SET_SIDEBAR_VIEW') {
+        saveSidebarPrefs({ open: state.sidebarOpen, view: state.sidebarView })
+      }
       listeners.forEach(listener => listener())
     },
     subscribe(listener) {

@@ -2,6 +2,7 @@
 // tested directly with `node --test`.
 import { effectiveWorkspaceRoot } from '../sessionWorkspace.js'
 import { applyRunState, snapshotRunStates } from '../runStates.js'
+import { sidebarPrefs } from '../sidebarState.js'
 
 export const initialState = {
   currentSessionId: null,
@@ -37,6 +38,7 @@ export const initialState = {
 
   stageItems: [],
   queuedMessages: [],
+  pendingSteering: [],
   plan: [],
 
   contextPercent: 0,
@@ -60,9 +62,13 @@ export const initialState = {
   iterationN: null,
   iterationMax: null,
 
+  sidebarOpen: sidebarPrefs().open,
+  sidebarView: sidebarPrefs().view,
+
   workspacePanelOpen: false,
   workspacePanelTab: 'changes',
   workspaceEditorFile: null,
+  artifactFile: null,
   workspaceEditorExpanded: false,
   touchedFiles: [],
   diffViewerFile: null,
@@ -283,6 +289,11 @@ export function reducer(state, action) {
       const { meta, workspaceRoot } = action.payload
       return {
         ...state,
+        // Opening returns fresh metadata; keep the sidebar copy in step
+        // without a tree reload.
+        sessionsById: state.sessionsById[meta.id]
+          ? { ...state.sessionsById, [meta.id]: { ...state.sessionsById[meta.id], ...meta } }
+          : state.sessionsById,
         currentSessionId: meta.id,
         currentMeta: meta,
         currentProvider: meta.provider || 'native',
@@ -295,11 +306,13 @@ export function reducer(state, action) {
         isCancelling: false,
         stageItems: [],
         queuedMessages: (meta.message_queue || []).map(queueItemView),
+        pendingSteering: (meta.steering_queue || []).map(queueItemView),
         plan: [],
         touchedFiles: [],
         diffViewerFile: null,
         // The editor points at a path in the previous session's workspace.
         workspaceEditorFile: null,
+        artifactFile: null,
         workspaceEditorExpanded: false,
         iterationN: null,
         iterationMax: null,
@@ -320,8 +333,12 @@ export function reducer(state, action) {
         ...state,
         currentSessionId: null,
         currentMeta: null,
+        artifactFile: null,
+        workspaceEditorFile: null,
+        workspaceEditorExpanded: false,
         stageItems: [],
         queuedMessages: [],
+        pendingSteering: [],
         plan: [],
         isRunning: false,
         isCancelling: false,
@@ -358,6 +375,9 @@ export function reducer(state, action) {
 
     case 'INCREMENT_REPLAYED_EVENTS':
       return { ...state, replayedEventCount: state.replayedEventCount + (action.payload || 1) }
+
+    case 'SET_STEERING':
+      return { ...state, pendingSteering: (action.payload || []).map(queueItemView) }
 
     case 'SET_QUEUE':
       return { ...state, queuedMessages: (action.payload || []).map(queueItemView) }
@@ -708,6 +728,31 @@ export function reducer(state, action) {
       }
     }
 
+    case 'DROP_SHOWN_GENERATED_IMAGES': {
+      const markdown = action.payload || ''
+      if (!markdown) return state
+      const shown = path => markdown.includes(path) || markdown.includes(encodeURI(path))
+      const items = state.stageItems.filter(item => !(item.generatedPath && shown(item.generatedPath)))
+      return items.length === state.stageItems.length ? state : { ...state, stageItems: items }
+    }
+
+    case 'UPDATE_SESSION_META_BY_ID': {
+      const { sessionId, changes } = action.payload || {}
+      const known = state.sessionsById[sessionId]
+      if (!sessionId || !changes) return state
+      return {
+        ...state,
+        sessionsById: known ? { ...state.sessionsById, [sessionId]: { ...known, ...changes } } : state.sessionsById,
+        currentMeta: state.currentMeta?.id === sessionId ? { ...state.currentMeta, ...changes } : state.currentMeta,
+      }
+    }
+
+    case 'TOGGLE_SIDEBAR':
+      return { ...state, sidebarOpen: !state.sidebarOpen }
+
+    case 'SET_SIDEBAR_VIEW':
+      return { ...state, sidebarView: action.payload === 'activity' ? 'activity' : 'projects' }
+
     case 'TOGGLE_WORKSPACE_PANEL':
       return { ...state, workspacePanelOpen: !state.workspacePanelOpen }
 
@@ -716,6 +761,13 @@ export function reducer(state, action) {
 
     case 'OPEN_WORKSPACE_EDITOR':
       return { ...state, workspaceEditorFile: action.payload }
+
+    case 'OPEN_ARTIFACT':
+      return { ...state, artifactFile: action.payload, workspacePanelOpen: true }
+    case 'CLOSE_ARTIFACT':
+      return { ...state, artifactFile: null, workspaceEditorExpanded: false }
+    case 'EDIT_ARTIFACT':
+      return { ...state, artifactFile: null, workspaceEditorFile: action.payload }
 
     case 'CLOSE_WORKSPACE_EDITOR':
       return { ...state, workspaceEditorFile: null, workspaceEditorExpanded: false }

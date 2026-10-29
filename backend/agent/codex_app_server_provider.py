@@ -399,6 +399,13 @@ class CodexAppServerClient:
             params["model"] = model
         return await self.transport.request("turn/start", params, timeout=60)
 
+    async def turn_steer(self, thread_id: str, turn_id: str, text: str) -> dict[str, Any]:
+        return await self.transport.request("turn/steer", {
+            "threadId": thread_id,
+            "expectedTurnId": turn_id,
+            "input": [{"type": "text", "text": text}],
+        }, timeout=30)
+
     async def turn_interrupt(self, thread_id: str, turn_id: str) -> dict[str, Any]:
         await self.initialize(utils.CODEX_APP_SERVER_EXPERIMENTAL_API)
         return await self.transport.request(
@@ -839,6 +846,31 @@ class CodexAppServerProvider:
         message_task: asyncio.Task[dict[str, Any] | BaseException] | None = None
         cancellation_requested = False
         completed_params: dict[str, Any] | None = None
+        active_run = getattr(ui, "_run", None)
+        if active_run is not None:
+            active_run.steering_open = True
+        steering_stopped = asyncio.Event()
+
+        async def deliver_steering():
+            # Steering accepted by the web UI mid-turn is forwarded to the
+            # running Codex turn; on failure it stays saved for the next turn.
+            while not steering_stopped.is_set():
+                peek = getattr(ui, "claim_steering", None) or getattr(ui, "peek_steering", None)
+                items = peek() if callable(peek) else []
+                if items:
+                    try:
+                        await self.client.turn_steer(thread_id, turn_id, "\n\n".join(item.text for item in items))
+                        ui.acknowledge_steering(items)
+                    except (AppServerProtocolError, asyncio.TimeoutError) as exc:
+                        ui.show_status(f"Codex could not accept steering; it remains saved for the next turn. {exc}")
+                        return
+                    finally:
+                        release = getattr(ui, "release_steering", None)
+                        if callable(release):
+                            release()
+                await asyncio.sleep(0.1)
+
+        steering_task = asyncio.create_task(deliver_steering())
         try:
             async with asyncio.timeout(self.timeout_seconds):
                 while completed_params is None:
@@ -913,6 +945,11 @@ class CodexAppServerProvider:
                         ):
                             completed_params = params
         finally:
+            if active_run is not None:
+                active_run.steering_open = False
+            steering_stopped.set()
+            with contextlib.suppress(asyncio.CancelledError):
+                await steering_task
             cancel_task.cancel()
             if message_task:
                 message_task.cancel()

@@ -339,6 +339,38 @@ audio:
   `{api_base_url}/audio/transcriptions` with a bearer token; `model` is the
   remote model id.
 
+### Native prompt caching and working history
+
+Native requests use provider-side prefix caching by default. This is separate
+from the local tool-result cache: tools still execute and need their normal
+approvals, and cached tokens still occupy the context window.
+
+```yaml
+native_caching:
+  mode: auto        # auto | off; off cannot disable a provider's implicit caching
+  ttl: 5m           # 5m | 1h (1h applies to Anthropic only)
+  explicit_models: []
+```
+
+- OpenRouter receives a stable session/agent routing key; configured provider
+  ordering stays authoritative. Anthropic models receive cache controls; other
+  models keep their provider's implicit caching. Selected Alibaba Qwen models
+  get explicit breakpoints only on direct Alibaba or Alibaba-pinned OpenRouter
+  routes. Direct xAI requests get a conversation header. Unrecognized
+  OpenAI-compatible servers receive no extra cache fields. See
+  `backend/agent/prompt_cache.py`.
+- Cache hints are applied to a request copy, never to stored history.
+- The Usage tab keeps per-run API totals (input, output, cache reads/writes,
+  reported cost) including child agents; the composer shows generation speed
+  only.
+
+Compaction keeps a bounded task state (`memory.task_state_tokens`, default
+4096, with a model synthesis budget of `memory.summary_target_tokens`) instead
+of a free-form summary. User requests are never silently truncated. Exact tool
+results are archived per session under `data/native_history/` and stay
+retrievable through the `myharness_context` tool (`action: evidence`); loaded
+`SKILL.md` instructions survive compaction.
+
 ### Environment overrides
 
 | Variable | Overrides |

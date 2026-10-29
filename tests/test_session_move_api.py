@@ -37,17 +37,32 @@ class MoveSessionApiTests(unittest.TestCase):
                     )
         self.assertEqual(ctx.exception.status_code, 404)
 
-    def test_rejects_cross_project_move(self):
+    def test_moves_across_projects_and_resets_workspace_binding(self):
         with tempfile.TemporaryDirectory() as tmp:
             store, meta = _seed_store(tmp)
             store.ensure_project("other", "Other", "/tmp/other")
             store.ensure_task("other", "target", "Target")
+            meta.working_directory = "/tmp/project/subdir"
+            meta.codex_state = {"thread_id": "old"}
+            meta.claude_state = {"session_id": "old"}
+            store.update_session(meta)
+            with patch.object(web_app, "_store", store), patch.object(web_app, "_manager", SessionManager()), \
+                    patch("utils.is_path_allowed", return_value=True):
+                moved = web_app.move_session(meta.id, web_app.MoveSessionRequest(project_id="other", task_id="target"))
+            self.assertEqual(moved["project_id"], "other")
+            self.assertEqual(moved["task_id"], "target")
+            self.assertEqual(moved["working_directory"], "")
+            self.assertEqual(moved["codex_state"], {})
+            self.assertEqual(moved["claude_state"], {})
+            self.assertEqual([s.id for s in store.list_sessions(project_id="proj")], [])
+            self.assertEqual([s.id for s in store.list_sessions(project_id="other")], [meta.id])
+
+    def test_rejects_moving_chats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, meta = _seed_store(tmp)
             with patch.object(web_app, "_store", store), patch.object(web_app, "_manager", SessionManager()):
                 with self.assertRaises(HTTPException) as ctx:
-                    web_app.move_session(
-                        meta.id,
-                        web_app.MoveSessionRequest(project_id="other", task_id="target"),
-                    )
+                    web_app.move_session(meta.id, web_app.MoveSessionRequest(project_id="__chats__", task_id="__chats__"))
         self.assertEqual(ctx.exception.status_code, 400)
 
     def test_rejects_active_session(self):

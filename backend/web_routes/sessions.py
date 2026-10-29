@@ -231,8 +231,16 @@ def delete_session(session_id: str):
 
 @router.patch("/api/sessions/{session_id}")
 def rename_session(session_id: str, req: RenameSessionRequest):
+    if req.title is None and req.archived is None:
+        raise HTTPException(status_code=400, detail="Nothing to update")
     try:
-        meta = web_app._store.rename_session(session_id, req.title)
+        meta = None
+        if req.title is not None:
+            meta = web_app._store.rename_session(session_id, req.title)
+        if req.archived is not None:
+            if req.archived and web_app._manager.get_active_run(session_id):
+                raise HTTPException(status_code=409, detail="Cannot archive a session while its agent is running")
+            meta = web_app._store.set_session_archived(session_id, req.archived)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return meta.model_dump(mode="json")
@@ -240,17 +248,26 @@ def rename_session(session_id: str, req: RenameSessionRequest):
 
 @router.post("/api/sessions/{session_id}/move")
 def move_session(session_id: str, req: MoveSessionRequest):
-    if web_app._manager.get_active_run(session_id):
-        raise HTTPException(status_code=409, detail="Cannot move a session while its agent is running")
-    meta = web_app._store.load_session(session_id)
-    if meta is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-    if req.project_id != meta.project_id:
-        raise HTTPException(status_code=400, detail="Sessions can only be moved within the same project")
-    try:
-        moved = web_app._store.move_session(session_id, req.project_id, req.task_id)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    with web_app._run_lock_for(session_id):
+        if web_app._manager.get_active_run(session_id):
+            raise HTTPException(status_code=409, detail="Cannot move a session while its agent is running")
+        meta = web_app._store.load_session(session_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if meta.kind == "chat" or req.project_id == CHATS_PROJECT_ID:
+            raise HTTPException(status_code=400, detail="Chats keep their private workspace")
+        target = web_app._store.get_project(req.project_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Target project not found")
+        if req.project_id != meta.project_id and not utils.is_path_allowed(target.root):
+            raise HTTPException(status_code=403, detail="Target workspace is outside allowed paths")
+        try:
+            moved = web_app._store.move_session(session_id, req.project_id, req.task_id)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        if req.project_id != meta.project_id:
+            # Native history carries the old workspace; rebuild it on next use.
+            web_app._session_messages.pop(session_id, None)
     return moved.model_dump(mode="json")
 
 
@@ -273,11 +290,13 @@ def get_session_attachment(session_id: str, filename: str):
 
 
 @router.get("/api/sessions/{session_id}")
-def get_session(session_id: str):
+def get_session(session_id: str, events: int = 200):
+    """Open a session. ``events=0`` skips the transcript for clients that replay over WebSocket."""
     meta = web_app._store.load_session(session_id)
     if meta is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    events = web_app._store.load_recent_events(session_id, count=200)
+    count = max(0, min(events, 1000))
+    events = web_app._store.load_recent_events(session_id, count=count) if count else []
     return {
         "meta": meta.model_dump(mode="json"),
         "events": [e.model_dump(mode="json") for e in events],

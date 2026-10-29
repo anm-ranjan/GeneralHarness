@@ -200,6 +200,11 @@ def _finish_run_and_start_next(session_id: str, start_queued: bool = True) -> No
     with web_app._run_lock_for(session_id):
         meta_now = web_app._store.load_session(session_id)
         if meta_now:
+            if meta_now.steering_queue:
+                meta_now.message_queue = [*meta_now.steering_queue, *meta_now.message_queue]
+                meta_now.steering_queue = []
+                web_helpers._emit_queue_updated(session_id, meta_now)
+                _emit_session_event(session_id, EventType.STATUS, {"text": "Undelivered steering preserved as queued follow-ups."})
             meta_now.status = "idle"
             meta_now.message_count += 1
             web_app._store.update_session(meta_now)
@@ -234,6 +239,8 @@ def _emit_run_metrics(web_ui, session_id: str, meta, started_monotonic: float) -
             "estimated": True,
         }
         if meta.provider not in ("codex-app-server", CLAUDE_PROVIDER_ID):
+            if hasattr(web_ui, "api_usage"):
+                metrics["api_usage"] = web_ui.api_usage.snapshot()
             messages = web_app._session_messages.get(session_id) or []
             used = agent.estimate_tokens(messages) if messages else 0
             metrics["context_used"] = used
@@ -332,9 +339,12 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
             web_app._session_messages[session_id] = web_helpers._restore_session_messages(session_id, workspace_root)
 
         messages = web_app._session_messages[session_id]
+        session_identity = web_helpers._session_identity(meta)
         if messages and messages[0].get("role") == "system":
             messages[0] = agent.build_system_message(
-                workspace_root, getattr(meta, "kind", "project")
+                workspace_root,
+                getattr(meta, "kind", "project"),
+                session_identity=session_identity,
             )
         turn_start_index = len(messages)
 
@@ -348,7 +358,13 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
                 if utils.MULTI_AGENT_ENABLED:
                     def run_child(node):
                         child_ui = SubagentUI(web_ui, node.path)
-                        child_messages = [agent.build_system_message(workspace_root, getattr(meta, "kind", "project"))]
+                        child_messages = [
+                            agent.build_system_message(
+                                workspace_root,
+                                getattr(meta, "kind", "project"),
+                                session_identity=session_identity,
+                            )
+                        ]
                         child_prompt = (
                             f"You are {node.path}, a {node.role} child agent. Complete only this task and return a concise result to your parent.\n\n"
                             f"Task: {node.task}"
@@ -382,11 +398,16 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
                     display_images=saved_attachments,
                     tools_enabled=True,
                     orchestrator=orchestrator,
+                    steering_reader=web_ui.take_steering,
                 )
                 web_app._session_messages[session_id] = agent.compact_agent_history_if_needed(
                     messages,
                     ui=web_ui,
                     workspace_root=workspace_root,
+                    kind=getattr(meta, "kind", "project"),
+                    session_identity=web_helpers._session_identity(
+                        web_app._store.load_session(session_id) or meta
+                    ),
                 )
                 usage = agent.format_context_usage(web_app._session_messages[session_id])
                 web_ui.show_context_usage(usage)
@@ -404,6 +425,13 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
                     web_ui.show_agent_finished("error")
                 elif not web_ui.finished_reason:
                     web_ui.show_agent_finished("completed")
+                if meta.provider == "native" and not run_failed and not run.cancel_event.is_set():
+                    try:
+                        web_helpers._save_native_context(
+                            session_id, workspace_root, web_app._session_messages[session_id])
+                    except Exception:
+                        # A recovery-disk error must not roll back completed work.
+                        pass
                 _emit_run_metrics(web_ui, session_id, meta, run_started)
                 _finish_run_and_start_next(session_id)
 
@@ -422,7 +450,9 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
         meta = web_app._store.load_session(session_id)
         _emit_session_event(session_id, EventType.USER_MESSAGE, {"text": text})
         web_app._session_messages[session_id] = agent.build_initial_messages(
-            workspace_root, getattr(meta, "kind", "project")
+            workspace_root,
+            getattr(meta, "kind", "project"),
+            session_identity=web_helpers._session_identity(meta),
         )
         _emit_session_event(session_id, EventType.STATUS, {"text": "Context cleared."})
         _emit_session_event(

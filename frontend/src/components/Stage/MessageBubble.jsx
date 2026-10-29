@@ -1,10 +1,36 @@
 import { memo, useMemo } from 'react'
 import { renderMarkdown } from '../../utils'
-import { useAppSelector } from '../../context/AppContext'
+import { useAppSelector, useAppDispatch } from '../../context/AppContext'
 
 const selectWorkspaceRoot = state => state.currentWorkspaceRoot
 
+// HTML previews post their document height; size the matching frame to fit.
+if (typeof window !== 'undefined') {
+  window.addEventListener('message', (e) => {
+    if (!e.data?.myharnessHtmlPreview) return
+    for (const frame of document.querySelectorAll('iframe.html-frame')) {
+      if (frame.contentWindow === e.source) {
+        frame.style.height = `${Math.min(Math.max(Number(e.data.height) || 0, 80), 900)}px`
+        break
+      }
+    }
+  })
+}
+
+function toggleHtmlPreview(button) {
+  const block = button.closest('.html-preview')
+  const frame = block?.querySelector('iframe')
+  const pre = block?.querySelector('pre')
+  if (!frame || !pre) return
+  const showCode = pre.hidden
+  pre.hidden = !showCode
+  frame.hidden = showCode
+  button.textContent = showCode ? 'Preview' : 'Code'
+}
+
 function handleMarkdownClick(e) {
+  const toggle = e.target.closest('.code-toggle')
+  if (toggle) { toggleHtmlPreview(toggle); return }
   const button = e.target.closest('.code-copy')
   if (!button) return
   const code = button.closest('.code-block')?.querySelector('code')
@@ -19,22 +45,27 @@ function handleMarkdownClick(e) {
   })
 }
 
-function MessageBubble({ role, text, markdown, images = [], attachments = [], streaming = false }) {
+function MessageBubble({ role, text, markdown, images = [], attachments = [], streaming = false, steering = false }) {
+  const dispatch = useAppDispatch()
   const workspaceRoot = useAppSelector(selectWorkspaceRoot)
   const displayAttachments = attachments.length ? attachments : images
 
   const html = useMemo(() => {
-    if (role === 'assistant') return renderMarkdown(markdown || text, workspaceRoot)
+    if (role === 'assistant') return renderMarkdown(markdown || text, workspaceRoot, { htmlPreview: !streaming })
     return null
-  }, [role, text, markdown, workspaceRoot])
+  }, [role, text, markdown, workspaceRoot, streaming])
 
   return (
     <article className={`flex min-w-0 flex-col max-w-[min(720px,85%)] mb-3 ${streaming ? '' : 'animate-fade-up'} ${role === 'user' ? 'self-start' : 'self-end'}`}>
-      <div className="text-[11px] text-faint uppercase tracking-wider mb-1 px-1">{role}</div>
+      <div className="text-[11px] text-faint uppercase tracking-wider mb-1 px-1">{steering ? 'user · steering' : role}</div>
       {role === 'assistant' ? (
         <div
           className={`markdown-body max-w-full overflow-x-auto bg-surface rounded-lg px-4 py-3 text-[14px] leading-relaxed ${streaming ? 'stream-caret' : ''}`}
-          onClick={handleMarkdownClick}
+          onClick={e => {
+            const link = e.target.closest('[data-artifact-path]')
+            if (link) { e.preventDefault(); dispatch({ type: 'OPEN_ARTIFACT', payload: link.dataset.artifactPath }); return }
+            handleMarkdownClick(e)
+          }}
           dangerouslySetInnerHTML={{ __html: html }}
         />
       ) : (

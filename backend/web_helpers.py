@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import mimetypes
 import os
 import re
@@ -20,6 +21,7 @@ from fastapi import HTTPException
 
 import utils
 import harness_agent as agent
+import session_context
 from web_models import EventEnvelope, EventType, QueuedMessage
 
 import web_app
@@ -47,6 +49,16 @@ def _workspace_root_for_session(meta) -> str:
     if project_root:
         return project_root
     return utils.ALLOWED_PATHS[0] if utils.ALLOWED_PATHS else os.getcwd()
+
+
+def _session_identity(meta) -> dict:
+    """Return model-visible identity derived from current store state."""
+    if meta is None:
+        return {}
+    identity = session_context.current_identity(web_app._store, meta.id)
+    if identity:
+        identity["workspace_root"] = _workspace_root_for_session(meta)
+    return identity
 
 
 def _project_root_for_session(meta) -> str:
@@ -318,27 +330,116 @@ def _copy_images_to_codex_workspace(session_id: str, workspace_root: str) -> lis
 
 # ── context restoration ───────────────────────────────────────────
 
+def _valid_native_context(body) -> bool:
+    """Reject damaged checkpoints rather than sending orphaned tool messages."""
+    if not isinstance(body, list):
+        return False
+    pending = set()
+    seen = set()
+    for message in body:
+        if (not isinstance(message, dict) or not isinstance(message.get("role"), str)
+                or message["role"] not in {"user", "assistant", "tool", "system"}):
+            return False
+        if message["role"] == "tool":
+            call_id = message.get("tool_call_id")
+            if not isinstance(call_id, str) or call_id not in pending:
+                return False
+            pending.remove(call_id)
+            if not isinstance(message.get("content"), str):
+                return False
+        else:
+            if pending:
+                return False
+            calls = message.get("tool_calls") or []
+            if not isinstance(calls, list):
+                return False
+            if message["role"] == "system" and not agent.is_memory_summary_message(message):
+                return False
+            if calls and message["role"] != "assistant":
+                return False
+            ids = [call.get("id") for call in calls if isinstance(call, dict)]
+            if len(ids) != len(calls) or not all(isinstance(i, str) and i for i in ids) or len(set(ids)) != len(ids):
+                return False
+            if seen.intersection(ids):
+                return False
+            for call in calls:
+                function = call.get("function")
+                if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+                    return False
+                try:
+                    raw = function.get("arguments")
+                    arguments = json.loads(raw) if isinstance(raw, str) else raw
+                    if not isinstance(arguments, dict):
+                        return False
+                except (TypeError, ValueError):
+                    return False
+            seen.update(ids)
+            pending.update(ids)
+    return not pending
+
+
+def _save_native_context(session_id: str, workspace_root: str, messages: list) -> None:
+    """Checkpoint only committed native runs; transcript remains the audit log."""
+    count = web_app._store.event_count(session_id)
+    tail_start = max(0, count - 32)
+    events = web_app._store.load_events(session_id, offset=tail_start, limit=32)
+    anchor = next(((tail_start + i, e) for i, e in reversed(list(enumerate(events)))
+                   if e.type == EventType.RUN_FINISHED), None)
+    finished = anchor[1] if anchor else None
+    if finished is None or finished.data.get("reason") not in {"completed", "max iterations reached", "no content returned"}:
+        return
+    body = messages[1:]
+    if not _valid_native_context(body):
+        return
+    web_app._store.save_native_context(session_id, {
+        "schema": "myharness-native-context-v1", "through_event_id": finished.id,
+        "through_event_index": anchor[0],
+        "workspace_root": workspace_root, "messages": body,
+    })
+
+
 def _restore_session_messages(session_id: str, workspace_root: str, include_codex: bool = False) -> list:
     meta = web_app._store.load_session(session_id)
     if meta and meta.provider == "codex-app-server" and not include_codex:
         return []
     kind = getattr(meta, "kind", "project") if meta else "project"
-    messages = agent.build_initial_messages(workspace_root, kind)
+    identity = _session_identity(meta)
+    messages = agent.build_initial_messages(workspace_root, kind, session_identity=identity)
     pending_turn: list[dict] = []
-    for event in web_app._store.load_events(session_id):
+    checkpoint = web_app._store.load_native_context(session_id) if meta and meta.provider == "native" else {}
+    anchor_index = checkpoint.get("through_event_index")
+    events = None
+    if (checkpoint.get("schema") == "myharness-native-context-v1"
+            and checkpoint.get("workspace_root") == workspace_root
+            and isinstance(anchor_index, int) and anchor_index >= 0
+            and _valid_native_context(checkpoint.get("messages"))):
+        for event in web_app._store.load_events(session_id, offset=anchor_index, limit=1):
+            if (event.id == checkpoint.get("through_event_id") and event.type == EventType.RUN_FINISHED
+                    and event.data.get("reason") in {"completed", "max iterations reached", "no content returned"}):
+                messages.extend(checkpoint["messages"])
+                events = web_app._store.load_events(session_id, offset=anchor_index + 1)
+                break
+    if events is None:
+        events = web_app._store.load_events(session_id)
+    for event in events:
         if event.type == EventType.USER_MESSAGE:
             text = event.data.get("text", "")
             if text.strip().lower() == "/clear":
-                messages = agent.build_initial_messages(workspace_root, kind)
+                messages = agent.build_initial_messages(workspace_root, kind, session_identity=identity)
                 pending_turn = []
             elif not text.strip().startswith("/"):
-                pending_turn = [{"role": "user", "content": _native_user_content(text, _event_attachments(event.data, session_id))}]
+                message = {"role": "user", "content": _native_user_content(text, _event_attachments(event.data, session_id))}
+                if event.data.get("steering") and pending_turn:
+                    message["steering"] = True
+                    pending_turn.append(message)
+                else:
+                    pending_turn = [message]
         elif event.type == EventType.ASSISTANT_MESSAGE:
             markdown = event.data.get("markdown", "")
             if markdown and pending_turn:
                 pending_turn.append({"role": "assistant", "content": markdown})
         elif event.type == EventType.RUN_FINISHED:
-            if event.data.get("reason") != "interrupted" and any(m.get("role") == "assistant" for m in pending_turn):
+            if event.data.get("reason") not in {"interrupted", "error", "api timeout"} and any(m.get("role") == "assistant" for m in pending_turn):
                 messages.extend(pending_turn)
             pending_turn = []
     return messages
@@ -466,6 +567,7 @@ def _emit_session_event(session_id: str, event_type: EventType, data: dict) -> N
 
 def _queue_payload(meta) -> dict:
     return {
+        "steering_items": [item.model_dump(mode="json") for item in (meta.steering_queue or [])],
         "items": [
             {
                 "id": item.id,

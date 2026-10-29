@@ -8,13 +8,15 @@ on another machine (or after a data-directory loss). Machine-specific state
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import os
+import re
 import zipfile
 from datetime import datetime, timezone
 
 from session_store import SessionStore
-from web_models import EventEnvelope, SessionMeta
+from web_models import EventEnvelope, QueuedMessage, SessionMeta
 
 BACKUP_FORMAT = "myharness-session-backup"
 BACKUP_VERSION = 1
@@ -48,6 +50,14 @@ def export_session_backup(
         events_jsonl = store.export_events_jsonl(session_id)
         if events_jsonl:
             zf.writestr("events.jsonl", events_jsonl)
+
+        # Private native working state and immutable original tool evidence.
+        # Keep these outside public metadata and transcript event payloads.
+        native_dir = store._data_dir / "native_history" / session_id
+        if native_dir.is_dir():
+            for path in sorted(native_dir.rglob("*.json")):
+                if path.is_file():
+                    zf.writestr(f"native_history/{path.relative_to(native_dir).as_posix()}", path.read_bytes())
 
         for attachment in store.list_attachments(session_id):
             stored = store.read_attachment(session_id, attachment["filename"])
@@ -130,6 +140,11 @@ def import_session_backup(
     # Portable fields carry over; machine/provider-specific state is reset.
     new_meta.summary = old_meta.get("summary", "")
     new_meta.message_count = int(old_meta.get("message_count") or 0)
+    # The stash is portable; pending steering belonged to a run on the old machine.
+    new_meta.prompt_stash = [
+        QueuedMessage.model_validate({key: value for key, value in item.items() if key in {"id", "text", "created_at"}})
+        for item in old_meta.get("prompt_stash", []) if isinstance(item, dict)
+    ]
     run_settings = old_meta.get("run_settings")
     if isinstance(run_settings, dict):
         new_meta.run_settings = run_settings
@@ -184,6 +199,22 @@ def import_session_backup(
         if isinstance(manifest, dict) and manifest.get("run_id"):
             manifest["session_id"] = new_id
             store.save_change_manifest(new_id, manifest)
+
+    # Evidence hashes cover original bytes, so never rewrite archived records.
+    # The checkpoint carries machine-specific paths and image URLs: rebuild it
+    # from imported completed events instead of reviving stale machine state.
+    for name in sorted(names):
+        if not name.startswith("native_history/evidence/") or not name.endswith(".json"):
+            continue
+        evidence_id = name.removeprefix("native_history/evidence/").removesuffix(".json")
+        if not re.fullmatch(r"[0-9a-f]{64}", evidence_id):
+            continue
+        blob = zf.read(name)
+        if hashlib.sha256(blob).hexdigest() != evidence_id:
+            continue
+        target = store.native_evidence(new_id).root / f"{evidence_id}.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(blob)
 
     if "codex/summary.json" in names:
         try:

@@ -61,7 +61,14 @@ pub fn render_event(event: &EventEnvelope, verbose_tools: bool) -> Option<Transc
     let text = |key: &str| data.get(key).and_then(Value::as_str).unwrap_or("");
     let entry = match event.event_type.as_str() {
         "session_loaded" | "assistant_delta" | "plan_update" => return None,
-        "user_message" => TranscriptEntry::new(EntryKind::User, format!("You\n{}", text("text"))),
+        "user_message" => {
+            let label = if data.get("steering").and_then(Value::as_bool).unwrap_or(false) {
+                "You (steering)"
+            } else {
+                "You"
+            };
+            TranscriptEntry::new(EntryKind::User, format!("{}\n{}", label, text("text")))
+        }
         "assistant_message" => TranscriptEntry::new(
             EntryKind::Assistant,
             format!("Assistant\n{}", text("markdown")),
@@ -168,8 +175,22 @@ pub fn render_event(event: &EventEnvelope, verbose_tools: bool) -> Option<Transc
         "agent_event" => {
             let agent = first_text(data, &["agent_path", "agent_id"]).unwrap_or("agent");
             let action = fallback(text("action"), "updated");
+            if !verbose_tools
+                && !matches!(
+                    action,
+                    "spawned" | "started" | "completed" | "failed" | "interrupted" | "error"
+                )
+            {
+                return None;
+            }
             let detail = first_text(data, &["error", "result", "text", "status"]);
-            let suffix = detail.map_or(String::new(), |value| format!(": {value}"));
+            let suffix = detail.map_or(String::new(), |value| {
+                if verbose_tools {
+                    format!(": {value}")
+                } else {
+                    format!(": {}", value.chars().take(240).collect::<String>())
+                }
+            });
             TranscriptEntry::new(EntryKind::Status, format!("[{agent}] {action}{suffix}"))
         }
         "run_finished" => TranscriptEntry::new(
@@ -222,6 +243,13 @@ fn render_metrics(data: &Value) -> String {
     }
     if let Some(percent) = data.get("context_percent") {
         parts.push(format!("{}% context", display_scalar(Some(percent))));
+    }
+    if let Some(usage) = data.get("api_usage") {
+        for (key, label) in [("cache_read_tokens", "cache read"), ("cache_write_tokens", "cache write")] {
+            if let Some(value) = usage.get(key) {
+                parts.push(format!("{}: {}", label, display_scalar(Some(value))));
+            }
+        }
     }
     if parts.is_empty() {
         "Run metrics updated".to_owned()
@@ -282,6 +310,20 @@ mod tests {
                 EntryKind::Status,
                 "[/root/reviewer] completed: ok"
             ))
+        );
+    }
+
+    #[test]
+    fn hides_agent_diagnostics_when_not_verbose() {
+        assert_eq!(
+            render_event(
+                &event(
+                    "agent_event",
+                    json!({"agent_path": "/root/reviewer", "action": "tool_call"}),
+                ),
+                false,
+            ),
+            None
         );
     }
 
@@ -400,6 +442,15 @@ mod tests {
         let run_metrics =
             render_event(&event("run_metrics", json!({"elapsed_s": 4.1})), true).unwrap();
         assert!(run_metrics.text.contains("Run metrics"));
+        let cached = render_event(
+            &event("run_metrics", json!({"api_usage": {"cache_read_tokens": 0, "cache_write_tokens": 1024,
+                "estimated_input": {"instructions": 123, "total": 456}}})),
+            true,
+        ).unwrap();
+        assert!(cached.text.contains("cache read: 0"));
+        assert!(cached.text.contains("cache write: 1024"));
+        // Local category estimates must not masquerade as provider usage.
+        assert!(!cached.text.contains("456 tokens"));
 
         let tool_result = render_event(
             &event(

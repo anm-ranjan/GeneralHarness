@@ -457,7 +457,8 @@ class RemoteCliApp:
         event_type = event.get("type")
         data = event.get("data") or {}
         if event_type == "user_message":
-            print(f"\nYou: {data.get('text', '')}")
+            label = "You (steering)" if data.get("steering") else "You"
+            print(f"\n{label}: {data.get('text', '')}")
         elif event_type == "assistant_message":
             print("\nAssistant:\n")
             print(data.get("markdown", ""))
@@ -532,6 +533,12 @@ class RemoteCliApp:
             parts.append(f"{data['total_tokens']} tokens")
         if data.get("context_percent") is not None:
             parts.append(f"{data['context_percent']}% context")
+        usage = data.get("api_usage") or {}
+        # estimated_input category totals are optional local diagnostics. Keep
+        # them separate from provider-reported tokens and cache accounting.
+        for key, label in (("cache_read_tokens", "cache read"), ("cache_write_tokens", "cache write")):
+            if key in usage:
+                parts.append(f"{label}: {usage[key]}")
         if parts:
             print("Run metrics: " + " | ".join(parts))
 

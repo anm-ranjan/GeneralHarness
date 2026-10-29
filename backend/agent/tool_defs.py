@@ -4,6 +4,47 @@ READ_ONLY_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "myharness_context",
+            "description": (
+                "Read MyHarness's own persisted project/task/session context without inspecting private data files. "
+                "Use action='current' for the current identity, 'list' to enumerate sessions, 'search' to find a "
+                "session by title or history, and 'read' to load bounded completed turns from one session. Search/list "
+                "default to the current project; use scope='all_projects' only when the user explicitly asks across "
+                "projects. Results label pagination and incomplete historical tool evidence. "
+                "History is text-only: tool calls and text-result previews are included, but historical images "
+                "are never opened or attached. For paged originals in this session, use action='evidence', "
+                "evidence_id, evidence_field. Omit id and supply query to search archived tools/paths/text. "
+                "Originals are historical: reread current files before editing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["current", "list", "search", "read", "evidence"]},
+                    "evidence_id": {"type": "string", "description": "SHA-256 evidence id for action=evidence."},
+                    "evidence_field": {"type": "string", "enum": ["result", "arguments"]},
+                    "offset": {"type": "integer", "description": "Character offset for paged evidence."},
+                    "query": {"type": "string", "description": "Title/history query for list or search."},
+                    "project": {"type": "string", "description": "Optional exact or partial project name/id."},
+                    "task": {"type": "string", "description": "Optional task name/id filter for list."},
+                    "scope": {
+                        "type": "string",
+                        "enum": ["current_project", "all_projects"],
+                        "description": "Default current_project. Use all_projects only for an explicit cross-project request.",
+                    },
+                    "session_id": {"type": "string", "description": "Required for read."},
+                    "limit": {"type": "integer", "description": "List/search result limit."},
+                    "turn_offset": {"type": "integer", "description": "Zero-based completed-turn offset for read."},
+                    "turn_limit": {"type": "integer", "description": "Completed turns to return, maximum 20."},
+                    "include_tools": {"type": "boolean", "description": "Include bounded tool/file evidence previews. Default true."},
+                    "include_before_clear": {"type": "boolean", "description": "Include completed turns before the most recent /clear. Default false."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "file_search",
             "description": "Search for files by name pattern in a directory. Returns matching file paths.",
             "parameters": {

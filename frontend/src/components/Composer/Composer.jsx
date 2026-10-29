@@ -17,6 +17,16 @@ export default function Composer() {
   const [recording, setRecording] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
   const [recordingElapsed, setRecordingElapsed] = useState(0)
+  const [stashesOpen, setStashesOpen] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [stashArmed, setStashArmed] = useState(false)
+  const holdTimerRef = useRef(null)
+  const stashArmedRef = useRef(false)
+  const stashDialogRef = useRef(null)
+  // Stash responses may land after the user switches threads; only apply
+  // them to the thread that is still open.
+  const currentSessionRef = useRef(state.currentSessionId)
+  currentSessionRef.current = state.currentSessionId
   const inputRef = useRef(null)
   const fileRef = useRef(null)
   const mediaRecorderRef = useRef(null)
@@ -59,6 +69,19 @@ export default function Composer() {
     }
   }, [])
 
+  useEffect(() => {
+    if (stashesOpen) stashDialogRef.current?.showModal()
+    else stashDialogRef.current?.close()
+  }, [stashesOpen])
+
+  useEffect(() => {
+    clearTimeout(holdTimerRef.current)
+    stashArmedRef.current = false
+    setStashArmed(false)
+    setStashesOpen(false)
+    return () => clearTimeout(holdTimerRef.current)
+  }, [state.currentSessionId])
+
   if (!state.currentSessionId) return null
 
   const audioAvailable = state.audioEnabled && typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== 'undefined'
@@ -72,9 +95,44 @@ export default function Composer() {
     el.style.height = `${Math.min(Math.max(el.scrollHeight, min), max)}px`
   }
 
-  function handleSend() {
+  async function stashPrompt() {
+    if (!input.trim()) return
+    const sid = state.currentSessionId
+    const meta = await api('POST', `/api/sessions/${encodeURIComponent(sid)}/stash`, { text: input })
+    if (currentSessionRef.current === sid) dispatch({ type: 'UPDATE_SESSION_META', payload: meta })
+    return meta
+  }
+
+  function cancelHold() {
+    clearTimeout(holdTimerRef.current)
+    stashArmedRef.current = false
+    setStashArmed(false)
+  }
+
+  async function handleArrowClick() {
+    const shouldStash = stashArmedRef.current
+    cancelHold()
+    if (!shouldStash) return handleSend()
+    setSending(true)
+    try {
+      await stashPrompt()
+      setInput('')
+    } catch (err) { setAttachmentError(err.detail || err.message) }
+    finally { setSending(false) }
+  }
+
+  async function removeStashedPrompt(promptId) {
+    const sid = state.currentSessionId
+    try {
+      const meta = await api('DELETE', `/api/sessions/${encodeURIComponent(sid)}/stash/${encodeURIComponent(promptId)}`)
+      if (currentSessionRef.current === sid) dispatch({ type: 'UPDATE_SESSION_META', payload: meta })
+    } catch (err) { setAttachmentError(err.detail || err.message) }
+  }
+
+  async function handleSend() {
     const text = input.trim()
     if (!text && attachments.length === 0) return
+    if (sending) return
     if (state.isRunning && isSlashCommand(text)) {
       dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: 'Slash commands can only run when the agent is idle.' } })
       return
@@ -118,12 +176,16 @@ export default function Composer() {
       })
       return
     }
-    setInput('')
-    setAttachmentError('')
-    localStorage.removeItem(draftKey(state.activeHostId, state.currentSessionId))
-    setAttachments([])
-    sendMessage(state.currentSessionId, text, attachments)
-    requestAnimationFrame(resizeInput)
+    const sid = state.currentSessionId
+    setSending(true)
+    try {
+      const result = await sendMessage(sid, text, attachments, 'queue')
+      if (result && result.status !== 'blocked') {
+        setInput(''); setAttachments([]); setAttachmentError('')
+        localStorage.removeItem(draftKey(state.activeHostId, sid))
+        requestAnimationFrame(resizeInput)
+      }
+    } finally { setSending(false) }
   }
 
   async function fileToPayload(file) {
@@ -323,7 +385,7 @@ export default function Composer() {
   return (
     <div className="border-t border-line px-7 pt-4 pb-3">
       <div className="max-w-[min(1100px,calc(100vw-2rem))] mx-auto">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+        <div className="flex items-end gap-2">
           <div className="flex-1 min-w-0">
             <textarea
               ref={inputRef}
@@ -333,6 +395,7 @@ export default function Composer() {
               onPaste={handlePaste}
               onDrop={handleDrop}
               onDragOver={e => e.preventDefault()}
+              disabled={sending}
               placeholder="Type a message, paste, or drop files..."
               rows={1}
               className="w-full min-h-[52px] max-h-[32vh] resize-y bg-surface border border-line rounded-lg px-4 py-3 text-[14px] leading-5 text-text-default placeholder:text-faint outline-none focus:border-line-hover transition-colors disabled:opacity-50"
@@ -362,7 +425,7 @@ export default function Composer() {
               e.target.value = ''
             }}
           />
-          <div className="flex gap-2 self-end">
+          <div className="flex shrink-0 items-center gap-2 self-end">
             {state.audioEnabled && (
               <button
                 type="button"
@@ -391,22 +454,62 @@ export default function Composer() {
               type="button"
               onClick={() => fileRef.current?.click()}
               disabled={attachments.length >= 4}
-              className="px-3 py-2 text-[13px] font-medium text-muted border border-line rounded-lg hover:text-accent hover:border-line-hover transition disabled:opacity-40"
+              className="h-9 px-2 sm:px-3 text-[13px] font-medium text-muted border border-line rounded-lg hover:text-accent hover:border-line-hover transition disabled:opacity-40"
               title="Attach files"
             >
               Attach
             </button>
             <button
-              onClick={handleSend}
-              disabled={!input.trim() && attachments.length === 0}
-              className="h-9 w-10 text-[18px] font-semibold text-bg bg-accent rounded-lg hover:brightness-110 transition disabled:opacity-40"
-              title={state.isRunning ? 'Queue message' : 'Send message'}
-              aria-label={state.isRunning ? 'Queue message' : 'Send message'}
+              onClick={handleArrowClick}
+              onPointerDown={e => {
+                if (e.button !== 0 || !input.trim()) return
+                e.currentTarget.setPointerCapture(e.pointerId)
+                holdTimerRef.current = setTimeout(() => {
+                  stashArmedRef.current = true
+                  setStashArmed(true)
+                }, 550)
+              }}
+              onPointerUp={() => clearTimeout(holdTimerRef.current)}
+              onPointerCancel={cancelHold}
+              onKeyDown={e => {
+                if (e.key === 'Escape') cancelHold()
+                if (e.key === 'ArrowDown' && input.trim()) {
+                  e.preventDefault()
+                  stashArmedRef.current = true
+                  setStashArmed(true)
+                }
+              }}
+              disabled={(!input.trim() && attachments.length === 0) || sending}
+              className="h-9 min-w-10 px-2 text-[18px] font-semibold text-bg bg-accent rounded-lg hover:brightness-110 transition disabled:opacity-40"
+              title="Send · hold to stash (keyboard: Down, then Enter)"
+              aria-label={stashArmed ? 'Stash prompt' : state.isRunning ? 'Queue message' : 'Send message'}
             >
-              ↑
+              {stashArmed ? <span className="text-[12px]">Stash</span> : '↑'}
             </button>
           </div>
         </div>
+        {!!state.currentMeta?.prompt_stash?.length && <button type="button"
+          onClick={() => setStashesOpen(true)}
+          className="mt-2 flex w-full min-w-0 items-center gap-2 text-left text-[12px] text-muted hover:text-accent">
+          <span className="shrink-0">Saved ({state.currentMeta.prompt_stash.length})</span>
+          <span className="truncate">{state.currentMeta.prompt_stash.at(-1).text.replace(/\s+/g, ' ')}</span>
+        </button>}
+        <dialog ref={stashDialogRef} onCancel={() => setStashesOpen(false)} onClose={() => setStashesOpen(false)}
+          aria-labelledby="saved-prompts-title"
+          className="fixed inset-0 m-auto w-[min(640px,calc(100vw-2rem))] max-h-[75vh] overflow-auto rounded-xl border border-line bg-surface p-5 text-text-default backdrop:bg-overlay">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 id="saved-prompts-title" className="text-[16px] font-medium">Saved prompts</h2>
+            <button type="button" onClick={() => setStashesOpen(false)} aria-label="Close saved prompts" className="text-muted hover:text-accent">✕</button>
+          </div>
+          {!(state.currentMeta?.prompt_stash || []).length && <p className="text-[13px] text-muted">Hold the send arrow to stash a prompt.</p>}
+          {[...(state.currentMeta?.prompt_stash || [])].reverse().map(prompt => <div key={prompt.id} className="border-t border-line py-4">
+            <p className="whitespace-pre-wrap break-words text-[14px] leading-6">{prompt.text}</p>
+            <div className="mt-3 flex gap-4 text-[12px]">
+              <button type="button" className="text-accent" onClick={() => { setInput(prompt.text); setStashesOpen(false); inputRef.current?.focus() }}>Use prompt</button>
+              <button type="button" className="text-muted hover:text-danger" onClick={() => removeStashedPrompt(prompt.id)}>Delete</button>
+            </div>
+          </div>)}
+        </dialog>
         {attachmentError && <div className="mt-2 text-[12px] text-danger">{attachmentError}</div>}
         {audioError && <div className="mt-2 text-[12px] text-danger">{audioError}</div>}
         {recording && !audioError && (

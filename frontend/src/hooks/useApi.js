@@ -10,11 +10,11 @@ export default function useApi() {
   const dispatch = useAppDispatch()
   const stateRef = useAppStateRef()
 
-  const sendMessage = useCallback(async (sessionId, text, attachments = []) => {
+  const sendMessage = useCallback(async (sessionId, text, attachments = [], mode = 'queue') => {
     const wasRunning = stateRef.current.isRunning
     if (!wasRunning) dispatch({ type: 'SET_RUNNING' })
     try {
-      return await api('POST', `/api/sessions/${encodeURIComponent(sessionId)}/message`, { text, attachments })
+      return await api('POST', `/api/sessions/${encodeURIComponent(sessionId)}/message`, { text, attachments, mode })
     } catch (err) {
       if (!wasRunning) dispatch({ type: 'SET_IDLE' })
       dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: err.detail || err.message } })

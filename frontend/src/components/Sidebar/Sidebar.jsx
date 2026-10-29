@@ -1,16 +1,23 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useApp } from '../../context/AppContext'
 import useSessionTree from '../../hooks/useSessionTree'
-import useApi from '../../hooks/useApi'
-import { api, importSessionBackup, isAbandonedRequest } from '../../api'
+import useSelectSession from '../../hooks/useSelectSession'
+import { importSessionBackup, isAbandonedRequest, downloadSessionBackup, downloadSessionExport } from '../../api'
 import SearchInput from './SearchInput'
 import HostSwitcher from './HostSwitcher'
 import ProjectNode from './ProjectNode'
 import ChatsNode from './ChatsNode'
 import useStartChat from '../../hooks/useStartChat'
-import { shortcutLabel, CHATS_PROJECT_ID } from '../../constants'
 import { effectiveWorkspaceRoot } from '../../sessionWorkspace'
+import { shortcutLabel, CHATS_PROJECT_ID } from '../../constants'
 import MoveSessionModal from '../Modals/MoveSessionModal'
+import SessionItem from './SessionItem'
+import SessionContextMenu from './SessionContextMenu'
+import { SidebarActionsContext } from './SidebarActions'
+import { copyText } from '../../clipboard'
+import {
+  activitySessions, archivedSessions, isChatSession, sessionPlace, sessionReference, withoutArchived,
+} from '../../sessionList'
 
 export default function Sidebar() {
   const { state, dispatch } = useApp()
@@ -18,6 +25,11 @@ export default function Sidebar() {
   const startChat = useStartChat()
   const [search, setSearch] = useState('')
   const [moveRequest, setMoveRequest] = useState(null)
+  const [menu, setMenu] = useState(null)
+  const [renameSessionId, setRenameSessionId] = useState(null)
+  const [archivedOpen, setArchivedOpen] = useState(false)
+  const selectSessionMeta = useSelectSession()
+  const view = state.sidebarView
 
   // Reloads on a host switch: the tree belongs to one machine, and
   // SWITCH_HOST has already emptied the previous host's copy.
@@ -31,15 +43,15 @@ export default function Sidebar() {
 
   const selectSession = useCallback(async (sid) => {
     try {
-      const data = await api('GET', `/api/sessions/${encodeURIComponent(sid)}`)
-      const meta = data.meta
-      const project = state.projects.find(p => p.id === meta.project_id)
-      const workspaceRoot = effectiveWorkspaceRoot(meta, project?.root || '')
-      dispatch({ type: 'SELECT_SESSION', payload: { meta, workspaceRoot } })
+      await selectSessionMeta(sid)
     } catch (err) {
       console.error('Failed to select session:', err)
     }
-  }, [dispatch, state.projects])
+  }, [selectSessionMeta])
+
+  const reportError = useCallback((err) => {
+    dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: err.detail || err.message || String(err) } })
+  }, [dispatch])
 
   const createSession = useCallback(async (projectId, taskId, provider) => {
     const providers = [
@@ -95,13 +107,78 @@ export default function Sidebar() {
     const meta = await tree.moveSession(sessionId, projectId, taskId)
     if (state.currentSessionId === sessionId) {
       dispatch({ type: 'UPDATE_SESSION_META', payload: meta })
+      const project = state.projects.find(p => p.id === projectId)
+      dispatch({ type: 'SET_WORKSPACE_ROOT', payload: { root: effectiveWorkspaceRoot(meta, project?.root || ''), workingDirectory: meta.working_directory } })
     }
     return meta
-  }, [tree, state.currentSessionId, dispatch])
+  }, [tree, state.currentSessionId, state.projects, dispatch])
+
+  const openContextMenu = useCallback((session, x, y) => setMenu({ session, x, y }), [])
+  const closeContextMenu = useCallback(() => setMenu(null), [])
+  const clearRenameRequest = useCallback(() => setRenameSessionId(null), [])
+  const sidebarActions = useMemo(
+    () => ({ openContextMenu, renameSessionId, clearRenameRequest }),
+    [openContextMenu, renameSessionId, clearRenameRequest],
+  )
+
+  const menuItems = useMemo(() => {
+    if (!menu) return []
+    const s = state.sessionsById[menu.session.id] || menu.session
+    const busy = !!(state.runStates[s.id] || s.status === 'running')
+    const chat = isChatSession(s)
+    return [
+      { label: 'Copy session reference', onSelect: () => copyText(sessionReference(s, state.projectNames, state.taskNames)).catch(reportError) },
+      { label: 'Rename', onSelect: () => { setRenameSessionId(s.id); if (s.archived) setArchivedOpen(true) } },
+      ...(!chat ? [{ label: 'Move to label or project…', disabled: busy, onSelect: () => setMoveRequest({ session: s, projectId: s.project_id, currentTaskId: s.task_id }) }] : []),
+      'separator',
+      { label: 'Export as Markdown', onSelect: () => downloadSessionExport(s.id, 'md').catch(reportError) },
+      { label: 'Export backup (.zip)', onSelect: () => downloadSessionBackup(s.id).catch(reportError) },
+      'separator',
+      s.archived
+        ? { label: 'Unarchive', onSelect: () => tree.updateSession(s.id, { archived: false }).catch(reportError) }
+        : { label: 'Archive', disabled: busy, title: busy ? 'Wait for the run to finish' : '', onSelect: () => tree.updateSession(s.id, { archived: true }).catch(reportError) },
+      {
+        label: 'Delete…',
+        tone: 'danger',
+        disabled: busy,
+        onSelect: () => dispatch({
+          type: 'OPEN_CONFIRM',
+          payload: {
+            title: 'Delete thread?',
+            message: 'This deletes the thread event stream and attachments. Archive it instead to keep it.',
+            detail: s.title || s.id,
+            confirmLabel: 'Delete',
+            tone: 'danger',
+            onConfirm: () => deleteSession(s.id, s.project_id, s.task_id),
+          },
+        }),
+      },
+    ]
+  }, [menu, state.sessionsById, state.runStates, state.projectNames, state.taskNames, tree, dispatch, deleteSession, reportError])
 
   const q = search.toLowerCase()
-  const chatsProject = state.projects.find(p => p.id === CHATS_PROJECT_ID)
-  const realProjects = state.projects.filter(p => p.id !== CHATS_PROJECT_ID)
+  const liveProjects = useMemo(() => withoutArchived(state.projects, state.sessionsById), [state.projects, state.sessionsById])
+  const chatsProject = liveProjects.find(p => p.id === CHATS_PROJECT_ID)
+  const realProjects = liveProjects.filter(p => p.id !== CHATS_PROJECT_ID)
+  const placeOf = s => sessionPlace(s, state.projectNames, state.taskNames)
+  const matchesSearch = s => !search ||
+    (s.title || '').toLowerCase().includes(q) || placeOf(s).toLowerCase().includes(q)
+  const activity = useMemo(() => activitySessions(state.sessionsById), [state.sessionsById])
+    .filter(matchesSearch)
+  const archived = useMemo(() => archivedSessions(state.sessionsById), [state.sessionsById])
+    .filter(matchesSearch)
+  const flatRow = s => (
+    <SessionItem
+      key={s.id}
+      session={s}
+      subtitle={placeOf(s)}
+      isActive={s.id === state.currentSessionId}
+      onSelect={selectSession}
+      onRename={tree.renameSession}
+      onMove={isChatSession(s) ? undefined : (session) => setMoveRequest({ session, projectId: session.project_id, currentTaskId: session.task_id })}
+      onDelete={sid => deleteSession(sid, s.project_id, s.task_id)}
+    />
+  )
 
   const filteredProjects = realProjects.filter(p => {
     if (!search) return true
@@ -124,8 +201,28 @@ export default function Sidebar() {
 
   return (
     <div className="flex flex-col h-full px-5 pt-8 pb-5">
-      <h1 className="text-[18px] font-bold text-text-bright mb-0.5">{state.appName}</h1>
-      <p className="text-[12px] text-faint mb-4">Projects & Threads</p>
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-[18px] font-bold text-text-bright mb-0.5">{state.appName}</h1>
+          <p className="text-[12px] text-faint mb-4">Projects & Threads</p>
+        </div>
+        <div className="mt-0.5 flex items-center gap-0.5" role="tablist" aria-label="Sidebar view">
+          <ViewButton active={view === 'projects'} label="Projects" onClick={() => dispatch({ type: 'SET_SIDEBAR_VIEW', payload: 'projects' })}>
+            <BookIcon />
+          </ViewButton>
+          <ViewButton active={view === 'activity'} label="Activity — all threads by recent activity" onClick={() => dispatch({ type: 'SET_SIDEBAR_VIEW', payload: 'activity' })}>
+            <BellIcon />
+          </ViewButton>
+          <button
+            onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
+            className="p-1.5 rounded text-faint hover:text-accent hover:bg-surface-hover transition-colors"
+            title={`Hide sidebar (${shortcutLabel('B')})`}
+            aria-label="Hide sidebar"
+          >
+            <SidebarIcon />
+          </button>
+        </div>
+      </div>
 
       <HostSwitcher />
 
@@ -155,7 +252,15 @@ export default function Sidebar() {
         </button>
       </div>
 
+      <SidebarActionsContext.Provider value={sidebarActions}>
       <div className="flex-1 overflow-y-auto">
+        {view === 'activity' ? (
+          activity.length === 0 ? (
+            <p className="text-[13px] text-faint italic text-center mt-8 mb-4">{search ? 'No matching threads.' : 'No threads yet.'}</p>
+          ) : (
+            <div className="space-y-px mb-3">{activity.map(flatRow)}</div>
+          )
+        ) : <>
         {filteredProjects.length === 0 && realProjects.length > 0 ? (
           <p className="text-[13px] text-faint italic text-center mt-8 mb-4">No matching projects.</p>
         ) : realProjects.length === 0 ? (
@@ -177,6 +282,7 @@ export default function Sidebar() {
               onImportSession={importSession}
               onRenameSession={tree.renameSession}
               onMoveSession={(session, projectId, currentTaskId) => setMoveRequest({ session, projectId, currentTaskId })}
+              onDropSession={(sid, projectId, taskId) => moveSession(sid, projectId, taskId).catch(err => dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: err.detail || err.message } }))}
               onDeleteSession={deleteSession}
             />
           ))
@@ -190,7 +296,27 @@ export default function Sidebar() {
           onRenameSession={tree.renameSession}
           onDeleteSession={(sid) => deleteSession(sid, CHATS_PROJECT_ID, CHATS_PROJECT_ID)}
         />
+        </>}
+
+        {archived.length > 0 && (
+          <div className="mt-3 pt-2 border-t border-line/60">
+            <button
+              type="button"
+              onClick={() => setArchivedOpen(v => !v)}
+              aria-expanded={archivedOpen || !!search}
+              className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-[13px] font-semibold text-muted hover:text-text-bright"
+            >
+              <span className={`text-faint text-[10px] w-4 transition-transform ${archivedOpen || search ? '' : '-rotate-90'}`}>▼</span>
+              Archived
+              <span className="ml-1 text-[10px] text-faint tabular-nums">{archived.length}</span>
+            </button>
+            {(archivedOpen || !!search) && <div className="mt-0.5 pl-4 space-y-px">{archived.map(flatRow)}</div>}
+          </div>
+        )}
       </div>
+      </SidebarActionsContext.Provider>
+
+      {menu && <SessionContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={closeContextMenu} />}
 
       {moveRequest && (
         <MoveSessionModal
@@ -201,5 +327,47 @@ export default function Sidebar() {
         />
       )}
     </div>
+  )
+}
+
+function ViewButton({ active, label, onClick, children }) {
+  return (
+    <button
+      role="tab"
+      aria-selected={active}
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className={`p-1.5 rounded transition-colors ${active ? 'text-accent bg-accent-soft' : 'text-faint hover:text-accent hover:bg-surface-hover'}`}
+    >
+      {children}
+    </button>
+  )
+}
+
+function BookIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5v14Z" />
+      <path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5" />
+    </svg>
+  )
+}
+
+function BellIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+    </svg>
+  )
+}
+
+export function SidebarIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M9 4v16" />
+    </svg>
   )
 }

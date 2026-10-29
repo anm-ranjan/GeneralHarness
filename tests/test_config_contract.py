@@ -60,7 +60,14 @@ class ConfigFilesTests(unittest.TestCase):
     def test_every_example_key_is_actually_read_by_utils(self):
         # desktop.disable_gpu is parsed straight out of the YAML by
         # electron/main.js (before Electron's app is ready), never by utils.py.
-        read_elsewhere = {("desktop", "disable_gpu")}
+        # native_caching is loaded as one mapping and validated per request by
+        # prompt_cache.prepare_request.
+        read_elsewhere = {
+            ("desktop", "disable_gpu"),
+            ("native_caching", "mode"),
+            ("native_caching", "ttl"),
+            ("native_caching", "explicit_models"),
+        }
         example = yaml.safe_load(EXAMPLE_CONFIG.read_text(encoding="utf-8"))
         read = config_read_paths(UTILS_SOURCE) | read_elsewhere
         unread = [path for path in leaf_paths(example) if path not in read]
@@ -114,7 +121,7 @@ def run_utils_probe(body, env_extra=None, config_text=None):
         agent_copy = Path(tmp) / "backend" / "agent"
         agent_copy.mkdir(parents=True)
         # utils.py resolves REPO_ROOT from its own location, so mirror the layout.
-        for name in ("utils.py", "skill_registry.py", "credential_store.py"):
+        for name in ("utils.py", "skill_registry.py", "credential_store.py", "history_tokens.py"):
             (agent_copy / name).write_bytes((AGENT / name).read_bytes())
         (agent_copy / "agent_config.yaml").write_text(
             config_text if config_text is not None else EXAMPLE_CONFIG.read_text(encoding="utf-8"),

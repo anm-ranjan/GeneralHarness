@@ -1,5 +1,14 @@
 import { isSlashCommand } from './constants.js'
 import { parseContextUsage } from './utils.js'
+import { artifactPath } from './artifacts.js'
+
+function previewLink(path, name = '') {
+  const label = (name || String(path).split(/[\\/]/).pop()).replace(/[\[\]]/g, '')
+  return `[View ${label}](${encodeURI(path).replace(/\(/g, '%28').replace(/\)/g, '%29')})`
+}
+
+// Child-agent progress (tool calls, status lines) is shown only in verbose mode.
+const AGENT_LIFECYCLE_ACTIONS = new Set(['spawned', 'started', 'completed', 'failed', 'interrupted', 'error'])
 
 export function toolDetail(_name, args) {
   if (!args) return ''
@@ -35,10 +44,12 @@ export function isCodexProtocolStatus(text) {
 
 // Wraps dispatch so stage items appended while replaying a stored event carry
 // the event's absolute index in the session log, used for search deep-linking.
-function indexedDispatch(dispatch, eventIndex) {
+function indexedDispatch(dispatch, eventIndex, historical = false) {
   return (action) => {
+    if (historical && (action.type === 'APPEND_TOOL_CALL' || (action.type === 'APPEND_STAGE_ITEM' && !['user_message', 'assistant_message'].includes(action.payload.type)))) return
+    if (action.type === 'UPDATE_TOOL_RESULT' && historical) return
     if (action.type === 'APPEND_STAGE_ITEM' || action.type === 'APPEND_TOOL_CALL') {
-      dispatch({ ...action, payload: { ...action.payload, eventIndex } })
+      dispatch({ ...action, payload: { ...action.payload, eventIndex, historical } })
     } else {
       dispatch(action)
     }
@@ -60,14 +71,29 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       const replayStateRef = { current: { ...stateRef.current, isReplaying: true } }
       const events = data.events || []
       const unresolvedQuestions = new Set()
+      // A running session may reconnect mid-turn. Keep that turn interactive,
+      // but all completed historical turns show exchanges only.
+      let activeStart = events.length
+      if (data.meta?.status === 'running') {
+        for (let i = events.length - 1; i >= 0; i--) {
+          if (events[i].type === 'run_finished') { activeStart = i + 1; break }
+          if (events[i].type === 'user_message' && !events[i].data?.steering) { activeStart = i; break }
+        }
+        if (activeStart === events.length && !events.some(e => e.type === 'run_finished')) activeStart = 0
+      }
       for (let i = 0; i < events.length; i++) {
         const e = events[i]
         if (e.type === 'question_required') unresolvedQuestions.add(e.data?.question_id)
         if (e.type === 'question_resolved') unresolvedQuestions.delete(e.data?.question_id)
         collect({ type: 'INCREMENT_REPLAYED_EVENTS' })
+        if (i < activeStart && e.type === 'agent_event') continue
         if (e.type !== 'run_finished' || data.meta?.status !== 'running') {
-          handleSessionEvent(e, indexedDispatch(collect, offset + i), replayStateRef)
+          handleSessionEvent(e, indexedDispatch(collect, offset + i, i < activeStart), replayStateRef)
         }
+      }
+      if (data.meta?.id) {
+        collect({ type: 'SET_QUEUE', payload: data.meta.message_queue || [] })
+        collect({ type: 'SET_STEERING', payload: data.meta.steering_queue || [] })
       }
       collect({ type: 'SET_REPLAYING', payload: false })
       if (data.meta?.status !== 'running') {
@@ -95,12 +121,13 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
         type: 'APPEND_STAGE_ITEM',
         payload: {
           type: 'user_message',
+          steering: !!data.steering,
           text: data.text,
           images: data.images || [],
           attachments: data.attachments || data.images || [],
         },
       })
-      if (stateRef.current.isRunning || isLiveRunStart) {
+      if (!data.steering && (stateRef.current.isRunning || isLiveRunStart)) {
         if (stateRef.current.currentProvider === 'codex-app-server') {
           dispatch({ type: 'SHOW_CODEX_RUNNING' })
         } else {
@@ -124,6 +151,7 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       break
 
     case 'queue_updated':
+      dispatch({ type: 'SET_STEERING', payload: data.steering_items || [] })
       dispatch({ type: 'SET_QUEUE', payload: data.items || [] })
       break
 
@@ -143,6 +171,9 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       dispatch({ type: 'FINALIZE_WORK_GROUP' })
       dispatch({ type: 'HIDE_CODEX_RUNNING' })
       dispatch({ type: 'CLEAR_ITERATION' })
+      // A final answer that embeds an image already shown when the tool wrote
+      // it replaces that early preview instead of repeating it.
+      dispatch({ type: 'DROP_SHOWN_GENERATED_IMAGES', payload: data.markdown || '' })
       dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'assistant_message', markdown: data.markdown } })
       break
 
@@ -161,7 +192,7 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
             statusLine: data.status_line || data.name,
             status: 'running',
             resultPreview: null,
-            startedAt: !stateRef.current.isReplaying && evt.created_at ? Date.parse(evt.created_at) : Date.now(),
+            startedAt: evt.created_at ? Date.parse(evt.created_at) : Date.now(),
           },
         })
       }
@@ -230,11 +261,14 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       break
 
     case 'api_metrics': {
-      const parts = []
-      if (data.input_tokens) parts.push(`in: ${data.input_tokens}`)
-      if (data.output_tokens) parts.push(`out: ${data.output_tokens}`)
-      if (data.tokens_per_sec) parts.push(`${data.tokens_per_sec} tok/s`)
-      if (parts.length) dispatch({ type: 'SET_THROUGHPUT', payload: parts.join(' · ') })
+      // Compaction is billed/recorded in run totals, but its hidden synthesis
+      // must not replace the visible answer's throughput. estimated_input is
+      // optional local category telemetry, separate from provider usage.
+      // The composer shows speed only; token and cache counts live in the
+      // Usage panel.
+      if (data.purpose === 'history_compaction') break
+      const speed = data.tokens_per_sec || data.tps
+      if (speed) dispatch({ type: 'SET_THROUGHPUT', payload: `${speed} tok/s` })
       if (data.usage_str) dispatch({ type: 'SET_CONTEXT', payload: parseContextUsage(data.usage_str) })
       break
     }
@@ -274,16 +308,24 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
         type: 'APPEND_FILE_CHANGE',
         payload: { path: data.path, action: data.action, tool: data.tool, timestamp: evt.created_at || new Date().toISOString() },
       })
+      if (data.action === 'created' && artifactPath(data.path)) {
+        dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'assistant_message', markdown: previewLink(data.path) } })
+      }
       break
 
     case 'generated_artifact': {
       const name = data.name || String(data.path || '').split('/').pop() || 'generated image'
+      if (data.media_type?.startsWith('text/')) {
+        dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'assistant_message', markdown: previewLink(data.path, name) } })
+        dispatch({ type: 'APPEND_FILE_CHANGE', payload: { path: data.path, action: 'generated', tool: 'shell_run', timestamp: evt.created_at } })
+        break
+      }
       const version = data.version || evt.created_at || Date.now()
       const separator = String(data.path || '').includes('?') ? '&' : '?'
       const path = `${data.path}${separator}myharness_v=${encodeURIComponent(version)}`
       dispatch({
         type: 'APPEND_STAGE_ITEM',
-        payload: { type: 'assistant_message', markdown: `![${name}](${path})` },
+        payload: { type: 'assistant_message', markdown: `![${name}](${path})`, generatedPath: data.path || '' },
       })
       break
     }
@@ -310,8 +352,11 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       break
 
     case 'agent_event': {
+      const verbose = stateRef.current.verbose
+      if (!verbose && !AGENT_LIFECYCLE_ACTIONS.has(data.action)) break
       const agent = data.agent_path || data.agent_id || 'agent'
-      const detail = data.error || data.result || data.text || data.task || data.status || ''
+      let detail = String(data.error || data.result || data.text || data.task || data.status || '')
+      if (!verbose && detail.length > 240) detail = `${detail.slice(0, 240)}…`
       const text = `[${agent}] ${data.action || 'updated'}${detail ? `: ${detail}` : ''}`
       dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: data.action === 'error' || data.action === 'failed' ? 'error' : 'status', text } })
       break

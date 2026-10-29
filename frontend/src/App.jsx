@@ -20,7 +20,7 @@ import { useEffect } from 'react'
 function AppLayout() {
   const { state, dispatch } = useApp()
   const { width: sidebarW, handleProps: sidebarHandle } = useResizablePanel(300, 200, 600, 'left')
-  const editorOpen = !!state.workspaceEditorFile
+  const editorOpen = !!state.workspaceEditorFile || !!state.artifactFile
   // Code needs more room than the file tree does, so lift the drag ceiling
   // while the editor owns the panel.
   const { width: workspaceW, handleProps: workspaceHandle } = useResizablePanel(
@@ -33,37 +33,45 @@ function AppLayout() {
         e.preventDefault()
         dispatch({ type: 'OPEN_SEARCH' })
       }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'b') {
+        e.preventDefault()
+        dispatch({ type: 'TOGGLE_SIDEBAR' })
+      }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [dispatch])
 
   const wpOpen = state.workspacePanelOpen
+  const sidebarOpen = state.sidebarOpen
   const editorExpanded = editorOpen && state.workspaceEditorExpanded
+  const sidebarCol = sidebarOpen ? `${sidebarW}px ` : ''
   const cols = wpOpen && !editorExpanded
-    ? `${sidebarW}px minmax(400px, 1fr) ${workspaceW}px`
-    : `${sidebarW}px minmax(480px, 1fr)`
+    ? `${sidebarCol}minmax(400px, 1fr) ${workspaceW}px`
+    : `${sidebarCol}minmax(480px, 1fr)`
 
   return (
     <div
       className="relative grid h-screen overflow-hidden"
       style={{ gridTemplateColumns: cols }}
     >
-      <aside className="sidebar-desktop glass-panel relative flex flex-col border-r border-line overflow-hidden">
-        <Sidebar />
-        <div
-          {...sidebarHandle}
-          className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-accent/40 transition-colors"
-        />
-      </aside>
+      {sidebarOpen && (
+        <aside className="sidebar-desktop glass-panel relative flex flex-col border-r border-line overflow-hidden">
+          <Sidebar />
+          <div
+            {...sidebarHandle}
+            className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-accent/40 transition-colors"
+          />
+        </aside>
+      )}
 
       <main className="main-area flex flex-col overflow-hidden">
         <TopBar />
         <Stage />
         <PlanPanel />
         <RunStatusDock />
-        <QueuedMessages />
-        <Composer />
+        <QueuedMessages key={state.currentSessionId || 'none'} />
+        <Composer key={state.currentSessionId || 'none'} />
       </main>
 
       {wpOpen && (

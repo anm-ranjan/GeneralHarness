@@ -3,6 +3,7 @@ import { useAppSelector, useAppDispatch } from '../../context/AppContext'
 import { api } from '../../api'
 import FilePreview from './FilePreview'
 import { isDesktopApp } from '../../desktop'
+import { artifactPath } from '../../artifacts'
 
 function relativePath(path, root) {
   if (!root || !path) return path
@@ -93,6 +94,10 @@ function TreeNode({ entry, touchedPaths, depth, root, onEntryRenamed }) {
   const isTouched = touchedPaths.has(nodeEntry.path)
 
   const openFile = useCallback(() => {
+    if (artifactPath(nodeEntry.path)) {
+      dispatch({ type: 'OPEN_ARTIFACT', payload: nodeEntry.path })
+      return
+    }
     // Desktop opens the panel editor; the browser keeps the read-only preview,
     // since saving is refused outside the Electron shell anyway.
     if (isDesktopApp()) {

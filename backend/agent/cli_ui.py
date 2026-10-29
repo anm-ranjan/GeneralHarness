@@ -59,6 +59,14 @@ class CliUI:
     def show_context_usage(self, usage_str: str) -> None:
         ui_print(f"Session usage: {usage_str}", style="cyan")
 
+    def show_api_metrics(self, metrics: dict) -> None:
+        parts = []
+        for key, label in (("cache_read_tokens", "cache read"), ("cache_write_tokens", "cache write")):
+            if key in metrics:
+                parts.append(f"{label}: {metrics[key]}")
+        if parts:
+            ui_print("API " + " | ".join(parts), style="dim")
+
     def show_plan_update(self, items: list[dict]) -> None:
         ui_panel("Plan", "", style="cyan")
         marks = {"completed": "[x]", "in_progress": "[~]"}

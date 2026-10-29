@@ -355,3 +355,21 @@ test('successful question resolution clears submission state', () => {
     { answer: 'strict', answered: true, submitting: false, submissionError: null },
   )
 })
+
+test('archive and other per-session updates reach the sidebar and open session', () => {
+  const state = {
+    ...initialState,
+    sessionsById: { s1: { id: 's1', title: 'One' } },
+    currentMeta: { id: 's1', title: 'One' },
+  }
+  const next = reducer(state, { type: 'UPDATE_SESSION_META_BY_ID', payload: { sessionId: 's1', changes: { archived: true } } })
+  assert.equal(next.sessionsById.s1.archived, true)
+  assert.equal(next.currentMeta.archived, true)
+})
+
+test('sidebar visibility toggles and view accepts only known values', () => {
+  const hidden = reducer({ ...initialState, sidebarOpen: true }, { type: 'TOGGLE_SIDEBAR' })
+  assert.equal(hidden.sidebarOpen, false)
+  assert.equal(reducer(initialState, { type: 'SET_SIDEBAR_VIEW', payload: 'activity' }).sidebarView, 'activity')
+  assert.equal(reducer(initialState, { type: 'SET_SIDEBAR_VIEW', payload: 'bogus' }).sidebarView, 'projects')
+})

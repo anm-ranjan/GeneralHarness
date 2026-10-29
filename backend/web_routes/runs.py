@@ -19,6 +19,36 @@ from web_helpers import _emit_session_event, _queue_payload
 router = APIRouter()
 
 
+class _StashRequest(_PydanticBaseModel):
+    text: str
+
+
+@router.post("/api/sessions/{session_id}/stash")
+def stash_prompt(session_id: str, req: _StashRequest):
+    from web_models import QueuedMessage
+    with web_app._run_lock_for(session_id):
+        meta = web_app._store.load_session(session_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if not req.text.strip() or len(req.text) > 200_000:
+            raise HTTPException(status_code=400, detail="Stash a nonempty prompt up to 200,000 characters")
+        if not any(item.text == req.text for item in meta.prompt_stash):
+            meta.prompt_stash.append(QueuedMessage(text=req.text))
+        web_app._store.update_session(meta)
+        return meta.model_dump(mode="json")
+
+
+@router.delete("/api/sessions/{session_id}/stash/{prompt_id}")
+def remove_stashed_prompt(session_id: str, prompt_id: str):
+    with web_app._run_lock_for(session_id):
+        meta = web_app._store.load_session(session_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        meta.prompt_stash = [item for item in meta.prompt_stash if item.id != prompt_id]
+        web_app._store.update_session(meta)
+        return meta.model_dump(mode="json")
+
+
 def _request_attachments(req: SendMessageRequest) -> list:
     return req.attachments or req.images or []
 
@@ -86,8 +116,26 @@ async def send_message(session_id: str, req: SendMessageRequest):
     if meta is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    if req.mode not in {"queue", "steer"}:
+        raise HTTPException(status_code=400, detail="Mode must be queue or steer")
+
     workspace_root = web_helpers._workspace_root_for_session(meta)
     req_attachments = _request_attachments(req)
+
+    if req.mode == "steer":
+        if not req.text.strip() or req.text.lstrip().startswith("/") or req_attachments:
+            raise HTTPException(status_code=400, detail="Steering accepts a text prompt without attachments or slash commands")
+        with web_app._run_lock_for(session_id):
+            run = web_app._manager.get_active_run(session_id)
+            if run is None or not run.steering_open or run.cancel_event.is_set():
+                raise HTTPException(status_code=409, detail="This run has finished or is closing. Send the prompt as a new message.")
+            meta_now = web_app._store.load_session(session_id)
+            from web_models import QueuedMessage
+            meta_now.steering_queue.append(QueuedMessage(text=req.text))
+            web_app._store.update_session(meta_now)
+            web_helpers._emit_queue_updated(session_id, meta_now)
+            _emit_session_event(session_id, EventType.STATUS, {"text": "Steering saved; it will be applied at the next tool or model boundary."})
+        return {"status": "steering", "session_id": session_id}
 
     if web_app._manager.get_active_run(session_id):
         if req.text.strip().startswith("/"):
@@ -156,6 +204,58 @@ async def answer_question(session_id: str, req: QuestionResponse):
     if not ok:
         raise HTTPException(status_code=400, detail="Question ID mismatch or expired")
     return {"status": "answered"}
+
+
+@router.post("/api/sessions/{session_id}/queue/{message_id}/steer")
+def steer_queued_message(session_id: str, message_id: str):
+    with web_app._run_lock_for(session_id):
+        meta = web_app._store.load_session(session_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        item = next((item for item in meta.message_queue if item.id == message_id), None)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Queued message not found")
+        if not item.text.strip() or item.text.lstrip().startswith("/") or item.attachments or item.images:
+            raise HTTPException(status_code=400, detail="Steering accepts a text prompt without attachments or slash commands")
+        run = web_app._manager.get_active_run(session_id)
+        if run is None or not run.steering_open or run.cancel_event.is_set():
+            raise HTTPException(status_code=409, detail="This run has finished or is closing. The message remains queued.")
+        meta.message_queue = [queued for queued in meta.message_queue if queued.id != message_id]
+        meta.steering_queue.append(item)
+        web_app._store.update_session(meta)
+        web_helpers._emit_queue_updated(session_id, meta)
+        _emit_session_event(session_id, EventType.STATUS, {"text": "Steering saved; it will be applied at the next tool or model boundary."})
+    return {"status": "steering", "session_id": session_id, **_queue_payload(meta)}
+
+
+class _QueuedMessageEdit(_PydanticBaseModel):
+    text: str
+    expected_text: str
+
+
+@router.patch("/api/sessions/{session_id}/queue/{message_id}")
+@router.patch("/api/sessions/{session_id}/steering/{message_id}")
+def edit_pending_message(session_id: str, message_id: str, req: _QueuedMessageEdit):
+    if len(req.text) > 200_000 or req.text.lstrip().startswith("/"):
+        raise HTTPException(status_code=400, detail="Use a message up to 200,000 characters, without slash commands")
+    with web_app._run_lock_for(session_id):
+        meta = web_app._store.load_session(session_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        run = web_app._manager.get_active_run(session_id)
+        if message_id in getattr(run, "steering_in_flight", set()):
+            raise HTTPException(status_code=409, detail="This steering message is being delivered and can no longer be edited")
+        item = next((q for q in [*meta.message_queue, *meta.steering_queue] if q.id == message_id), None)
+        if item is None:
+            raise HTTPException(status_code=409, detail="This message has already been delivered or removed")
+        if not req.text.strip() and not (item.attachments or item.images):
+            raise HTTPException(status_code=400, detail="A message needs text or an attachment")
+        if item.text != req.expected_text:
+            raise HTTPException(status_code=409, detail="This message changed in another window. Reopen it to edit the latest version")
+        item.text = req.text
+        web_app._store.update_session(meta)
+        web_helpers._emit_queue_updated(session_id, meta)
+        return {"status": "updated", **_queue_payload(meta)}
 
 
 @router.delete("/api/sessions/{session_id}/queue/{message_id}")

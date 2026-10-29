@@ -6,6 +6,7 @@ import DiagnosticsPanel from './DiagnosticsPanel'
 import SourceControl from './SourceControl'
 import UsagePanel from './UsagePanel'
 import FileEditor from './FileEditor'
+import ArtifactViewer from './ArtifactViewer'
 import { isDesktopApp } from '../../desktop'
 
 const TABS = [
@@ -21,6 +22,7 @@ export default function WorkspacePanel() {
   const { state, dispatch } = useApp()
   const tab = state.workspacePanelTab
   const editorFile = state.workspaceEditorFile
+  if (state.artifactFile) return <ArtifactViewer key={state.artifactFile} path={state.artifactFile} />
 
   if (editorFile && isDesktopApp()) {
     return <FileEditor key={editorFile} path={editorFile} />

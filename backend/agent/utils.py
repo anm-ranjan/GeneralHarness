@@ -29,6 +29,7 @@ import requests
 import yaml
 import credential_store
 import skill_registry
+import history_tokens
 
 try:
     import fitz
@@ -140,6 +141,7 @@ CONFIG_API_KEY = str(nested_get(CONFIG, ["api", "api_key"], "") or "").strip()
 API_KEY = os.environ.get("MYHARNESS_API_KEY", "").strip() or CONFIG_API_KEY
 NATIVE_API_TIMEOUT = config_int(CONFIG, ["api", "timeout_seconds"], 120)
 API_PROVIDER = nested_get(CONFIG, ["api", "provider"], None)
+NATIVE_CACHING = nested_get(CONFIG, ["native_caching"], {})
 # Token-level SSE streaming for assistant output (UIs that support deltas).
 # Providers that reject stream=True fall back to a plain request per call.
 API_STREAMING = str(nested_get(CONFIG, ["api", "streaming"], "true")).lower() in ("true", "1", "yes")
@@ -150,6 +152,8 @@ SUMMARY_MODEL = nested_get(CONFIG, ["models", "summary"], READ_MODEL)
 COMPACT_THRESHOLD_TOKENS = config_int(CONFIG, ["memory", "compact_threshold_tokens"], 50000)
 KEEP_RECENT_MESSAGES = config_int(CONFIG, ["memory", "keep_recent_messages"], 8)
 CONTEXT_LIMIT_TOKENS = config_int(CONFIG, ["memory", "context_limit_tokens"], 200000)
+TASK_STATE_TOKENS = max(512, min(16000, config_int(CONFIG, ["memory", "task_state_tokens"], 4096)))
+SUMMARY_TARGET_TOKENS = max(128, min(TASK_STATE_TOKENS // 2, config_int(CONFIG, ["memory", "summary_target_tokens"], 1024)))
 MEMORY_SUMMARY_MARKER = "SESSION_MEMORY_SUMMARY"
 
 ALLOWED_PATHS = normalize_allowed_paths(nested_get(CONFIG, ["permissions", "allowed_paths"], []))
@@ -298,6 +302,18 @@ MAX_SEARCH_RESULTS = config_int(CONFIG, ["search", "max_results"], 100)
 # Defaults to the interpreter running the backend, which is already the one
 # run.sh/run.cmd selected.
 PYTHON_INTERPRETER = str(nested_get(CONFIG, ["python", "interpreter"], "")).strip() or sys.executable
+# Chart.js ships with the frontend (frontend/public/vendor) and is served by the
+# backend at this path, so html chart previews work without internet access.
+CHART_JS_URL = "/vendor/chart-4.5.1.umd.min.js"
+CHART_GUIDANCE = (
+    "CHARTS: For charts or plots of data you already have (for example query results or a small table), "
+    "prefer an interactive chart in the final answer: one self-contained HTML document in a ```html "
+    "fenced block with the data embedded. Load the bundled Chart.js 4.5.1 with "
+    f'<script src="{CHART_JS_URL}"></script> (Chart.js v4 API, global Chart); never load scripts from '
+    "the internet. Simple visuals may use inline SVG instead. The web UI renders the block as a sandboxed "
+    "live preview whose scripts cannot reach local files, the app, or MyHarness APIs. Use image files "
+    "instead for scientific plots that need Python libraries or very large data."
+)
 MANAGED_TOOLS = str(nested_get(CONFIG, ["agent", "managed_tools"], "false")).lower() in ("true", "1", "yes")
 DEFAULT_PROVIDER = str(nested_get(CONFIG, ["agent", "default_provider"], "native") or "native").strip()
 RG_PATH = str(nested_get(CONFIG, ["search", "rg_path"], "")).strip()
@@ -810,10 +826,10 @@ def tool_content_search(
             completed = subprocess.run(command, cwd=directory, text=True, capture_output=True, timeout=30, encoding="utf-8", errors="replace")
             if completed.returncode == 0:
                 lines = completed.stdout.splitlines()[:limit]
-                return "Found {count} matching line(s) using rg:\n{items}".format(
+                return truncate_output("Found {count} matching line(s) using rg:\n{items}".format(
                     count=len(lines),
                     items="\n".join(lines),
-                )
+                ), spill=True)
             if completed.returncode == 1:
                 return f"No matches for '{query}' in '{directory}'."
             return f"ERROR: rg failed with exit code {completed.returncode}: {completed.stderr}"
@@ -849,10 +865,10 @@ def tool_content_search(
 
     if not matches:
         return f"No matches for '{query}' in '{directory}'."
-    return "Found {count} matching line(s) using Python fallback:\n{items}".format(
+    return truncate_output("Found {count} matching line(s) using Python fallback:\n{items}".format(
         count=len(matches),
         items="\n".join(matches),
-    )
+    ), spill=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1423,7 +1439,7 @@ def tool_file_read(file_path: str, read_mode: str = "full", lines: int = 200, of
             doc.close()
             if not text.strip():
                 return f"WARNING: PDF '{file_path}' contains no extractable text. Pages: {num_pages}"
-            return f"--- Contents of {file_path} ({num_pages} pages) ---\n{text}"
+            return truncate_output(f"--- Contents of {file_path} ({num_pages} pages) ---\n{text}", spill=True)
 
         if not is_partial and not is_search and file_size > MAX_FILE_SIZE:
             return (
@@ -1480,7 +1496,7 @@ def tool_file_read(file_path: str, read_mode: str = "full", lines: int = 200, of
                     f"\n\nHint: This file has {total} lines. If you are looking for specific content, "
                     "use read_mode='search' with a query instead of reading chunks sequentially."
                 )
-            return f"--- {file_path} ({file_size} bytes, {desc}) ---\n{content}{hint}"
+            return truncate_output(f"--- {file_path} ({file_size} bytes, {desc}) ---\n{content}{hint}", spill=True)
 
         total_lines = content.count("\n") + 1
         hint = ""
@@ -1489,7 +1505,7 @@ def tool_file_read(file_path: str, read_mode: str = "full", lines: int = 200, of
                 f"\n\nHint: This file has {total_lines} lines. Next time, use read_mode='search' "
                 "with a query to jump directly to relevant content instead of reading the full file."
             )
-        return f"--- Contents of {file_path} ({file_size} bytes) ---\n{content}{hint}"
+        return truncate_output(f"--- Contents of {file_path} ({file_size} bytes) ---\n{content}{hint}", spill=True)
     except Exception as e:
         return f"ERROR: Could not read file: {e}"
 
@@ -2652,61 +2668,57 @@ def slim_tool_result(text: str) -> str:
     return _TOOL_RESULT_HEADER.sub("", text, count=1)
 
 
-def _summarize_code(content: str) -> str:
-    parts = []
-    imports = []
-    signatures = []
-    for line in content.splitlines():
-        stripped = line.strip()
-        if stripped.startswith(("import ", "from ")):
-            imports.append(stripped)
-        elif stripped.startswith("def "):
-            signatures.append(stripped.rstrip(":") + ":")
-        elif stripped.startswith("class "):
-            signatures.append(stripped.rstrip(":") + ":")
-    if imports:
-        parts.append("Imports: " + ", ".join(imports[:10]))
-        if len(imports) > 10:
-            parts.append(f"  ... ({len(imports)} imports total)")
-    if signatures:
-        parts.append("Signatures:\n  " + "\n  ".join(signatures))
-    return "\n".join(parts) if parts else None
-
-
-def _summarize_content(content: str) -> str:
+def summarize_tool_result(content: str, source_tool: str = "", arguments=None, evidence_id="") -> str:
+    """Keep provenance and diagnostic tails; only accept cheaper replacements."""
+    if content.startswith("[Summarized "):
+        return content
+    arguments = arguments or {}
     lines = content.splitlines()
-    line_count = len(lines)
-    char_count = len(content)
+    selected = set(range(min(8, len(lines))))
+    selected.update(range(max(0, len(lines) - 6), len(lines)))
+    if source_tool in {"shell_run", "shell_check"}:
+        diagnostic = [i for i, line in enumerate(lines) if re.search(
+            r"exit code|error|fail|exception|traceback|passed|\bOK\b|^Ran \d|warning|assert", line, re.I)]
+        selected.update(diagnostic[:12])
+        selected.update(diagnostic[-12:])
+    # Preserve the actual lines/locations, never replace evidence with signatures.
+    excerpts = []
+    previous = -1
+    for index in sorted(selected):
+        if index > previous + 1:
+            excerpts.append("… [lines omitted]")
+        line = lines[index]
+        excerpts.append(line if len(line) <= 400 else line[:300] + " … " + line[-80:])
+        previous = index
+    provenance = {key: arguments[key] for key in
+                  ("file_path", "read_mode", "offset", "lines", "query", "directory", "command", "working_directory")
+                  if key in arguments}
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    retrieval = (f"evidence_id={evidence_id}" if evidence_id else f"Unarchived output SHA-256: {digest}; rerun source for current output.")
+    candidate = (f"[Summarized {source_tool or 'tool'} result]\n"
+                 f"{len(lines)} lines; historical excerpts; reread current file text before editing.\n"
+                 f"{retrieval}\n{json.dumps(provenance, ensure_ascii=False)}\n" + "\n".join(excerpts))
+    return candidate if history_tokens.count_value(candidate) < history_tokens.count_value(content) else content
 
-    code_summary = _summarize_code(content)
-    if code_summary:
-        return f"[Python, {char_count} chars, {line_count} lines]\n{code_summary}"
 
-    preview_lines = lines[:5]
-    preview = "\n".join(preview_lines)
-    if line_count > 5:
-        preview += f"\n... ({line_count} lines total)"
-    return f"[{char_count} chars, {line_count} lines] {preview}"
-
-
-def summarize_tool_result(content: str, source_tool: str = "") -> str:
-    summary = _summarize_content(content)
-    if summary:
-        label = source_tool or "tool"
-        return f"[Summarized {label} result]\n{summary}"
-    return truncate_output(content)
-
-
-def _compressed_argument_placeholder(argument_name: str, content: str) -> str:
+def _compressed_argument_placeholder(argument_name: str, content: str, evidence_id="") -> str:
     """Return a summary that cannot be mistaken for literal tool input."""
+    receipt = (f"Original evidence: {evidence_id}; use myharness_context action='evidence', evidence_field='arguments'.\n"
+               if evidence_id else "")
     return (
         "[MYHARNESS COMPRESSED PLACEHOLDER - NOT LITERAL FILE CONTENT]\n"
         f"The original {argument_name} was removed from model history after the tool call succeeded. "
         "Never use this placeholder as file_replace old_text or write it into a file. "
         "Read the relevant file range for exact text, or use apply_patch.\n"
+        f"{receipt}"
         f"Original SHA-256: {hashlib.sha256(content.encode('utf-8')).hexdigest()}\n"
-        f"Summary only:\n{_summarize_content(content)}"
+        f"Summary only:\n{content[:160]}"
     )
+
+
+def _smaller_history_message(original, candidate):
+    return (candidate if history_tokens.estimate_messages([candidate]) < history_tokens.estimate_messages([original])
+            else original)
 
 
 def compress_file_write_args(assistant_msg: dict, tool_call_id: str):
@@ -2720,50 +2732,68 @@ def compress_file_write_args(assistant_msg: dict, tool_call_id: str):
         except (json.JSONDecodeError, TypeError):
             return
         content = args.get("content", "")
-        if len(content) <= TOOL_COMPRESS_THRESHOLD:
+        if len(content) <= TOOL_COMPRESS_THRESHOLD or args.get("_content_sha256"):
             return
-        args["_content_sha256"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        args["content"] = _compressed_argument_placeholder("file_write content", content)
-        tool_calls[i] = {
+        candidate = {**args, "_content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                     "content": _compressed_argument_placeholder("file_write content", content)}
+        if history_tokens.count_value(candidate) >= history_tokens.count_value(args):
+            return
+        args = candidate
+        candidate_call = {
             **tc,
             "function": {**tc["function"], "arguments": json.dumps(args, ensure_ascii=False)},
         }
+        if history_tokens.count_value(candidate_call) < history_tokens.count_value(tc):
+            tool_calls[i] = candidate_call
         return
 
 
 def _aggressive_compress_tool_results(messages: list, turn_start_index: int):
-    limit = 800
-    for i in range(turn_start_index, len(messages)):
-        msg = messages[i]
-        if msg.get("role") == "tool":
-            content = msg.get("content", "")
-            if len(content) > limit:
-                messages[i] = {**msg, "content": content[:limit] + "\n... (truncated for retry)"}
+    # Retry uses the same evidence-aware policy; head truncation hid failures.
+    compress_turn_tool_results(messages, turn_start_index)
 
 
 def compress_turn_tool_results(messages: list, turn_start_index: int, end_index: int = None):
     end_index = end_index if end_index is not None else len(messages)
-    tool_call_names: dict[str, str] = {}
+    tool_calls = {}
+    successful = {m.get("tool_call_id") for m in messages[turn_start_index:end_index]
+                  if m.get("role") == "tool" and isinstance(m.get("content"), str)
+                  and not m.get("_preserve_evidence") and not m["content"].lstrip().startswith("ERROR")}
+    evidence_ids = {m.get("tool_call_id"): m.get("_evidence_id", "")
+                    for m in messages[turn_start_index:end_index] if m.get("role") == "tool"}
+    skill_ids = _skill_instruction_ids(messages)
     for i in range(turn_start_index, end_index):
         msg = messages[i]
         if msg.get("role") == "assistant" and msg.get("tool_calls"):
             for tc in msg["tool_calls"]:
-                tool_call_names[tc["id"]] = tc["function"]["name"]
+                tool_calls[tc["id"]] = tc
 
     for i in range(turn_start_index, end_index):
         msg = messages[i]
         if msg.get("role") == "tool":
+            if msg.get("tool_call_id") in skill_ids or msg.get("_preserve_evidence"):
+                continue
             content = msg.get("content", "")
-            if content.startswith("ERROR"):
+            if not isinstance(content, str) or content.lstrip().startswith("ERROR"):
                 continue
             tc_id = msg.get("tool_call_id", "")
-            source_tool = tool_call_names.get(tc_id, "")
+            function = tool_calls.get(tc_id, {}).get("function", {})
+            source_tool = function.get("name", "")
+            try:
+                arguments = function.get("arguments", {})
+                arguments = json.loads(arguments) if isinstance(arguments, str) else arguments
+            except (ValueError, TypeError):
+                arguments = {}
             if len(content) > TOOL_COMPRESS_THRESHOLD:
-                messages[i] = {**msg, "content": summarize_tool_result(content, source_tool)}
+                messages[i] = _smaller_history_message(msg, {
+                    **msg, "content": summarize_tool_result(content, source_tool, arguments, msg.get("_evidence_id", ""))})
         elif msg.get("role") == "assistant" and msg.get("tool_calls"):
             compressed_calls = []
             for tc in msg["tool_calls"]:
                 func_name = tc["function"]["name"]
+                if tc.get("id") not in successful or func_name not in {"file_write", "file_replace", "apply_patch"}:
+                    compressed_calls.append(tc)
+                    continue
                 try:
                     args = json.loads(tc["function"]["arguments"]) if isinstance(tc["function"]["arguments"], str) else tc["function"]["arguments"]
                 except (json.JSONDecodeError, TypeError):
@@ -2772,11 +2802,12 @@ def compress_turn_tool_results(messages: list, turn_start_index: int, end_index:
                 changed = False
                 for arg_key in ("content", "new_text", "patch_text"):
                     val = args.get(arg_key, "")
-                    if isinstance(val, str) and len(val) > TOOL_COMPRESS_THRESHOLD:
-                        args[f"_{arg_key}_sha256"] = hashlib.sha256(val.encode("utf-8")).hexdigest()
-                        args[arg_key] = _compressed_argument_placeholder(
-                            f"{func_name} {arg_key}", val
-                        )
+                    if isinstance(val, str) and len(val) > TOOL_COMPRESS_THRESHOLD and not args.get(f"_{arg_key}_sha256"):
+                        candidate = {**args, f"_{arg_key}_sha256": hashlib.sha256(val.encode("utf-8")).hexdigest(),
+                                     arg_key: _compressed_argument_placeholder(f"{func_name} {arg_key}", val, evidence_ids.get(tc.get("id"), ""))}
+                        if history_tokens.count_value(candidate) >= history_tokens.count_value(args):
+                            continue
+                        args = candidate
                         changed = True
                 if changed:
                     compressed_calls.append({
@@ -2788,7 +2819,77 @@ def compress_turn_tool_results(messages: list, turn_start_index: int, end_index:
                     })
                 else:
                     compressed_calls.append(tc)
-            messages[i] = {**msg, "tool_calls": compressed_calls}
+            messages[i] = _smaller_history_message(msg, {**msg, "tool_calls": compressed_calls})
+
+    # Only deduplicate observations whose *actual returned content and args*
+    # produced the same immutable evidence id, never by path/mtime alone.
+    prior_read_calls = {call.get("id") for msg in messages[:turn_start_index]
+                        for call in msg.get("tool_calls") or []
+                        if call.get("function", {}).get("name") == "file_read"}
+    seen_reads = {msg["_evidence_id"] for msg in messages[:turn_start_index]
+                  if msg.get("role") == "tool" and msg.get("tool_call_id") in prior_read_calls
+                  and msg.get("_evidence_id")}
+    for i in range(end_index - 1, turn_start_index - 1, -1):
+        msg = messages[i]
+        evidence_id = msg.get("_evidence_id")
+        call = tool_calls.get(msg.get("tool_call_id"), {})
+        if msg.get("role") != "tool" or call.get("function", {}).get("name") != "file_read" or not evidence_id:
+            continue
+        if evidence_id in seen_reads:
+            receipt = (f"[Summarized file_read result]\nRepeated identical observed output and arguments. "
+                       f"evidence_id={evidence_id}. Reread current file before editing.")
+            if history_tokens.count_value(receipt) < history_tokens.count_value(msg["content"]):
+                messages[i] = _smaller_history_message(msg, {**msg, "content": receipt})
+        seen_reads.add(evidence_id)
+
+
+def _skill_instruction_ids(messages: list) -> set:
+    """Full SKILL.md instructions remain usable; references may be compressed."""
+    ids = set()
+    for message in messages:
+        for call in message.get("tool_calls") or []:
+            if call.get("function", {}).get("name") != "skill_read":
+                continue
+            try:
+                raw = call["function"]["arguments"]
+                args = json.loads(raw) if isinstance(raw, str) else raw
+                if args.get("resource", "SKILL.md") == "SKILL.md":
+                    ids.add(call["id"])
+            except (ValueError, TypeError, KeyError, AttributeError):
+                continue
+    return ids
+
+
+def retained_skill_instructions(messages: list, recent: list) -> list:
+    """Keep latest loaded instructions as tool exchanges across compaction.
+
+    Do not promote tool text to system instructions or execute it again. A fresh
+    skill_read replaces the prior version; disk edits alone don't alter history.
+    """
+    from copy import deepcopy
+
+    ids = _skill_instruction_ids(messages)
+    calls = {}
+    latest = {}
+    recent_ids = {m.get("tool_call_id") for m in recent if m.get("role") == "tool"}
+    for message in messages:
+        for call in message.get("tool_calls") or []:
+            if call.get("id") in ids:
+                raw = call["function"]["arguments"]
+                args = json.loads(raw) if isinstance(raw, str) else raw
+                calls[call["id"]] = (args.get("name"), call)
+        if message.get("role") == "tool" and message.get("tool_call_id") in calls:
+            name, call = calls[message["tool_call_id"]]
+            if not message.get("content", "").startswith("ERROR"):
+                latest[name] = (call, message)
+    retained = []
+    for call, message in latest.values():
+        if call["id"] not in recent_ids:
+            retained.extend([
+                {"role": "assistant", "content": "", "tool_calls": [deepcopy(call)]},
+                deepcopy(message),
+            ])
+    return retained
 
 
 # ---------------------------------------------------------------------------
@@ -2874,11 +2975,18 @@ def _execute_read_only_tool_uncached(name: str, arguments: dict, cancel_event=No
     return f"ERROR: Unknown tool '{name}'"
 
 
+_BOUNDED_READ_TOOL_NAMES = {"file_read", "content_search", "file_list", "file_search"}
+
+
 def execute_read_only_tool(name: str, arguments: dict, cancel_event=None) -> str:
     cached = None if name == "image_read" else _cache_get(name, arguments)
     if cached is not None:
-        return cached
+        return truncate_output(cached, spill=True) if name in _BOUNDED_READ_TOOL_NAMES else cached
     result = _execute_read_only_tool_uncached(name, arguments, cancel_event)
+    if name in _BOUNDED_READ_TOOL_NAMES:
+        # Bound file observations before caching or returning them to the model.
+        # Structured tools, full skills, and images retain their own size contracts.
+        result = truncate_output(result, spill=True)
     if name != "image_read" and not result.startswith("ERROR:"):
         _cache_put(name, arguments, result)
     return result

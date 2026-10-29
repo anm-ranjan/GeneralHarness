@@ -124,3 +124,47 @@ test('renderMarkdown still escapes code in unknown languages', () => {
   assert.equal(html.includes('&lt;b&gt;raw&lt;/b&gt;'), true)
   assert.equal(html.includes('<span class="code-lang">text</span>'), true)
 })
+
+
+test('math renders inline and display LaTeX without parsing math as Markdown', () => {
+  for (const text of [String.raw`Value $x_1^2$`, String.raw`Value $2$`, String.raw`Value \(x_1^2\)`, '$$\n\\begin{matrix}a & b \\\\ c & d\\end{matrix}\n$$', String.raw`\[x^2\]`]) {
+    assert.match(renderMarkdown(text), /class="katex/)
+  }
+  assert.match(renderMarkdown(String.raw`> Equation $x_1$`), /class="katex/)
+  const table = renderMarkdown('| Name | Value |\n| --- | --- |\n| a | $x_1$ |')
+  assert.match(table, /<td><span class="katex/)
+})
+
+test('code, currency and incomplete equations stay readable', () => {
+  for (const text of ['`$x$`', '```tex\n$x$\n```', 'The costs are $5 and $10.', '$x +']) {
+    assert.doesNotMatch(renderMarkdown(text), /class="katex/)
+  }
+  assert.match(renderMarkdown(String.raw`$\brokencommand{x}$`), /math-source/)
+  assert.doesNotMatch(renderMarkdown(String.raw`$\href{javascript:alert(1)}{click}$`), /href="javascript:/)
+})
+
+test('html fences render as sandboxed previews only when requested', () => {
+  const source = '```html\n<table><tr><td>1</td></tr></table>\n<script>document.body.dataset.x = "$a$"</script>\n```'
+  assert.doesNotMatch(renderMarkdown(source, ''), /<iframe/)
+  const html = renderMarkdown(source, '', { htmlPreview: true })
+  assert.match(html, /<iframe class="html-frame"[^>]*sandbox="allow-scripts allow-popups"/)
+  assert.doesNotMatch(html, /allow-same-origin/)
+  assert.match(html, /srcdoc="[^"]*&lt;table&gt;/)
+  assert.doesNotMatch(html, /class="katex/)
+  assert.match(html, /<pre hidden><code>/)
+})
+
+test('html previews point CDN Chart.js at the bundled copy', async () => {
+  const { htmlPreviewDocument, CHART_JS_URL } = await import('./utils.js')
+  for (const src of [
+    'https://cdn.jsdelivr.net/npm/chart.js',
+    'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.js',
+    'https://unpkg.com/chart.js@4/dist/chart.umd.js',
+  ]) {
+    const doc = htmlPreviewDocument(`<script src="${src}"></script><canvas></canvas>`)
+    assert.ok(doc.includes(`<script src="${CHART_JS_URL}"></script>`), src)
+  }
+  const other = htmlPreviewDocument('<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>')
+  assert.ok(other.includes('https://cdn.plot.ly/plotly-2.35.2.min.js'), 'other libraries are left alone')
+})

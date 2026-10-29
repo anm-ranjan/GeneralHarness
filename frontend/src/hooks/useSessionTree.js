@@ -1,13 +1,16 @@
 import { useCallback } from 'react'
 import { api } from '../api'
+import { reportAfterPaint } from '../performanceLog'
 import { useAppDispatch } from '../context/AppContext'
 
 export default function useSessionTree() {
   const dispatch = useAppDispatch()
 
   const loadTree = useCallback(async () => {
+    const started = performance.now()
     const data = await api('GET', '/api/sessions')
     dispatch({ type: 'SET_TREE', payload: data })
+    reportAfterPaint('sidebar_loaded', started, Object.keys(data.sessions || {}).length)
     return data
   }, [dispatch])
 
@@ -71,6 +74,14 @@ export default function useSessionTree() {
     await loadTree()
   }, [loadTree])
 
+  // Archive state lives on the session alone, so apply the returned metadata
+  // locally instead of reloading the whole tree.
+  const updateSession = useCallback(async (sessionId, changes) => {
+    const meta = await api('PATCH', `/api/sessions/${encodeURIComponent(sessionId)}`, changes)
+    dispatch({ type: 'UPDATE_SESSION_META_BY_ID', payload: { sessionId, changes: meta } })
+    return meta
+  }, [dispatch])
+
   const moveSession = useCallback(async (sessionId, projectId, taskId) => {
     const session = await api('POST', `/api/sessions/${encodeURIComponent(sessionId)}/move`, {
       project_id: projectId,
@@ -89,7 +100,7 @@ export default function useSessionTree() {
     loadTree,
     createProject, renameProject, deleteProject,
     createTask, renameTask, deleteTask,
-    createSession, renameSession, moveSession, deleteSession,
+    createSession, renameSession, updateSession, moveSession, deleteSession,
     createChat,
   }
 }

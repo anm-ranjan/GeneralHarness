@@ -1,13 +1,20 @@
 import { useEffect, useState } from 'react'
 import { useApp } from '../context/AppContext'
 import useApi from '../hooks/useApi'
-import { labelColorStyle } from '../labelColors'
+import { copyText } from '../clipboard'
+import { sessionReference } from '../sessionList'
+import { shortcutLabel } from '../constants'
+import SessionBreadcrumb from './SessionBreadcrumb'
+import { SidebarIcon } from './Sidebar/Sidebar'
 
 export default function TopBar() {
   const { state, dispatch } = useApp()
   const { cancelRun, shutdown } = useApi()
   const desktopApi = typeof window !== 'undefined' ? window.myharnessDesktop : null
   const [desktopStatus, setDesktopStatus] = useState(null)
+  const [copyState, setCopyState] = useState('')
+  useEffect(() => { setCopyState('') }, [state.currentSessionId])
+  useEffect(() => { if (!copyState) return; const timer = setTimeout(() => setCopyState(''), 2500); return () => clearTimeout(timer) }, [copyState])
 
   useEffect(() => {
     if (!desktopApi?.getStatus) return
@@ -25,10 +32,6 @@ export default function TopBar() {
   }, [desktopApi])
 
   const meta = state.currentMeta
-  const isChat = meta?.kind === 'chat'
-  const projectName = meta ? (state.projectNames[meta.project_id] || meta.project_id) : ''
-  const labelName = meta ? (state.taskNames[meta.task_id] || meta.task_id) : ''
-  const sessionTitle = meta ? (meta.title || meta.id?.slice(0, 8)) : ''
   const backendLabel = state.desktopEnabled
     ? `Server · ${state.desktopBackendUrl || window.location.origin}${state.electronOnly ? ' · Electron only' : ''}`
     : (state.serverOnline ? 'Server is running' : 'Server is stopped')
@@ -50,27 +53,30 @@ export default function TopBar() {
 
   return (
     <div className="flex items-center gap-3 px-7 py-2.5 border-b border-line min-h-[48px]">
+      {!state.sidebarOpen && (
+        <button
+          onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
+          className="-ml-3 p-1.5 rounded text-muted hover:text-accent hover:bg-surface-hover transition-colors"
+          title={`Show sidebar (${shortcutLabel('B')})`}
+          aria-label="Show sidebar"
+        >
+          <SidebarIcon />
+        </button>
+      )}
       {meta ? (
         <>
-          <div className="flex items-center gap-1.5 text-[12px] text-muted">
-            {isChat ? (
-              <span>Chat</span>
-            ) : (
-              <>
-                <span>{projectName}</span>
-                <span className="text-faint">/</span>
-                <span
-                  className="label-chip rounded-full px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider"
-                  style={labelColorStyle((state.projects || []).flatMap(project => project.tasks || []).find(task => task.id === meta.task_id)?.color || meta.task_id)}
-                  title="Primary label"
-                >
-                  {labelName}
-                </span>
-              </>
-            )}
-            <span className="text-faint">/</span>
-          </div>
-          <h2 className="text-[15px] font-semibold text-text-bright truncate">{sessionTitle}</h2>
+          <SessionBreadcrumb meta={meta} />
+          <button type="button" className={`shrink-0 inline-flex items-center justify-center rounded p-1.5 focus-visible:ring-1 focus-visible:ring-accent ${copyState === 'Copy failed' ? 'text-danger' : copyState === 'Copied' ? 'text-ok' : 'text-muted hover:text-accent'}`}
+            aria-label="Copy session reference" title={copyState || 'Copy session reference'}
+            onClick={async () => {
+              try { await copyText(sessionReference(meta, state.projectNames, state.taskNames)); setCopyState('Copied') }
+              catch { setCopyState('Copy failed') }
+            }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              {copyState === 'Copied' ? <path d="m5 12 4 4L19 6" /> : copyState === 'Copy failed' ? <><circle cx="12" cy="12" r="9" /><path d="M12 8v5m0 3h.01" /></> : <><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" /></>}
+            </svg>
+          </button>
+          <span className="sr-only" role="status">{copyState}</span>
         </>
       ) : (
         <h2 className="text-[15px] font-semibold text-text-bright">{state.appName}</h2>

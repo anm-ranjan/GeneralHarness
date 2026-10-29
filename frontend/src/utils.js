@@ -1,4 +1,6 @@
 import { apiUrl } from './api.js'
+import { artifactPath } from './artifacts.js'
+import katex from 'katex'
 
 export function esc(s) {
   return String(s || '')
@@ -69,8 +71,47 @@ export function localImageUrl(src, workspaceRoot) {
   return ''
 }
 
-export function renderMarkdown(text, workspaceRoot) {
-  const lines = (text || '')
+// Protect math before Markdown parsing so underscores, table pipes and stars
+// inside equations never become Markdown. Code and escaped dollars stay literal.
+function protectMath(text) {
+  const rendered = []
+  const source = String(text || '').replace(/\r\n/g, '\n')
+  const pattern = /(`{3,}[^\n]*\n[\s\S]*?(?:\n`{3,}[^\n]*(?=\n|$)|$)|`+[^`\n]*`+|\\\$)|\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([^\n]+?)\\\)|(?<![\\\w$])\$(?![\s$])([^\n$]+?)\$(?![\w$])/g
+  const protectedText = source.replace(pattern, (match, literal, dollars, brackets, parens, inline) => {
+    if (literal) return literal
+    const tex = dollars ?? brackets ?? parens ?? inline
+    const displayMode = dollars !== undefined || brackets !== undefined
+    let html
+    try { html = katex.renderToString(tex, { displayMode, throwOnError: true, trust: false, strict: 'ignore', maxExpand: 1000, maxSize: 20 }) }
+    catch { html = `<span class="math-source">${esc(match)}</span>` }
+    rendered.push(html)
+    const marker = `\uE000${rendered.length - 1}\uE001`
+    return displayMode ? `\n\n${marker}\n\n` : marker
+  })
+  return { text: protectedText, restore: html => html.replace(/\uE000(\d+)\uE001/g, (_match, i) => rendered[Number(i)] ?? _match) }
+}
+
+// Reports the preview document's height to the chat so the frame fits its content.
+const HTML_PREVIEW_SIZER = '<script>(()=>{const post=()=>parent.postMessage({myharnessHtmlPreview:true,height:document.documentElement.scrollHeight},"*");' +
+  'addEventListener("load",post);new ResizeObserver(post).observe(document.documentElement);})()</script>'
+
+// Chart.js is bundled (public/vendor) so previews work offline; keep in step
+// with CHART_JS_URL in backend/agent/utils.py.
+export const CHART_JS_URL = '/vendor/chart-4.5.1.umd.min.js'
+// Any remote script URL naming Chart.js core (plugins such as chartjs-adapter-*
+// have no "chart.js"/"chart.umd" in their name and are left alone).
+const CDN_CHART_JS = /(<script\b[^>]*\bsrc\s*=\s*)(["'])https?:\/\/[^"']*?(?:chart\.js|chart\.umd)[^"']*\2/gi
+
+export function htmlPreviewDocument(source) {
+  // Models often reach for a CDN copy out of habit; point it at the bundled one.
+  return HTML_PREVIEW_SIZER + String(source).replace(CDN_CHART_JS, `$1$2${CHART_JS_URL}$2`)
+}
+
+// `htmlPreview` renders ```html fences as a sandboxed live frame (scripts run
+// in an opaque origin with no access to the app) with a toggle back to the code.
+export function renderMarkdown(text, workspaceRoot, { htmlPreview = false } = {}) {
+  const math = protectMath(text)
+  const lines = math.text
     .replace(/\[\]\([^\s)]+\)/g, '')
     .replace(/\r\n/g, '\n')
     .replace(/^([A-Za-z][\w+.-]*)```\s*$/gm, '```$1')
@@ -104,6 +145,17 @@ export function renderMarkdown(text, workspaceRoot) {
   const flushCode = () => {
     const lang = esc(codeLang)
     const label = lang || 'text'
+    if (htmlPreview && /^html?$/i.test(codeLang) && codeLines.some(line => line.trim())) {
+      const source = codeLines.join('\n')
+      html += `<div class="code-block html-preview"><div class="code-head"><span class="code-lang">html · preview</span>` +
+        `<span class="code-actions"><button type="button" class="code-toggle">Code</button><button type="button" class="code-copy">Copy</button></span></div>` +
+        `<iframe class="html-frame" title="HTML preview" sandbox="allow-scripts allow-popups" referrerpolicy="no-referrer" srcdoc="${esc(htmlPreviewDocument(source))}"></iframe>` +
+        `<pre hidden><code>${highlightCode(codeLines.join('\n'), codeLang)}</code></pre></div>`
+      codeLines = []
+      codeLang = ''
+      inCode = false
+      return
+    }
     html += `<div class="code-block"><div class="code-head"><span class="code-lang">${label}</span>` +
       `<button type="button" class="code-copy">Copy</button></div>` +
       `<pre><code>${highlightCode(codeLines.join('\n'), codeLang)}</code></pre></div>`
@@ -225,7 +277,7 @@ export function renderMarkdown(text, workspaceRoot) {
   closeList()
   flushTable()
   flushQuote()
-  return html || '<p></p>'
+  return math.restore(html || '<p></p>')
 }
 
 export function renderInline(text, workspaceRoot) {
@@ -242,6 +294,8 @@ export function renderInline(text, workspaceRoot) {
       return `<img src="${esc(imageSrc || src)}" alt="${esc(alt)}" loading="lazy">`
     })
     .replace(/\[([^\]]+)\]\(([^\s)]+)\)/g, (_match, label, href) => {
+      const path = artifactPath(href.replace(/&amp;/g, '&'), workspaceRoot)
+      if (path) return `<a href="#" data-artifact-path="${esc(path)}">${label}</a>`
       const safeHref = sanitizeHref(href)
       if (!safeHref) return label
       return `<a href="${safeHref}" title="${safeHref}" rel="noreferrer noopener">${label}</a>`
@@ -251,7 +305,11 @@ export function renderInline(text, workspaceRoot) {
     .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')
     .replace(/(^|[\s(])_([^_\s][^_]*)_(?=$|[\s).,;:!?])/g, '$1<em>$2</em>')
     .replace(/~~([^~]+)~~/g, '<del>$1</del>')
-    .replace(/\u0000(\d+)\u0000/g, (_match, i) => `<code>${codeSpans[Number(i)]}</code>`)
+    .replace(/\u0000(\d+)\u0000/g, (_match, i) => {
+      const code = codeSpans[Number(i)]
+      const path = artifactPath(code.replace(/&amp;/g, '&'), workspaceRoot)
+      return path ? `<a href="#" data-artifact-path="${esc(path)}"><code>${code}</code></a>` : `<code>${code}</code>`
+    })
 }
 
 const HIGHLIGHT_RULES = {

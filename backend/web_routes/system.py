@@ -9,12 +9,16 @@ import shutil
 import signal
 import sys
 import threading
+import time
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse
 
 import audio_transcription
 import credential_store
+import performance_log
 import utils
 from web_desktop import _is_desktop_request
 from web_models import AudioTranscriptionRequest, BrowseDirectoryRequest, CredentialUpdateRequest
@@ -22,6 +26,19 @@ from web_models import AudioTranscriptionRequest, BrowseDirectoryRequest, Creden
 import web_app
 
 router = APIRouter()
+
+
+class _ClientTiming(BaseModel):
+    phase: Literal["sidebar_loaded", "session_replay_rendered"]
+    elapsed_ms: float = Field(ge=0, le=600_000, allow_inf_nan=False)
+    count: int = Field(ge=0, le=10_000_000)
+
+
+@router.post("/api/diagnostics/performance")
+def client_performance(req: _ClientTiming):
+    """Content-free frontend timings (counts and durations only)."""
+    performance_log.record(req.phase, time.perf_counter() - req.elapsed_ms / 1000, count=req.count, source="frontend")
+    return {"status": "recorded"}
 
 
 def _require_desktop(request: Request) -> None:

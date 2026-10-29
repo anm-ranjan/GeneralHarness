@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import time
+_IMPORT_STARTED = time.perf_counter()
+
 import asyncio
 import mimetypes
 import os
@@ -30,6 +33,7 @@ from fastapi.responses import FileResponse
 
 import shutil
 
+import performance_log
 from session_store import SessionStore
 from web_session import SessionManager
 
@@ -185,9 +189,13 @@ def _native_available() -> bool:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     global _store
+    performance_log.configure(utils.LOG_DIR)
+    performance_log.record("backend_imports", _IMPORT_STARTED)
+    started = time.perf_counter()
     _store = SessionStore(_DATA_DIR, database_filename=utils.DATABASE_FILENAME)
     utils.prune_old_logs()
-    _store.reset_running_sessions()
+    reset_count = _store.reset_running_sessions()
+    performance_log.record("startup_session_recovery", started, reset=reset_count)
     _SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
     utils.register_allowed_path(str(_SCRIPTS_DIR))
     _CHATS_DIR.mkdir(parents=True, exist_ok=True)
@@ -195,6 +203,7 @@ async def _lifespan(app: FastAPI):
     _MATERIALIZATIONS_DIR.mkdir(parents=True, exist_ok=True)
     utils.register_allowed_path(str(_MATERIALIZATIONS_DIR))
     _manager.set_event_loop(asyncio.get_event_loop())
+    performance_log.record("backend_ready", _IMPORT_STARTED)
     yield
     shutdown_codex_runtime()
     utils.kill_all_background_jobs()
@@ -203,6 +212,18 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title=utils.APP_NAME, version="0.1.0", lifespan=_lifespan)
+
+
+@app.middleware("http")
+async def measure_session_requests(request: Request, call_next):
+    started = time.perf_counter()
+    response = await call_next(request)
+    route = request.scope.get("route")
+    template = getattr(route, "path", "")
+    if request.method == "GET" and template in {"/api/sessions", "/api/sessions/{session_id}", "/api/sessions/{session_id}/events", "/api/sessions/{session_id}/metrics"}:
+        performance_log.record("session_http", started, route=template, status=response.status_code,
+                               response_bytes=int(response.headers.get("content-length", 0)))
+    return response
 
 app.add_middleware(
     CORSMiddleware,
@@ -234,12 +255,18 @@ if os.path.isdir(_STATIC_DIR):
         for name in ("index.html", "prototype.html"):
             path = os.path.join(_STATIC_DIR, name)
             if os.path.isfile(path):
-                return FileResponse(path)
+                # This entry point selects the current hashed JS/CSS bundles.
+                # Never reuse an older HTML document after rebuilding the app.
+                return FileResponse(path, headers={"Cache-Control": "no-store"})
         raise HTTPException(status_code=404, detail="No frontend found")
 
     _assets_dir = os.path.join(_STATIC_DIR, "assets")
     if os.path.isdir(_assets_dir):
         app.mount("/assets", DesktopAwareStaticFiles(directory=_assets_dir), name="assets")
+    _vendor_dir = os.path.join(_STATIC_DIR, "vendor")
+    if os.path.isdir(_vendor_dir):
+        # Bundled third-party scripts (Chart.js) for sandboxed html previews.
+        app.mount("/vendor", DesktopAwareStaticFiles(directory=_vendor_dir), name="vendor")
     app.mount("/static", DesktopAwareStaticFiles(directory=_STATIC_DIR), name="static")
 
 

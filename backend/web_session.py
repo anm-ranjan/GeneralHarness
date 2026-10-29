@@ -68,6 +68,10 @@ class ActiveRun:
     def __init__(self, session_id: str):
         self.session_id = session_id
         self.cancel_event = threading.Event()
+        # Cleared once the run can no longer apply mid-run steering.
+        self.steering_open = True
+        # Steering ids a provider is delivering right now; no longer editable.
+        self.steering_in_flight: set[str] = set()
         self.thread: threading.Thread | None = None
         self._approval_lock = threading.Lock()
         self._approvals: dict[str, dict] = {}

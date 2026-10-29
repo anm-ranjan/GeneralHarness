@@ -107,6 +107,20 @@ class SessionExportTests(unittest.TestCase):
         self.assertIn("<!doctype html>", html)
         self.assertIn("My Session", html)
 
+    def test_agent_diagnostics_are_filtered_and_summaries_capped(self):
+        sid = "sess1"
+        events = [
+            _evt(sid, EventType.USER_MESSAGE, {"text": "delegate"}),
+            _evt(sid, EventType.AGENT_EVENT, {"agent_path": "/root/reviewer", "action": "tool_call"}),
+            _evt(sid, EventType.AGENT_EVENT, {"agent_path": "/root/reviewer", "action": "completed", "summary": "x" * 2000}),
+            _evt(sid, EventType.ASSISTANT_MESSAGE, {"markdown": "done"}),
+            _evt(sid, EventType.RUN_FINISHED, {"reason": "completed"}),
+        ]
+        md = session_export.render_session_markdown(_meta(), events)
+        self.assertNotIn("tool_call", md)
+        self.assertIn("/root/reviewer · completed", md)
+        self.assertNotIn("x" * 601, md)
+
 
 if __name__ == "__main__":
     unittest.main()

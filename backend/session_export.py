@@ -37,6 +37,11 @@ def _ts_iso(value: Any) -> str:
     return str(value or "")
 
 
+# Child-agent progress (tool calls, status lines) is diagnostic noise in an
+# export; only lifecycle transitions are kept.
+AGENT_LIFECYCLE_ACTIONS = {"spawned", "started", "completed", "failed", "interrupted", "error"}
+
+
 def _truncate(text: str, limit: int = _MAX_TOOL_OUTPUT_CHARS) -> str:
     text = str(text or "")
     if len(text) <= limit:
@@ -92,6 +97,9 @@ def iter_turns(events: Iterable[Any]) -> list[dict]:
         data = _event_field(event, "data") or {}
         if etype == "user_message":
             text = str(data.get("text") or "")
+            if data.get("steering") and active is not None:
+                active["user"] += "\n\n[Steering]\n" + text
+                continue
             stripped = text.strip()
             if stripped.lower() == "/clear":
                 flush(None)
@@ -116,6 +124,12 @@ def iter_turns(events: Iterable[Any]) -> list[dict]:
             markdown = str(data.get("markdown") or "")
             if markdown:
                 active["blocks"].append({"kind": "assistant", "text": markdown})
+        elif etype == "generated_artifact":
+            from urllib.parse import quote
+            path = str(data.get("path") or "")
+            name = str(data.get("name") or path).replace("[", "").replace("]", "")
+            if path:
+                active["blocks"].append({"kind": "assistant", "text": f"[View {name}]({quote(path, safe='/:')})"})
         elif etype == "tool_call":
             call_id = str(data.get("call_id") or "")
             entry = {
@@ -136,6 +150,14 @@ def iter_turns(events: Iterable[Any]) -> list[dict]:
                 entry["ok"] = bool(data.get("ok", True))
         elif etype == "error":
             active["blocks"].append({"kind": "error", "text": str(data.get("text") or "")})
+        elif etype == "agent_event":
+            action = str(data.get("action") or data.get("status") or "update")
+            if action not in AGENT_LIFECYCLE_ACTIONS:
+                continue
+            path = str(data.get("agent_path") or data.get("agent_id") or "agent")
+            summary = str(data.get("summary") or data.get("result") or data.get("error") or "")
+            summary = _truncate(summary, 600)
+            active["blocks"].append({"kind": "agent", "text": f"{path} · {action}" + (f": {summary}" if summary else "")})
         elif etype == "run_finished":
             flush(str(data.get("reason") or "completed"))
 
@@ -198,6 +220,8 @@ def render_session_markdown(
                 out.append("\n" + _render_tool_block(block))
             elif block["kind"] == "error":
                 out.append(f"\n> **Error:** {block['text']}\n")
+            elif block["kind"] == "agent":
+                out.append(f"\n> **Agent:** {block['text']}\n")
 
     if not rendered_any:
         out.append("\n_No completed turns to export._\n")

@@ -90,7 +90,7 @@ class CompressedWriteHistoryTests(unittest.TestCase):
                     }),
                 },
             }],
-        }]
+        }, {"role": "tool", "tool_call_id": "replace-1", "content": "OK: Replaced text"}]
 
         utils.compress_turn_tool_results(messages, 0)
 

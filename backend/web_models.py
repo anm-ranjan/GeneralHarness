@@ -73,6 +73,11 @@ class SessionMeta(BaseModel):
     codex_state: dict = Field(default_factory=dict)
     claude_state: dict = Field(default_factory=dict)
     message_queue: list["QueuedMessage"] = Field(default_factory=list)
+    prompt_stash: list["QueuedMessage"] = Field(default_factory=list)
+    steering_queue: list["QueuedMessage"] = Field(default_factory=list)
+    # Archived sessions leave the project tree and Activity view but keep
+    # their history; the sidebar lists them in a separate group.
+    archived: bool = False
     # Per-session overrides for run behavior. Absent keys inherit the process
     # defaults from agent config. Known keys: approval_mode, verbose_tools,
     # max_iterations, model, reasoning_effort.
@@ -139,6 +144,7 @@ class SendMessageRequest(BaseModel):
     text: str = ""
     images: list[ImageAttachment] = Field(default_factory=list)
     attachments: list[FileAttachment] = Field(default_factory=list)
+    mode: str = "queue"
 
 
 class AudioTranscriptionRequest(BaseModel):
@@ -165,7 +171,8 @@ class RenameTaskRequest(BaseModel):
 
 
 class RenameSessionRequest(BaseModel):
-    title: str
+    title: str | None = None
+    archived: bool | None = None
 
 
 class UpdateRunSettingsRequest(BaseModel):

@@ -28,7 +28,7 @@ def searchable_event_text(event) -> tuple[str, str]:
         return "tool", f"{name} {detail}".strip()
     if etype == EventType.TOOL_RESULT:
         return "tool_result", str(data.get("preview") or "")[:2000]
-    if etype == EventType.FILE_CHANGE:
+    if etype in {EventType.FILE_CHANGE, EventType.GENERATED_ARTIFACT}:
         return "file", str(data.get("path") or "")
     return "", ""
 

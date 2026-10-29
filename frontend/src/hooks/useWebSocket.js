@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { wsUrl } from '../api'
 import { handleSessionEvent } from '../eventHandlers'
+import { reportAfterPaint } from '../performanceLog'
 
 export default function useWebSocket(sessionId, dispatch, stateRef) {
   const wsRef = useRef(null)
@@ -28,8 +29,10 @@ export default function useWebSocket(sessionId, dispatch, stateRef) {
       socket.onmessage = (e) => {
         if (socket !== wsRef.current) return
         try {
+          const started = performance.now()
           const evt = JSON.parse(e.data)
           handleSessionEvent(evt, dispatch, stateRef)
+          if (evt.type === 'session_loaded') reportAfterPaint('session_replay_rendered', started, evt.data?.events?.length || 0)
         } catch (err) {
           console.error('WS parse error:', err)
         }

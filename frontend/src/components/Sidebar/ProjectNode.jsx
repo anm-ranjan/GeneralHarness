@@ -2,26 +2,30 @@ import { useEffect, useState } from 'react'
 import { useApp } from '../../context/AppContext'
 import InlineEdit from './InlineEdit'
 import TaskRow from './TaskRow'
+import { lastSessionId, isRowAction } from '../../sidebarState'
 
 export default function ProjectNode({
   project, sessionsById, currentSessionId,
   onSelectSession, onRenameProject, onDeleteProject,
   onCreateTask, onRenameTask, onDeleteTask,
   onCreateSession, onImportSession, onRenameSession, onMoveSession, onDeleteSession,
+  onDropSession,
 }) {
   const { state, dispatch } = useApp()
   const [editing, setEditing] = useState(false)
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(() => !(project.tasks || []).some(t => (t.sessions || []).includes(currentSessionId || lastSessionId())))
   const tasks = project.tasks || []
   const sessionCount = tasks.reduce((total, task) => total + (task.sessions || []).length, 0)
   const containsActiveSession = tasks.some(task => (task.sessions || []).includes(currentSessionId))
 
   useEffect(() => {
     if (containsActiveSession) setCollapsed(false)
-  }, [containsActiveSession])
+  }, [containsActiveSession, currentSessionId])
 
   function handleHeaderKeyDown(e) {
-    if (e.key !== 'F2' || editing) return
+    if (editing || isRowAction(e.target)) return
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed(v => !v); return }
+    if (e.key !== 'F2') return
     e.preventDefault()
     setEditing(true)
   }
@@ -31,7 +35,10 @@ export default function ProjectNode({
       <div
         className={`flex items-center gap-1.5 group rounded-md px-1.5 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70 ${containsActiveSession ? 'text-accent' : ''}`}
         tabIndex={0}
+        role="group"
         onKeyDown={handleHeaderKeyDown}
+        onClick={e => { if (!editing && !isRowAction(e.target)) setCollapsed(v => !v) }}
+        aria-expanded={!collapsed}
       >
         <button
           onClick={() => setCollapsed(!collapsed)}
@@ -49,7 +56,7 @@ export default function ProjectNode({
           />
         ) : (
           <span
-            className="text-[13px] font-semibold text-text-bright truncate cursor-default"
+            className="text-[13px] font-semibold text-text-bright truncate cursor-pointer"
             onDoubleClick={() => setEditing(true)}
             title={project.name}
           >
@@ -92,7 +99,7 @@ export default function ProjectNode({
       </div>
 
       <div className={`collapse-grid ${collapsed ? '' : 'open'}`}>
-        <div className="mt-1">
+        <div hidden={collapsed} className="mt-1">
           {tasks.map(task => (
             <TaskRow
               key={task.id}
@@ -108,6 +115,7 @@ export default function ProjectNode({
               onImportSession={onImportSession}
               onRenameSession={onRenameSession}
               onMoveSession={onMoveSession}
+              onDropSession={onDropSession}
               onDeleteSession={onDeleteSession}
             />
           ))}

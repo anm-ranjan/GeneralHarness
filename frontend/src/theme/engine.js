@@ -118,6 +118,7 @@ export function deriveTokens(rawPalette, spec = {}) {
 
   const tokens = {
     '--color-bg': p.bg,
+    '--color-document-canvas': '#ffffff',
     '--color-panel': alpha(p.panel, solidify(0.82)),
     '--color-surface': alpha(p.surface, solidify(0.72)),
     '--color-surface-raised': alpha(p.surfaceRaised, solidify(0.82)),

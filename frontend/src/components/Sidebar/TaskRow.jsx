@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAppDispatch } from '../../context/AppContext'
 import InlineEdit from './InlineEdit'
 import SessionItem from './SessionItem'
+import { lastSessionId, isRowAction } from '../../sidebarState'
 import { LABEL_COLORS, labelColorStyle } from '../../labelColors'
 
 export default function TaskRow({
@@ -9,27 +10,49 @@ export default function TaskRow({
   onSelectSession, onRenameTask, onDeleteTask,
   onCreateSession, onImportSession, onRenameSession, onDeleteSession,
   onMoveSession,
+  onDropSession,
 }) {
   const dispatch = useAppDispatch()
   const [editing, setEditing] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
   const isActiveTask = sessions.includes(currentSessionId)
+  const [collapsed, setCollapsed] = useState(() => !sessions.includes(currentSessionId || lastSessionId()))
+  useEffect(() => { if (isActiveTask) setCollapsed(false) }, [isActiveTask, currentSessionId])
 
   function handleHeaderKeyDown(e) {
-    if (e.key !== 'F2' || editing) return
+    if (editing || isRowAction(e.target)) return
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed(v => !v); return }
+    if (e.key !== 'F2') return
     e.preventDefault()
     setEditing(true)
   }
 
   return (
     <div
-      className={`label-group ml-3 mb-1 border-l pl-2 transition-colors ${isActiveTask ? 'label-group-active' : ''}`}
+      className={`label-group ml-3 mb-1 border-l pl-2 transition-colors ${dragOver ? 'bg-accent-soft border-accent' : isActiveTask ? 'label-group-active' : ''}`}
       style={labelColorStyle(task.color || task.id)}
+      onDragOver={e => {
+        if (e.dataTransfer.types.includes('application/x-myharness-session')) {
+          e.preventDefault(); e.stopPropagation(); setDragOver(true); e.dataTransfer.dropEffect = 'move'
+        }
+      }}
+      onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false) }}
+      onDrop={e => {
+        const id = e.dataTransfer.getData('application/x-myharness-session')
+        if (!id) return
+        e.preventDefault(); e.stopPropagation(); setDragOver(false)
+        if (!sessions.includes(id)) onDropSession?.(id, projectId, task.id)
+      }}
     >
       <div
         className="flex items-center gap-1 group rounded-md px-1 py-0.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70"
         tabIndex={0}
+        role="group"
         onKeyDown={handleHeaderKeyDown}
+        onClick={e => { if (!editing && !isRowAction(e.target)) setCollapsed(v => !v) }}
+        aria-expanded={!collapsed}
       >
+        <button type="button" onClick={() => setCollapsed(v => !v)} className="text-faint text-[10px] w-4 h-4 shrink-0" aria-label={collapsed ? 'Expand task' : 'Collapse task'} aria-expanded={!collapsed}>{collapsed ? '▶' : '▼'}</button>
         {editing ? (
           <InlineEdit
             value={task.name}
@@ -90,7 +113,7 @@ export default function TaskRow({
           >+</button>
         </div>
       </div>
-      <div className="mt-1 space-y-px">
+      {!collapsed && <div className="mt-1 space-y-px">
         {sessions.map(sid => {
           const s = sessionsById[sid]
           if (!s) return null
@@ -106,7 +129,7 @@ export default function TaskRow({
             />
           )
         })}
-      </div>
+      </div>}
     </div>
   )
 }

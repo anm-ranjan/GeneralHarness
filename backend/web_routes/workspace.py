@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import tempfile
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel as _PydanticBaseModel
 
 import git_status as git_ops
@@ -52,6 +54,30 @@ class _WorkspaceSaveRequest(_PydanticBaseModel):
 # Editor reads/writes stay well under the preview cap so a save round-trip
 # cannot silently truncate a file the panel only partially loaded.
 _MAX_EDITABLE_BYTES = 2_000_000
+
+
+@router.get("/api/workspace/view/{file_path:path}")
+def workspace_artifact(file_path: str, request: Request, interactive: bool = False):
+    """Serve a generated HTML report and its local assets for sandboxed preview."""
+    path = file_path if os.path.isabs(file_path) else os.sep + file_path
+    resolved = os.path.realpath(path)
+    if not any(Path(resolved).is_relative_to(Path(os.path.realpath(root))) for root in utils.ALLOWED_PATHS):
+        raise HTTPException(status_code=403, detail="Path not within allowed paths")
+    suffix = Path(resolved).suffix.lower()
+    if suffix not in {".html", ".htm", ".css", ".js", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".woff", ".woff2", ".ttf"}:
+        raise HTTPException(status_code=415, detail="Unsupported preview asset")
+    if not os.path.isfile(resolved):
+        raise HTTPException(status_code=404, detail="File not found")
+    if os.path.getsize(resolved) > 10_000_000:
+        raise HTTPException(status_code=413, detail="Preview asset too large (max 10 MB)")
+    source = str(request.base_url).rstrip("/") + "/api/workspace/view/"
+    csp = (
+        f"default-src 'none'; script-src 'unsafe-inline' {source}; "
+        f"style-src 'unsafe-inline' {source}; img-src data: {source}; font-src data: {source}; "
+        "connect-src 'none'; base-uri 'none'; form-action 'none'; "
+        + ("sandbox allow-scripts" if interactive else "sandbox")
+    )
+    return FileResponse(resolved, headers={"Content-Security-Policy": csp, "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
 
 
 def _workspace_entry(full: str) -> dict:

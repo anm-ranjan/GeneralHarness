@@ -11,6 +11,15 @@ api:
   # provider: together
   # provider: [together, deepinfra, fireworks]
 
+# Provider-side prompt caching for native requests (separate from tool caching).
+native_caching:
+  mode: auto              # auto | off; off cannot disable provider implicit caching
+  ttl: 5m                 # 5m | 1h (1h applies to Anthropic only)
+  # Exact IDs for additional models/routes known to accept content cache_control.
+  # Unknown models get no explicit markers. Alibaba Qwen controls are automatic
+  # only on direct Alibaba or exclusively Alibaba-pinned OpenRouter routes.
+  explicit_models: []
+
 models:
   default: qwen/qwen3-coder-next
   read:    qwen/qwen3-coder-next
@@ -31,6 +40,8 @@ memory:
   compact_threshold_tokens: 50000
   keep_recent_messages: 8
   tool_compress_threshold_chars: 500
+  task_state_tokens: 4096        # bounded native task state kept after compaction
+  summary_target_tokens: 1024    # model synthesis budget inside that state
 
 limits:
   max_file_size: 8000000

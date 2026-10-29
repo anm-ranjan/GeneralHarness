@@ -392,7 +392,9 @@ function forceAssetMimeTypes(session, baseUrl) {
 function allowMyHarnessMediaPermission(session, baseUrl, mainContents) {
   const allowedOrigin = new URL(baseUrl).origin;
   session.setPermissionRequestHandler((webContents, permission, callback, details) => {
-    if (permission !== "media") {
+    // Chromium requests clipboard-sanitized-write for navigator.clipboard.writeText().
+    // Keep both microphone and clipboard writes scoped to our main window.
+    if (permission !== "media" && permission !== "clipboard-sanitized-write") {
       callback(false);
       return;
     }

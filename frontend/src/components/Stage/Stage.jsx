@@ -112,7 +112,7 @@ export default function Stage() {
   function renderItem(item) {
     switch (item.type) {
       case 'user_message':
-        return <MessageBubble role="user" text={item.text} images={item.images} attachments={item.attachments} />
+        return <MessageBubble role="user" text={item.text} images={item.images} attachments={item.attachments} steering={item.steering} />
       case 'thinking':
         return <ThinkingBlock markdown={item.markdown} />
       case 'thinking_stream':

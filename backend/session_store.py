@@ -244,6 +244,20 @@ class SessionStore:
                 UNIQUE(session_id, position)
             );
 
+            -- Text-only prompt lists kept beside the run queue: the composer
+            -- stash and steering accepted for the active run. Additive, so
+            -- older builds that ignore it can still open the database.
+            CREATE TABLE IF NOT EXISTS session_prompt_lists (
+                id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                list_kind TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                text TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(session_id, list_kind, id),
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS events (
                 session_id TEXT NOT NULL,
                 sequence INTEGER NOT NULL,
@@ -307,6 +321,11 @@ class SessionStore:
             CREATE INDEX IF NOT EXISTS attachments_blob_id ON attachments(blob_id);
             """
         )
+        # Additive column: older builds name their columns explicitly and
+        # leave it at its default, so the schema version stays unchanged.
+        session_columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+        if "archived" not in session_columns:
+            conn.execute("ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
         conn.execute(
             """INSERT OR IGNORE INTO session_labels(session_id,project_id,task_id,is_primary)
                SELECT id,project_id,task_id,1 FROM sessions"""
@@ -714,12 +733,49 @@ class SessionStore:
             self._data_dir / "attachments" / session_id,
             self._data_dir / "codex" / session_id,
             self._data_dir / "changes" / session_id,
+            self._data_dir / "native_history" / session_id,
         ):
             try:
                 if path.exists():
                     shutil.rmtree(path)
             except OSError:
                 pass
+
+    def native_evidence(self, session_id: str):
+        from history_evidence import HistoryEvidence
+        return HistoryEvidence(self._data_dir / "native_history" / session_id / "evidence")
+
+    def save_native_context(self, session_id: str, checkpoint: dict) -> None:
+        """Private recovery state. Never returned as session metadata to clients."""
+        path = self._data_dir / "native_history" / session_id / "context.json"
+        with self._lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f".{uuid.uuid4().hex}.tmp")
+            try:
+                tmp.write_text(json.dumps(checkpoint, ensure_ascii=False, default=str), encoding="utf-8")
+                os.replace(tmp, path)
+            finally:
+                tmp.unlink(missing_ok=True)
+
+    def load_native_context(self, session_id: str) -> dict:
+        path = self._data_dir / "native_history" / session_id / "context.json"
+        with self._lock:
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return {}
+        return value if isinstance(value, dict) else {}
+
+    def set_session_archived(self, session_id: str, archived: bool) -> SessionMeta:
+        """Archive or restore a session without bumping its last activity."""
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "UPDATE sessions SET archived=?,version=version+1 WHERE id=?",
+                (1 if archived else 0, session_id),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"Session {session_id} not found")
+        return self.load_session(session_id)
 
     def rename_session(self, session_id: str, new_title: str) -> SessionMeta:
         meta = self.load_session(session_id)
@@ -734,9 +790,10 @@ class SessionStore:
             meta = self.load_session(session_id)
             if meta is None:
                 raise ValueError(f"Session {session_id} not found")
-            if target_project_id != meta.project_id:
-                raise ValueError("Sessions can only be moved within the same project")
-            if target_task_id == meta.task_id:
+            if meta.kind == "chat" or target_project_id == CHATS_PROJECT_ID:
+                raise ValueError("Chats keep their private workspace and cannot be moved into projects")
+            cross_project = target_project_id != meta.project_id
+            if not cross_project and target_task_id == meta.task_id:
                 return meta
             if self._conn.execute(
                 "SELECT 1 FROM tasks WHERE project_id=? AND id=?", (target_project_id, target_task_id)
@@ -746,10 +803,19 @@ class SessionStore:
                 "SELECT count(*) FROM sessions WHERE project_id=? AND task_id=?",
                 (target_project_id, target_task_id),
             ).fetchone()[0]
-            self._conn.execute(
-                "UPDATE sessions SET task_id=?,position=?,version=version+1 WHERE id=?",
-                (target_task_id, position, session_id),
-            )
+            if cross_project:
+                # Workspace and provider bindings belong to the old project.
+                self._conn.execute(
+                    """UPDATE sessions SET project_id=?,task_id=?,position=?,working_directory='',
+                       codex_state_json='{}',claude_state_json='{}',version=version+1 WHERE id=?""",
+                    (target_project_id, target_task_id, position, session_id),
+                )
+                self._conn.execute("DELETE FROM session_labels WHERE session_id=?", (session_id,))
+            else:
+                self._conn.execute(
+                    "UPDATE sessions SET task_id=?,position=?,version=version+1 WHERE id=?",
+                    (target_task_id, position, session_id),
+                )
             self._conn.execute("UPDATE session_labels SET is_primary=0 WHERE session_id=?", (session_id,))
             self._conn.execute(
                 "INSERT OR REPLACE INTO session_labels(session_id,project_id,task_id,is_primary) VALUES(?,?,?,1)",
@@ -815,10 +881,31 @@ class SessionStore:
                 "INSERT INTO queued_messages(id,session_id,position,text,images_json,attachments_json,created_at) VALUES(?,?,?,?,?,?,?)",
                 (message.id, meta.id, position, message.text, _json(message.images), _json(message.attachments), message.created_at.isoformat()),
             )
+        SessionStore._write_prompt_lists(conn, meta)
         conn.execute(
             "INSERT OR REPLACE INTO session_labels(session_id,project_id,task_id,is_primary) VALUES(?,?,?,1)",
             (meta.id, meta.project_id, meta.task_id),
         )
+
+    @staticmethod
+    def _write_prompt_lists(conn: sqlite3.Connection, meta: SessionMeta) -> None:
+        conn.execute("DELETE FROM session_prompt_lists WHERE session_id=?", (meta.id,))
+        for kind, items in (("stash", meta.prompt_stash), ("steering", meta.steering_queue)):
+            for position, message in enumerate(items):
+                conn.execute(
+                    "INSERT OR REPLACE INTO session_prompt_lists(id,session_id,list_kind,position,text,created_at) VALUES(?,?,?,?,?,?)",
+                    (message.id, meta.id, kind, position, message.text, message.created_at.isoformat()),
+                )
+
+    def _load_prompt_lists(self, session_id: str) -> dict[str, list[QueuedMessage]]:
+        lists: dict[str, list[QueuedMessage]] = {"stash": [], "steering": []}
+        for item in self._conn.execute(
+            "SELECT * FROM session_prompt_lists WHERE session_id=? ORDER BY list_kind, position", (session_id,)
+        ):
+            lists.setdefault(item["list_kind"], []).append(
+                QueuedMessage(id=item["id"], text=item["text"], created_at=item["created_at"])
+            )
+        return lists
 
     def load_session(self, session_id: str) -> SessionMeta | None:
         with self._lock:
@@ -838,6 +925,7 @@ class SessionStore:
                 id=item["id"], text=item["text"], images=images,
                 attachments=attachments, created_at=item["created_at"],
             ))
+        prompt_lists = self._load_prompt_lists(row["id"])
         return SessionMeta(
             id=row["id"], project_id=row["project_id"], task_id=row["task_id"], title=row["title"],
             summary=row["summary"], created_at=row["created_at"], updated_at=row["updated_at"],
@@ -846,6 +934,8 @@ class SessionStore:
             codex_state=_from_json(row["codex_state_json"], {}),
             claude_state=_from_json(row["claude_state_json"], {}),
             message_queue=queue, run_settings=_from_json(row["run_settings_json"], {}),
+            prompt_stash=prompt_lists["stash"], steering_queue=prompt_lists["steering"],
+            archived=bool(row["archived"]),
         )
 
     def get_project(self, project_id: str) -> ProjectInfo | None:
@@ -877,6 +967,7 @@ class SessionStore:
                         _json(message.attachments), message.created_at.isoformat(),
                     ),
                 )
+            self._write_prompt_lists(self._conn, meta)
             self._conn.execute("UPDATE session_labels SET is_primary=0 WHERE session_id=?", (meta.id,))
             self._conn.execute(
                 "INSERT OR REPLACE INTO session_labels(session_id,project_id,task_id,is_primary) VALUES(?,?,?,1)",
@@ -950,11 +1041,21 @@ class SessionStore:
             return [self._row_to_session(row) for row in self._conn.execute(query, values).fetchall()]
 
     def reset_running_sessions(self) -> int:
-        with self._lock, self._conn:
-            cur = self._conn.execute(
-                "UPDATE sessions SET status='idle',version=version+1 WHERE status='running'"
-            )
-            return cur.rowcount
+        with self._lock:
+            running = [
+                row["id"] for row in self._conn.execute("SELECT id FROM sessions WHERE status='running'")
+            ]
+        for session_id in running:
+            # Steering accepted for a run that never finished is delivered as
+            # ordinary follow-ups rather than silently lost.
+            meta = self.load_session(session_id)
+            if meta is None:
+                continue
+            meta.status = "idle"
+            meta.message_queue = [*meta.steering_queue, *meta.message_queue]
+            meta.steering_queue = []
+            self.update_session(meta)
+        return len(running)
 
     # -- events -----------------------------------------------------------
 

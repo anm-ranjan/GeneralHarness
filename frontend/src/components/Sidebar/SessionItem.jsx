@@ -1,13 +1,22 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAppDispatch, useAppSelector } from '../../context/AppContext'
 import InlineEdit from './InlineEdit'
 import { relativeTime } from '../../utils'
 import { runStateBadge } from '../../runStates'
 import { downloadSessionBackup, downloadSessionExport } from '../../api'
+import { useSidebarActions } from './SidebarActions'
 
-export default function SessionItem({ session, isActive, onSelect, onRename, onMove, onDelete }) {
+export default function SessionItem({ session, isActive, onSelect, onRename, onMove, onDelete, subtitle = '' }) {
   const dispatch = useAppDispatch()
   const [editing, setEditing] = useState(false)
+  const { openContextMenu, renameSessionId, clearRenameRequest } = useSidebarActions()
+
+  // "Rename" in the context menu asks this row to enter inline editing.
+  useEffect(() => {
+    if (renameSessionId !== session.id) return
+    setEditing(true)
+    clearRenameRequest()
+  }, [renameSessionId, session.id, clearRenameRequest])
   const ownRunState = useAppSelector(state => state.runStates[session.id])
   const runState = ownRunState || (session.status === 'running' ? 'running' : null)
 
@@ -16,6 +25,12 @@ export default function SessionItem({ session, isActive, onSelect, onRename, onM
     if (e.key === 'F2') {
       e.preventDefault()
       setEditing(true)
+      return
+    }
+    if (openContextMenu && (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) {
+      e.preventDefault()
+      const rect = e.currentTarget.getBoundingClientRect()
+      openContextMenu(session, rect.left + 16, rect.bottom)
       return
     }
     if (e.key === 'Enter' || e.key === ' ') {
@@ -32,8 +47,19 @@ export default function SessionItem({ session, isActive, onSelect, onRename, onM
           : 'text-muted hover:bg-surface hover:text-text-default hover:translate-x-0.5'
       }`}
       tabIndex={0}
+      draggable={!editing && session.kind !== 'chat' && !runState}
+      onDragStart={e => {
+        if (editing || runState) { e.preventDefault(); return }
+        e.dataTransfer.setData('application/x-myharness-session', session.id)
+        e.dataTransfer.effectAllowed = 'move'
+      }}
       aria-current={isActive ? 'page' : undefined}
       onClick={() => !editing && onSelect(session.id)}
+      onContextMenu={e => {
+        if (editing || !openContextMenu) return
+        e.preventDefault()
+        openContextMenu(session, e.clientX, e.clientY)
+      }}
       onKeyDown={handleKeyDown}
     >
       {editing ? (
@@ -54,7 +80,10 @@ export default function SessionItem({ session, isActive, onSelect, onRename, onM
               title={runStateBadge(runState).label}
             />
           )}
-          <span className="truncate">{session.title || session.id.slice(0, 8)}</span>
+          <span className="min-w-0 flex flex-col">
+            <span className="truncate">{session.title || session.id.slice(0, 8)}</span>
+            {subtitle && <span className="truncate text-[11px] text-faint">{subtitle}</span>}
+          </span>
         </span>
       )}
       <span className={`text-[11px] ${isActive ? 'text-accent/80' : 'text-faint'}`}>{relativeTime(session.updated_at)}</span>
@@ -88,7 +117,7 @@ export default function SessionItem({ session, isActive, onSelect, onRename, onM
           <button
             onClick={(e) => { e.stopPropagation(); onMove(session) }}
             className="text-faint hover:text-accent text-[11px] px-0.5"
-            title="Assign another label"
+            title="Move to another label or project"
           >↷</button>
         )}
         <button

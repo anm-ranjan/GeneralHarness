@@ -1,4 +1,5 @@
 import { useApp } from '../../context/AppContext'
+import { artifactPath } from '../../artifacts'
 import useRevertFile from '../../hooks/useRevertFile'
 import { relativeTime } from '../../utils'
 
@@ -53,6 +54,7 @@ export default function TouchedFilesPanel() {
               {dir && <span className="text-muted">{dir}</span>}
               <span className="text-text-bright">{name}</span>
             </div>
+            {artifactPath(f.path) && <button className="text-[11px] text-accent" onClick={e => { e.stopPropagation(); dispatch({ type: 'OPEN_ARTIFACT', payload: f.path }) }}>View</button>}
             {f.action !== 'reverted' && !state.isRunning && (
               <button
                 type="button"

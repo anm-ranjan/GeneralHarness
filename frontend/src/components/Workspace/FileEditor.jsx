@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useAppSelector, useAppDispatch } from '../../context/AppContext'
 import { api } from '../../api'
+import { artifactPath } from '../../artifacts'
 
 const TAB = '  '
 
@@ -242,6 +243,7 @@ export default function FileEditor({ path }) {
         <span className="text-[12px] font-mono text-text-bright truncate" title={path}>{name}</span>
         {dirty && <span className="shrink-0 h-1.5 w-1.5 rounded-full bg-accent" title="Unsaved changes" />}
         <span className="ml-auto flex items-center gap-1">
+          {artifactPath(path) && <button className={iconButton} title="Preview the saved file" onClick={() => dispatch({ type: 'OPEN_ARTIFACT', payload: path })}>Preview</button>}
           <button
             onClick={() => save()}
             disabled={!dirty || saving || loading}
