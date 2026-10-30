@@ -62,6 +62,12 @@ def _parent_thread_id_from_message(msg: dict[str, Any]) -> str | None:
     return None
 
 
+# asyncio's default line limit is 64 KiB, but one app-server message is a single
+# JSON line, and a command's whole output (a `cat` of a large file) rides in it.
+# Exceeding the limit used to kill the connection mid-turn.
+APP_SERVER_LINE_LIMIT = 256 * 1024 * 1024
+
+
 class AppServerTransport:
     def __init__(
         self,
@@ -105,6 +111,7 @@ class AppServerTransport:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=self.env,
+                limit=APP_SERVER_LINE_LIMIT,
             )
             self.generation += 1
             self._connection_closed = False
@@ -618,6 +625,29 @@ def _is_allow(answer: str) -> bool:
     return answer.strip().lower().rstrip(".!") in {"allow", "yes", "y", "ok", "okay", "approve", "sure"}
 
 
+_NEVER_ASK_MODES = ("never", "auto_approve", "off", "false", "0")
+_SHELL_ONLY_MODES = ("shell_only", "ask_shell_only")
+_FILE_CHANGE_REQUEST = "item/fileChange/requestApproval"
+
+
+def _auto_approves(ui, method: str) -> bool:
+    """Whether the session's approval mode answers this Codex request itself.
+
+    Codex asks the client before running a command, changing a file, or widening
+    its permissions. The session's mode decides how much of that reaches the
+    user, as for the native agent: always_ask asks for everything, shell_only
+    asks for commands and permission grants but lets file changes through, and
+    auto_approve asks for nothing.
+    """
+    settings = getattr(ui, "run_settings", None) or {}
+    mode = settings.get("approval_mode") or utils.APPROVAL_MODE
+    if mode in _NEVER_ASK_MODES:
+        return True
+    if mode in _SHELL_ONLY_MODES:
+        return method == _FILE_CHANGE_REQUEST
+    return False
+
+
 def _is_server_request(msg: dict[str, Any]) -> bool:
     return "id" in msg and "method" in msg and "result" not in msg and "error" not in msg
 
@@ -1022,7 +1052,7 @@ class CodexAppServerProvider:
             "item/commandExecution/requestApproval",
             "item/fileChange/requestApproval",
         }:
-            approved = await asyncio.to_thread(
+            approved = _auto_approves(ui, method) or await asyncio.to_thread(
                 self._request_approval,
                 ui,
                 method,
@@ -1034,7 +1064,7 @@ class CodexAppServerProvider:
             )
             return
         if method == "item/permissions/requestApproval":
-            approved = await asyncio.to_thread(
+            approved = _auto_approves(ui, method) or await asyncio.to_thread(
                 self._request_approval,
                 ui,
                 method,

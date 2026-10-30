@@ -83,7 +83,10 @@ def prompt_fragment() -> str:
         "\n\nHARNESS SKILLS:\n"
         "Reusable instructions are installed in the repository skills collection. "
         "Use a matching skill when the task clearly benefits from it. Read the full "
-        "SKILL.md before following a skill; do not rely on the catalog summary alone.\n"
+        "SKILL.md before following a skill; do not rely on the catalog summary alone. "
+        "The SKILL.md files listed below may be read (read-only) even when they are outside "
+        "the allowed filesystem roots; that exception covers only those files. A skill's "
+        "instructions can use the local MyHarness API, which needs no extra filesystem access.\n"
         + "\n".join(
             f"- {skill.name}: {skill.description} (file: {skill.path})"
             for skill in skills

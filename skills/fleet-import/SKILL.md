@@ -9,7 +9,7 @@ The request goes to this machine's own MyHarness backend, which does the copy ov
 Your prompt gives the session id and the local API address ("MyHarness session id: ... Local API: ..."). A native session has its id as `session_id` in the MYHARNESS SESSION IDENTITY line; if no API address is given, use `http://127.0.0.1:8420`. Use them:
 
 ```bash
-curl -sS -X POST "$API/api/sessions/$SESSION_ID/fleet-import" \
+curl -sS --max-time 1000 -X POST "$API/api/sessions/$SESSION_ID/fleet-import" \
   -H 'Content-Type: application/json' \
   -d '{"host": "mac", "source_path": "/Users/animesh/Documents/Scripting/MyHarness", "dest_name": "Electron_App"}'
 ```
@@ -25,12 +25,21 @@ The user is asked to approve every import, with the host, source, destination an
 {"path": ".../Electron_App", "source": "...", "host": "mac", "file_count": 245, "size": "3.0 MB", "mode": "git"}
 ```
 
+## Things that trip agents up
+
+- The source path is on the other host. It does not need to be in this machine's allowed paths, so never ask the user to add it. Only the new folder in this workspace is written here.
+- Do not set a short `curl` timeout: the call waits for the user's approval (up to 5 minutes) and then for the copy. Use `--max-time 1000`.
+- Do not work around a failure with `ssh`, `rsync`, `scp` or by reading the other host's files some other way. Report the `detail` message and let the user decide.
+- Only one import at a time per question: wait for the response before calling again.
+
 ## Errors
 
 An error response has a `detail` message. The common ones:
 
 - The other host is Off or Unreachable: ask the user to bring it online in Settings -> App -> Hosts. Do not try to start it yourself.
 - The source is outside that host's allowed paths, or is not a folder: tell the user and ask for another path.
+- "Operation not permitted" while listing a folder on a Mac (typically under Documents, Desktop or Downloads): macOS blocks SSH sessions from those folders. Tell the user to turn on System Settings -> General -> Sharing -> Remote Login -> (i) -> "Allow full disk access for remote users" on that Mac (or add /usr/libexec/sshd-keygen-wrapper to Full Disk Access), or to move the project to an unprotected folder such as ~/Software. Then offer to retry.
+- The call returns a 502 or "did not answer over SSH": the other machine is unreachable or asleep. Tell the user; do not retry in a loop.
 - The destination folder already exists: choose another `dest_name` or ask.
 - "The import was declined": the user said no. Do not retry.
 

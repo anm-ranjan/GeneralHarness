@@ -141,8 +141,8 @@ class FakeStore:
 
 
 class FakeUI:
-    def __init__(self, verbose=False, approval=True):
-        self.run_settings = {"verbose_tools": verbose}
+    def __init__(self, verbose=False, approval=True, approval_mode="always_ask"):
+        self.run_settings = {"verbose_tools": verbose, "approval_mode": approval_mode}
         self.approval = approval
         self.statuses = []
         self.errors = []
@@ -338,6 +338,32 @@ class CodexAppServerProviderTests(unittest.IsolatedAsyncioTestCase):
             transport.responses,
             [(7, {"decision": "accept"}), (8, {"decision": "decline"})],
         )
+
+    async def test_the_approval_mode_decides_which_requests_reach_the_user(self):
+        requests = {
+            "command": "item/commandExecution/requestApproval",
+            "file": "item/fileChange/requestApproval",
+            "permissions": "item/permissions/requestApproval",
+        }
+        # (mode, kind) -> does the user get asked?
+        expected = {
+            ("always_ask", "command"): True, ("always_ask", "file"): True, ("always_ask", "permissions"): True,
+            ("shell_only", "command"): True, ("shell_only", "file"): False, ("shell_only", "permissions"): True,
+            ("auto_approve", "command"): False, ("auto_approve", "file"): False, ("auto_approve", "permissions"): False,
+        }
+        for (mode, kind), asked in expected.items():
+            provider, transport, _client = make_provider()
+            ui = FakeUI(approval=False, approval_mode=mode)
+            asks = []
+            ui.request_approval = lambda *args, _asks=asks: _asks.append(args) or False
+            await provider._handle_server_request(
+                {"id": 1, "method": requests[kind], "params": {"threadId": "thr_existing", "permissions": {"x": 1}}},
+                ui,
+            )
+            self.assertEqual(bool(asks), asked, (mode, kind))
+            if not asked:
+                response = transport.responses[0][1]
+                self.assertTrue(response.get("decision") == "accept" or response.get("permissions") == {"x": 1}, (mode, kind))
 
     async def test_child_approval_uses_optional_agent_approval_hook(self):
         provider, transport, _client = make_provider()
@@ -607,6 +633,29 @@ class CodexAppServerProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(errors, [])
         self.assertEqual(len(instances), 1)
         self.assertCountEqual(instances[0].calls, [1, 2])
+
+
+class LongLineTests(unittest.IsolatedAsyncioTestCase):
+    """One app-server message is one JSON line; command output can make it huge."""
+
+    async def test_a_multi_megabyte_line_does_not_break_the_connection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "fake-codex"
+            fake.write_text(
+                "#!%s\n" % sys.executable
+                + "import json, sys\n"
+                + "for line in sys.stdin:\n"
+                + "    request = json.loads(line)\n"
+                + "    big = 'x' * (3 * 1024 * 1024)\n"
+                + "    print(json.dumps({'id': request['id'], 'result': {'output': big}}), flush=True)\n"
+            )
+            fake.chmod(0o755)
+            transport = provider_module.AppServerTransport(codex_bin=str(fake))
+            try:
+                result = await transport.request("anything", timeout=20)
+            finally:
+                await transport.stop()
+        self.assertEqual(len(result["output"]), 3 * 1024 * 1024)
 
 
 if __name__ == "__main__":

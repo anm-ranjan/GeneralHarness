@@ -226,6 +226,13 @@ class AgentContextTests(unittest.TestCase):
             self.assertIn("MyHarness session id: ses_", text)
             self.assertIn(utils.local_api_url(), text)
 
+    def test_listed_skill_files_are_exempt_from_the_allowed_roots_rule(self):
+        # Codex refused to read SKILL.md because the install's skills folder is
+        # outside the allowed roots; the prompt must say that exception exists.
+        fragment = skill_registry.prompt_fragment()
+        self.assertIn("even when they are outside the allowed filesystem roots", fragment)
+        self.assertIn("fleet-import", fragment)
+
     def test_the_skill_is_discoverable(self):
         self.assertIn("fleet-import", [skill.name for skill in skill_registry.list_skills()])
 
