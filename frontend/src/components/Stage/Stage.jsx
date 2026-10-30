@@ -165,7 +165,9 @@ export default function Stage() {
             key={turn.id}
             turn={turn}
             renderItem={renderItem}
-            live={state.isRunning && i === turns.length - 1}
+            // Silent commands (/clear, /approve) also set isRunning but are not a turn
+            // of work, so they get no live line.
+            live={state.isRunning && !state.silentCommand && i === turns.length - 1}
             isLast={i === turns.length - 1}
           />
         ))}
