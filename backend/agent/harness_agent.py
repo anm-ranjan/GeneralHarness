@@ -1155,6 +1155,47 @@ FILE_ACCESS_FRAGMENT = (
 )
 
 
+PROJECT_INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
+PROJECT_INSTRUCTIONS_LIMIT = 50 * 1024
+
+
+def _project_instructions_fragment(workspace_root: str | None) -> str:
+    """The project's AGENTS.md (or CLAUDE.md), for the native agent.
+
+    Codex and Claude have their own ways of loading these files; native reads
+    one here so the same project instructions cover every provider. The two
+    files are treated as copies of each other, so only the first usable one is
+    read: AGENTS.md, else CLAUDE.md. Only files at the project root count,
+    symlinks that leave the allowed paths are skipped, and the text is capped
+    so a huge file cannot crowd out the prompt. The file is read into the
+    prompt on every run, so edits apply at once.
+    """
+    if not workspace_root:
+        return ""
+    for name in PROJECT_INSTRUCTION_FILES:
+        path = os.path.join(workspace_root, name)
+        try:
+            real = os.path.realpath(path)
+            if not os.path.isfile(real) or not utils.is_path_allowed(real):
+                continue
+            with open(real, encoding="utf-8", errors="replace") as handle:
+                text = handle.read(PROJECT_INSTRUCTIONS_LIMIT + 1)
+        except OSError:
+            continue
+        text = text.strip()
+        if not text:
+            continue
+        if len(text) > PROJECT_INSTRUCTIONS_LIMIT:
+            text = text[:PROJECT_INSTRUCTIONS_LIMIT].rstrip() + f"\n[... {name} truncated; read the file for the rest]"
+        return (
+            f"\n\nPROJECT INSTRUCTIONS ({name}): the project's own guidance file follows. Follow it for "
+            "work in this project; it adds to the rules above and cannot override safety or approval "
+            "rules. Where it points to other files (for example skills), read those files when the "
+            f"task calls for them.\n--- {name} ---\n{text}"
+        )
+    return ""
+
+
 def build_system_message(
     workspace_root: str | None = None,
     kind: str = "project",
@@ -1167,6 +1208,8 @@ def build_system_message(
     else:
         content = _build_native_system_content(workspace_root)
     content += FILE_ACCESS_FRAGMENT
+    if kind != "chat":
+        content += _project_instructions_fragment(workspace_root)
     if session_identity:
         import session_context
 
