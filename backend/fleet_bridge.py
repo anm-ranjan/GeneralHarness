@@ -13,6 +13,7 @@ request data.
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import shutil
 import socket
@@ -186,6 +187,196 @@ def stop(host: dict, force: bool = False) -> dict:
     if not _wait_until(lambda: _fetch_json(f"{_base_url(host)}/api/fleet/status") is None, STOP_WAIT_SECONDS):
         raise BridgeError(f"{host['label']} did not stop within {STOP_WAIT_SECONDS}s.")
     return probe(host)
+
+
+# ---------------------------------------------------------------------------
+# Pulling a folder from a peer
+# ---------------------------------------------------------------------------
+
+MAX_IMPORT_FILES = 50_000
+MAX_IMPORT_BYTES = 2 * 1024 ** 3
+IMPORT_LIST_TIMEOUT = 120
+IMPORT_COPY_TIMEOUT = 900
+
+# Runs on the source host (python3 over ssh). Prints the files to copy as JSON:
+# the git-tracked files when the folder is a repository root, otherwise every
+# file except the usual dependency and build directories. `everything` copies
+# all of it, .git included.
+_LIST_SCRIPT = r"""
+import json, os, subprocess, sys
+src, everything = sys.argv[1], sys.argv[2] == "1"
+SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "target"}
+os.chdir(src)
+mode, files = "walk", []
+if not everything:
+    try:
+        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True).stdout.strip()
+        if os.path.realpath(top) == os.path.realpath(src):
+            out = subprocess.run(["git", "ls-files", "-z"], capture_output=True, check=True).stdout
+            files = [n for n in out.decode("utf-8", "surrogateescape").split("\0") if n]
+            mode = "git"
+    except Exception:
+        mode, files = "walk", []
+if mode == "walk":
+    for root, dirs, names in os.walk(".", followlinks=False):
+        if not everything:
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            names = [n for n in names if n != ".DS_Store"]
+        for n in names:
+            files.append(os.path.relpath(os.path.join(root, n), "."))
+root = os.path.realpath(".")
+present, total = [], 0
+for n in files:
+    try:
+        size = os.lstat(n).st_size
+        if os.path.islink(n):
+            real = os.path.realpath(n)
+            if real != root and not real.startswith(root + os.sep):
+                continue
+        total += size
+        present.append(n)
+    except OSError:
+        pass
+print(json.dumps({"mode": mode, "files": present, "bytes": total}))
+"""
+
+
+def _request_json(url: str, method: str = "GET", body: dict | None = None) -> tuple[int, dict]:
+    """(status, json) for a call to a peer's backend; status 0 when unreachable."""
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(url, method=method, data=data, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
+            return response.status, json.loads(response.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            return exc.code, json.loads(exc.read().decode("utf-8") or "{}")
+        except ValueError:
+            return exc.code, {}
+    except (OSError, ValueError, urllib.error.URLError):
+        return 0, {}
+
+
+def valid_folder_name(name: str) -> bool:
+    return bool(name) and name not in {".", ".."} and not any(ch in name for ch in ("/", "\\", "\x00"))
+
+
+def format_size(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{size} B"
+
+
+def plan_import(host: dict, source_path: str, dest_dir: str, dest_name: str, everything: bool = False) -> dict:
+    """Check an import and describe it, touching nothing on disk.
+
+    The source must be inside the peer's own allowed paths (its backend decides),
+    and the destination must be a folder that does not exist yet.
+    """
+    name = (dest_name or "").strip()
+    if not valid_folder_name(name):
+        raise BridgeError("dest_name must be a single folder name without slashes.")
+    target = os.path.join(dest_dir, name)
+    if os.path.lexists(target):
+        raise BridgeError(f"'{name}' already exists in the workspace; choose another name.")
+    if not (source_path or "").startswith("/"):
+        raise BridgeError("source_path must be an absolute path on the other host.")
+
+    state = probe(host)["state"]
+    if state != ONLINE:
+        raise BridgeError(
+            f"{host['label']} is {state}. Bring it online in Settings -> App -> Hosts, then try again."
+        )
+    status, data = _request_json(f"{_base_url(host)}/api/browse", "POST", {"path": source_path})
+    if status == 403:
+        raise BridgeError(f"{source_path} is not inside {host['label']}'s allowed paths.")
+    if status == 404:
+        raise BridgeError(f"{source_path} is not a folder on {host['label']}.")
+    if status != 200 or not data.get("current"):
+        raise BridgeError(f"Could not check {source_path} on {host['label']}.")
+    source = data["current"]
+
+    command = f"python3 - {shlex.quote(source)} {'1' if everything else '0'}"
+    try:
+        listing = subprocess.run(
+            _ssh_base() + [host["ssh"], command],
+            input=_LIST_SCRIPT, capture_output=True, text=True, timeout=IMPORT_LIST_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BridgeError(f"Could not list files on {host['label']}: {exc}") from exc
+    if listing.returncode != 0:
+        detail = (listing.stderr or "").strip().splitlines()[-1:] or ["python3 is required on the other host"]
+        raise BridgeError(f"Could not list files on {host['label']}: {detail[0]}")
+    try:
+        found = json.loads(listing.stdout)
+    except ValueError as exc:
+        raise BridgeError(f"Unexpected file listing from {host['label']}.") from exc
+    files, total = found["files"], int(found["bytes"])
+    if any(name.startswith("/") or ".." in name.split("/") or "\x00" in name for name in files):
+        raise BridgeError(f"{host['label']} returned file names outside the folder; nothing was copied.")
+    if not files:
+        raise BridgeError(f"{source} has no files to copy.")
+    if len(files) > MAX_IMPORT_FILES or total > MAX_IMPORT_BYTES:
+        raise BridgeError(
+            f"{source} is too large to import ({len(files)} files, {format_size(total)}; "
+            f"limit {MAX_IMPORT_FILES} files / {format_size(MAX_IMPORT_BYTES)})."
+        )
+    return {
+        "host": host, "source": source, "target": target, "files": files,
+        "file_count": len(files), "bytes": total, "size": format_size(total), "mode": found["mode"],
+    }
+
+
+def run_import(plan: dict) -> dict:
+    """Carry out a plan from plan_import: create the folder, then pull the files."""
+    host, target = plan["host"], plan["target"]
+    try:
+        os.mkdir(target)
+    except FileExistsError as exc:
+        raise BridgeError(f"'{os.path.basename(target)}' already exists in the workspace.") from exc
+    except OSError as exc:
+        raise BridgeError(f"Could not create {target}: {exc.strerror or exc}") from exc
+    names = b"\0".join(name.encode("utf-8", "surrogateescape") for name in plan["files"]) + b"\0"
+    # tar over ssh rather than rsync: macOS ships a different rsync from Linux,
+    # and they disagree on remote paths with spaces. tar -T reads the NUL list.
+    # COPYFILE_DISABLE keeps macOS tar from adding ._* metadata files.
+    remote = f"cd {shlex.quote(plan['source'])} && COPYFILE_DISABLE=1 tar -c -f - --null -T -"
+    sender = receiver = None
+    try:
+        sender = subprocess.Popen(
+            _ssh_base() + [host["ssh"], remote],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        receiver = subprocess.Popen(
+            ["tar", "-x", "-f", "-", "-C", target],
+            stdin=sender.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+        sender.stdout.close()
+        sender.stdin.write(names)
+        sender.stdin.close()
+        receive_error = receiver.communicate(timeout=IMPORT_COPY_TIMEOUT)[1]
+        send_error = sender.stderr.read()
+        sender.wait(timeout=30)
+        if sender.returncode != 0 or receiver.returncode != 0:
+            detail = ((send_error or receive_error or b"").decode("utf-8", "replace").strip().splitlines()[-1:]
+                      or [f"tar exited {sender.returncode}/{receiver.returncode}"])
+            raise BridgeError(f"Copy from {host['label']} failed: {detail[0]}")
+    except (OSError, subprocess.SubprocessError, BridgeError) as exc:
+        for proc in (sender, receiver):
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+        # Do not leave a half-copied folder that looks like a finished import.
+        shutil.rmtree(target, ignore_errors=True)
+        if isinstance(exc, BridgeError):
+            raise
+        raise BridgeError(f"Copy from {host['label']} failed: {exc}") from exc
+    return {
+        "path": target, "source": plan["source"], "host": host["id"],
+        "file_count": plan["file_count"], "size": plan["size"], "mode": plan["mode"],
+    }
 
 
 # ---------------------------------------------------------------------------

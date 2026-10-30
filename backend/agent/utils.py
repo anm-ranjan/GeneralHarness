@@ -362,6 +362,12 @@ CHART_GUIDANCE = (
 )
 MANAGED_TOOLS = str(nested_get(CONFIG, ["agent", "managed_tools"], "false")).lower() in ("true", "1", "yes")
 DEFAULT_PROVIDER = str(nested_get(CONFIG, ["agent", "default_provider"], "native") or "native").strip()
+def local_api_url() -> str:
+    """Loopback URL of this backend, as an agent on this machine reaches it."""
+    port = (os.environ.get("MYHARNESS_WEB_PORT") or "").strip()
+    return f"http://127.0.0.1:{port if port.isdigit() else SERVER_PORT}"
+
+
 # Thinking level native sessions use until one is chosen. Blank (or an unknown
 # value) sends nothing, leaving the model on its own default.
 _native_effort = str(nested_get(CONFIG, ["agent", "native_reasoning_effort"], "high") or "").strip().lower()

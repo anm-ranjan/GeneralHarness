@@ -502,6 +502,7 @@ def build_first_prompt(meta, user_prompt: str) -> str:
 
 You are a helpful, general-purpose assistant. Answer clearly and directly; most questions need no
 tool at all. Your scratch workspace is {_workspace_for_meta(meta)} — keep any file work there.
+MyHarness session id: {meta.id}. Local API: {utils.local_api_url()}
 
 {_allowed_paths_block()}
 
@@ -518,6 +519,7 @@ Task:
     return f"""Browser-based coding harness session.
 
 Context: project={meta.project_id}, task={meta.task_id}, workspace={_workspace_for_meta(meta)}
+MyHarness session id: {meta.id}. Local API: {utils.local_api_url()}
 
 {_allowed_paths_block()}
 
@@ -546,6 +548,7 @@ Context from prior provider session (summarised):
 
 """
     return f"""Continue session. Project={meta.project_id}, task={meta.task_id}, workspace={_workspace_for_meta(meta)}.
+MyHarness session id: {meta.id}. Local API: {utils.local_api_url()}
 {_allowed_paths_block()}
 Same rules: read/write/list/search only inside the allowed roots, stay in workspace, be concise, no verbose narration. Don't redo completed work.
 Modify existing files; do NOT create new files unless the task explicitly requires them. Skip verification runs that would produce new files.
@@ -560,6 +563,7 @@ def build_fallback_prompt(meta, user_prompt: str, summary: dict[str, Any] | None
     return f"""Browser-based coding harness - fresh Codex app-server thread.
 
 Context: project={meta.project_id}, task={meta.task_id}, workspace={_workspace_for_meta(meta)}
+MyHarness session id: {meta.id}. Local API: {utils.local_api_url()}
 
 {_allowed_paths_block()}
 

@@ -61,6 +61,7 @@ def build_system_prompt_append(meta) -> str:
     if getattr(meta, "kind", "project") == "chat":
         return f"""You are running inside a local agent harness as a general-purpose assistant.
 Answer clearly and directly; most questions need no tool at all.
+MyHarness session id: {meta.id}. Local API: {utils.local_api_url()}
 
 {_allowed_paths_block()}
 {skill_registry.prompt_fragment()}
@@ -73,6 +74,7 @@ Rules:
 """
     return f"""You are running inside a local agent harness for coding sessions.
 Context: project={meta.project_id}, task={meta.task_id}
+MyHarness session id: {meta.id}. Local API: {utils.local_api_url()}
 
 {_allowed_paths_block()}
 {skill_registry.prompt_fragment()}

@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse
 
 import audio_transcription
 import fleet_bridge
+import web_helpers
 import credential_store
 import performance_log
 import utils
@@ -208,6 +209,50 @@ def fleet_bridge_stop(host_id: str, req: _BridgeStopRequest | None = None):
             status_code=409,
             detail={"message": str(busy), "running": busy.running, "waiting_approval": busy.waiting_approval},
         ) from busy
+    except fleet_bridge.BridgeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+class _FleetImportRequest(BaseModel):
+    host: str
+    source_path: str
+    dest_name: str
+    include_everything: bool = False
+
+
+@router.post("/api/sessions/{session_id}/fleet-import")
+def fleet_import(session_id: str, req: _FleetImportRequest):
+    """Pull a folder from another fleet host into this session's workspace.
+
+    Called by an agent (Codex, Claude or native) through the skill, so it is
+    deliberately narrow: pull only, into a new folder inside the workspace,
+    from a path the other host's own backend allows, and always behind an
+    approval prompt in the calling session, whatever its approval mode."""
+    from web_ui_adapter import WebUI
+
+    meta = web_app._store.load_session(session_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    run = web_app._manager.get_active_run(session_id)
+    if run is None:
+        raise HTTPException(status_code=409, detail="Importing needs a running turn in the session, to ask for approval.")
+    host = _bridge_host(req.host)
+    workspace = web_helpers._workspace_root_for_session(meta)
+    try:
+        plan = fleet_bridge.plan_import(host, req.source_path, workspace, req.dest_name, req.include_everything)
+    except fleet_bridge.BridgeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    summary = (
+        f"Copy {plan['source']} from {host['label']} into {plan['target']}: "
+        f"{plan['file_count']} files, {plan['size']} "
+        f"({'everything' if req.include_everything else 'source files only'})."
+    )
+    ui = WebUI(session_id, web_app._manager, run, web_app._store)
+    if not ui.request_approval("fleet_import", summary, None):
+        raise HTTPException(status_code=403, detail="The import was declined.")
+    try:
+        return fleet_bridge.run_import(plan)
     except fleet_bridge.BridgeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
