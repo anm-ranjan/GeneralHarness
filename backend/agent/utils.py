@@ -94,7 +94,8 @@ def normalize_allowed_paths(value) -> list:
 
 
 def normalize_fleet_hosts(value) -> list:
-    """Clean the configured fleet host list into {id, label, url} entries.
+    """Clean the configured fleet host list into {id, label, url} entries, plus the
+    optional bridge keys ssh, repo and remote_port when they are well formed.
 
     Entries missing an id or url are dropped rather than raising: a typo in one
     host should not stop the machine you are sitting at from starting.
@@ -114,11 +115,27 @@ def normalize_fleet_hosts(value) -> list:
         if not host_id or not url or host_id in seen:
             continue
         seen.add(host_id)
-        hosts.append({
+        host = {
             "id": host_id,
             "label": str(entry.get("label") or host_id).strip(),
             "url": url,
-        })
+        }
+        # Optional bridge settings. An ssh target that could be read as an ssh
+        # option, or a relative repo path, is ignored (and warned about) so a
+        # typo can never turn into a command line.
+        ssh = str(entry.get("ssh") or "").strip()
+        if ssh and not ssh.startswith("-") and not any(ch.isspace() for ch in ssh):
+            host["ssh"] = ssh
+        repo = str(entry.get("repo") or "").strip()
+        if repo.startswith("/") and "\x00" not in repo:
+            host["repo"] = repo
+        try:
+            remote_port = int(entry.get("remote_port") or 0)
+        except (TypeError, ValueError):
+            remote_port = 0
+        if 1 <= remote_port <= 65535:
+            host["remote_port"] = remote_port
+        hosts.append(host)
     return hosts
 
 
@@ -571,7 +588,23 @@ def _fleet_warnings() -> list:
             f"({known}). The host switcher stays hidden."
         )
 
+    raw_by_id = {
+        str(entry.get("id") or "").strip(): entry
+        for entry in (raw_hosts if isinstance(raw_hosts, list) else [])
+        if isinstance(entry, dict)
+    }
     for host in FLEET_HOSTS:
+        raw = raw_by_id.get(host["id"], {})
+        for key in ("ssh", "repo", "remote_port"):
+            if raw.get(key) and key not in host:
+                warnings.append(
+                    f"fleet host '{host['id']}' has an unusable {key} ({raw.get(key)!r}); the bridge "
+                    "ignores it. ssh must be a plain user@host, repo an absolute path, remote_port 1-65535."
+                )
+        if (host.get("ssh") or host.get("repo")) and not (host.get("ssh") and host.get("repo")):
+            warnings.append(
+                f"fleet host '{host['id']}' needs both ssh and repo for the bridge to start its backend."
+            )
         if ":" in host["id"]:
             warnings.append(
                 f"fleet host id '{host['id']}' contains ':', which is reserved. Use a plain "

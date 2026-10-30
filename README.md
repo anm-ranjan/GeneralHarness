@@ -293,6 +293,26 @@ remote host on every viewing host. Start all backends and tunnels before
 opening the client; the host switcher reports an unreachable peer when its
 backend or forward is down.
 
+#### Bringing hosts online and offline
+
+Add `ssh` (for example `user@host-b.example`) and `repo` (the checkout on that
+host) to a peer in `fleet.hosts`, and give `url` a loopback address. This
+machine then keeps its own supervised SSH forward to that peer, so
+`fleet-tunnels.sh` is no longer needed for it, and **Settings → App → Hosts**
+lists the peer as Online, Off (the machine answers, its backend does not), or
+Unreachable. *Bring online* starts the peer's backend over SSH, detached from
+the session; *Take offline* shuts it down through `/api/shutdown`, after a
+confirmation that names any running or approval-waiting sessions.
+
+A host is simply online while its backend answers. Nothing records who started
+it, so any client may take it offline, and it disappears for every client at
+once. A peer's backend keeps running until someone takes it offline. Peers are
+started with `.venv/bin/python backend/web_app.py` from `repo` on a loopback
+port (`remote_port`, default 8420), logging to `logs/bridge-backend.log`
+there. The requests always go to the machine serving the page, not to the host
+currently being viewed. A peer whose url is already served by a hand-run tunnel
+is left alone, and Windows peers are not supported.
+
 Electron normally reuses a healthy backend at `desktop.backend_url` when
 `desktop.prefer_existing_backend` is true. Set
 `desktop.start_local_backend_fallback: false` if Electron must never start its

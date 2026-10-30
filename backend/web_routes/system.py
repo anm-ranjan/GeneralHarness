@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse
 
 import audio_transcription
+import fleet_bridge
 import credential_store
 import performance_log
 import utils
@@ -166,6 +167,49 @@ def fleet_status():
         "running": running,
         "waiting_approval": len(waiting),
     }
+
+
+def _bridge_host(host_id: str) -> dict:
+    try:
+        return fleet_bridge.find_host(host_id)
+    except fleet_bridge.BridgeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/api/fleet/bridge")
+def fleet_bridge_status():
+    """State of every peer this machine can bring online or offline.
+
+    Always answered by the machine serving the page: it owns the SSH forwards,
+    whichever host the UI is currently viewing."""
+    return {"hosts": fleet_bridge.probe_all()}
+
+
+@router.post("/api/fleet/bridge/{host_id}/start")
+def fleet_bridge_start(host_id: str):
+    host = _bridge_host(host_id)
+    try:
+        return fleet_bridge.start(host)
+    except fleet_bridge.BridgeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+class _BridgeStopRequest(BaseModel):
+    force: bool = False
+
+
+@router.post("/api/fleet/bridge/{host_id}/stop")
+def fleet_bridge_stop(host_id: str, req: _BridgeStopRequest | None = None):
+    host = _bridge_host(host_id)
+    try:
+        return fleet_bridge.stop(host, force=bool(req and req.force))
+    except fleet_bridge.BridgeBusy as busy:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": str(busy), "running": busy.running, "waiting_approval": busy.waiting_approval},
+        ) from busy
+    except fleet_bridge.BridgeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/api/shutdown")

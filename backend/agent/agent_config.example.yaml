@@ -122,6 +122,13 @@ fleet:
   #       label: Workstation
   #       url: http://127.0.0.1:8421 # the tunnel above
   #       enabled: false             # keep the entry but stop offering the host
+  #       # Optional: let Settings -> App bring this host online and offline.
+  #       # This machine then keeps its own SSH forward to `url` (a loopback
+  #       # url such as the one above) and starts or stops the backend over
+  #       # SSH. Needs key-based SSH; ssh and repo go together.
+  #       ssh: user@workstation.local
+  #       repo: /home/user/MyHarness # checkout on that host (uses its .venv)
+  #       remote_port: 8420          # that host's backend port (default 8420)
   hosts: []
 
 logging:

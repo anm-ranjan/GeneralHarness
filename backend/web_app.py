@@ -33,6 +33,7 @@ from fastapi.responses import FileResponse
 
 import shutil
 
+import fleet_bridge
 import performance_log
 from session_store import SessionStore
 from web_session import SessionManager
@@ -204,7 +205,9 @@ async def _lifespan(app: FastAPI):
     utils.register_allowed_path(str(_MATERIALIZATIONS_DIR))
     _manager.set_event_loop(asyncio.get_event_loop())
     performance_log.record("backend_ready", _IMPORT_STARTED)
+    fleet_bridge.tunnels.start()
     yield
+    fleet_bridge.tunnels.stop()
     shutdown_codex_runtime()
     utils.kill_all_background_jobs()
     if _store is not None:
