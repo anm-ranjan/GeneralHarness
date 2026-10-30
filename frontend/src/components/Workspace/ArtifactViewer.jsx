@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api } from '../../api'
+import { api, apiUrl } from '../../api'
 import { renderMarkdown } from '../../utils'
 import { artifactUrl } from '../../artifacts'
 import { useAppDispatch } from '../../context/AppContext'
@@ -37,7 +37,7 @@ export default function ArtifactViewer({ path }) {
       <button aria-label="Close preview" onClick={() => dispatch({ type: 'CLOSE_ARTIFACT' })}>×</button>
     </div>
     {error ? <p className="p-3 text-[13px] text-danger">{error}</p> : content === null ? <p className="p-3 text-muted">Loading…</p> :
-      html && !source ? <iframe key={`${path}:${version}:${interactive}`} title={path} src={`${artifactUrl(path)}?interactive=${interactive}`} sandbox={interactive ? 'allow-scripts' : ''} referrerPolicy="no-referrer" className="w-full flex-1 border-0 bg-document-canvas" /> :
+      html && !source ? <iframe key={`${path}:${version}:${interactive}`} title={path} src={apiUrl(`${artifactUrl(path)}?interactive=${interactive}`)} sandbox={interactive ? 'allow-scripts' : ''} referrerPolicy="no-referrer" className="w-full flex-1 border-0 bg-document-canvas" /> :
       markdown && !source ? <div className="markdown-body p-4 overflow-auto text-text-default text-[14px]" onClick={openLink}
         dangerouslySetInnerHTML={{ __html: renderMarkdown(content, path.replace(/[\\/][^\\/]*$/, '')) }} /> :
       <pre className="flex-1 overflow-auto whitespace-pre p-4 font-mono text-[12px] text-text-default">{content}</pre>}
