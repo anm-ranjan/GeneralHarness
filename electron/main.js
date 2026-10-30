@@ -8,10 +8,25 @@ const os = require("os");
 const path = require("path");
 const util = require("util");
 const { buildExecutablePath } = require("./executable-path.cjs");
+const { chooseRepoRoot } = require("./backend-repo.cjs");
 
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8420";
 
-const repoRoot = app.isPackaged ? process.resourcesPath : path.resolve(__dirname, "..");
+const bundledRoot = app.isPackaged ? process.resourcesPath : path.resolve(__dirname, "..");
+// A packaged app may run the backend, config, skills and UI of a user-owned
+// checkout (desktop.backend_repo) instead of its own bundled, root-owned copy.
+const repoChoice = chooseRepoRoot({
+  bundledRoot,
+  envValue: process.env.MYHARNESS_BACKEND_REPO,
+  yamlText: (() => {
+    try {
+      return fs.readFileSync(path.join(bundledRoot, "backend", "agent", "agent_config.yaml"), "utf-8");
+    } catch {
+      return "";
+    }
+  })(),
+});
+const repoRoot = repoChoice.root;
 const backendScript = path.join(repoRoot, "backend", "web_app.py");
 const appPreload = path.join(__dirname, "app-preload.js");
 const configPath = path.join(repoRoot, "backend", "agent", "agent_config.yaml");
@@ -213,6 +228,12 @@ function selectPython() {
   throw new Error("No Python interpreter was found. Set MYHARNESS_PYTHON or install Python 3.10+.");
 }
 
+// The checkout's built UI when it has one, otherwise the bundled copy.
+function staticDir() {
+  const own = path.join(repoRoot, "frontend", "dist");
+  return fs.existsSync(path.join(own, "index.html")) ? own : path.join(bundledRoot, "frontend", "dist");
+}
+
 function spawnLocalBackend(baseUrl) {
   const url = new URL(baseUrl);
   const dataDir = configuredDataDir();
@@ -222,11 +243,13 @@ function spawnLocalBackend(baseUrl) {
     MYHARNESS_WEB_HOST: url.hostname || "127.0.0.1",
     MYHARNESS_WEB_PORT: url.port || "8420",
     MYHARNESS_WEB_DATA_DIR: dataDir,
-    MYHARNESS_WEB_STATIC_DIR: process.env.MYHARNESS_WEB_STATIC_DIR || path.join(repoRoot, "frontend", "dist"),
+    MYHARNESS_WEB_STATIC_DIR: process.env.MYHARNESS_WEB_STATIC_DIR || staticDir(),
     MYHARNESS_DESKTOP_CREDENTIAL_TOKEN: desktopCredentialToken,
   };
   const python = selectPython();
   console.log(`Provider executable PATH: ${env.PATH}`);
+  console.log(`Backend code: ${repoRoot} (${repoChoice.source})`);
+  if (repoChoice.rejected) console.warn(`desktop.backend_repo ignored: ${repoChoice.rejected}; using the bundled backend`);
   console.log(`Starting backend sidecar with ${python} on ${url.hostname}:${url.port || "8420"}`);
   const backendCwd = path.join(repoRoot, "backend");
   backendStartupError = null;

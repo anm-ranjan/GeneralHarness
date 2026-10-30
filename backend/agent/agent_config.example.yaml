@@ -221,6 +221,12 @@ claude_agent:
 desktop:
   enabled: true
   backend_url: "http://127.0.0.1:8420"
+  # Absolute path of a checkout whose backend, config, skills, data and UI the
+  # desktop shell runs instead of its own bundled copy (which goes stale and
+  # may sit in a root-owned folder). Blank uses the bundled copy. Read from the
+  # packaged YAML, so changing it needs one rebuild; MYHARNESS_BACKEND_REPO
+  # overrides it. The checkout needs its own .venv and a built frontend/dist.
+  backend_repo: ""
   prefer_existing_backend: true
   start_local_backend_fallback: true
   electron_only: false

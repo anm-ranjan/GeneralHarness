@@ -313,6 +313,15 @@ there. The requests always go to the machine serving the page, not to the host
 currently being viewed. A peer whose url is already served by a hand-run tunnel
 is left alone, and Windows peers are not supported.
 
+A packaged desktop app carries its own copy of the backend, skills, config and
+Python environment. Set `desktop.backend_repo` to an absolute checkout path (for
+example `/home/me/Applications/MyHarness`) and the shell runs that checkout's
+backend, config, skills, data and UI instead, so updating the checkout updates
+the app without reinstalling it. The checkout needs a `.venv` and a built
+`frontend/dist`; if the path is relative or has no `backend/web_app.py`, the
+shell logs why and uses the bundled copy. The setting is read from the packaged
+YAML, so changing it takes one rebuild. `MYHARNESS_BACKEND_REPO` overrides it.
+
 Electron normally reuses a healthy backend at `desktop.backend_url` when
 `desktop.prefer_existing_backend` is true. Set
 `desktop.start_local_backend_fallback: false` if Electron must never start its
@@ -339,6 +348,10 @@ The CLI providers need no key when the CLI is already logged in:
 npm install -g @openai/codex && codex login
 npm install -g @anthropic-ai/claude-code && claude auth login
 ```
+
+Codex follows the session's approval mode: `always_ask` asks for every command and
+file change, `shell_only` asks for commands and permission grants only, and
+`auto_approve` answers every Codex request itself.
 
 Then set `codex_app_server.enabled: true` and/or `claude_agent.enabled: true`.
 Both are probed at runtime, so an enabled-but-missing CLI degrades to a clear

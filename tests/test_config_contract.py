@@ -58,12 +58,14 @@ class ConfigFilesTests(unittest.TestCase):
         self.assertTrue(loaded)
 
     def test_every_example_key_is_actually_read_by_utils(self):
-        # desktop.disable_gpu is parsed straight out of the YAML by
-        # electron/main.js (before Electron's app is ready), never by utils.py.
+        # desktop.disable_gpu and desktop.backend_repo are parsed straight out of
+        # the YAML by electron/main.js (disable_gpu before Electron's app is
+        # ready, backend_repo before any Python runs), never by utils.py.
         # native_caching is loaded as one mapping and validated per request by
         # prompt_cache.prepare_request.
         read_elsewhere = {
             ("desktop", "disable_gpu"),
+            ("desktop", "backend_repo"),
             ("native_caching", "mode"),
             ("native_caching", "ttl"),
             ("native_caching", "explicit_models"),
@@ -76,6 +78,9 @@ class ConfigFilesTests(unittest.TestCase):
     def test_electron_reads_the_desktop_keys_it_needs(self):
         source = (ROOT / "electron" / "main.js").read_text(encoding="utf-8")
         self.assertIn("disable_gpu", source)
+        # backend_repo is read by electron/backend-repo.cjs, which main.js loads.
+        self.assertIn("backend-repo.cjs", source)
+        self.assertIn("backend_repo", (ROOT / "electron" / "backend-repo.cjs").read_text(encoding="utf-8"))
 
     def test_audio_keys_match_between_yaml_and_utils(self):
         example = yaml.safe_load(EXAMPLE_CONFIG.read_text(encoding="utf-8"))
