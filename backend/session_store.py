@@ -649,10 +649,15 @@ class SessionStore:
             root_row = self._conn.execute("SELECT root FROM projects WHERE id=?", (project_id,)).fetchone()
             if root_row is None:
                 raise ValueError(f"Project {project_id} not found")
+            # sessions(project_id, task_id) references tasks without a cascade,
+            # so the project's tasks cannot cascade away while sessions remain.
+            # Delete the sessions first (their events, queues and attachments
+            # cascade) in the same transaction as the project row.
+            self._conn.execute("DELETE FROM sessions WHERE project_id=?", (project_id,))
             self._conn.execute("DELETE FROM projects WHERE id=?", (project_id,))
             self._delete_unreferenced_blobs_conn(self._conn)
         for sid in sessions:
-            self._delete_session_files(sid, root_row["root"])
+            self._cleanup_session_files(sid, root_row["root"])
         return sessions
 
     def delete_task(self, project_id: str, task_id: str) -> list[str]:

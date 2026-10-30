@@ -123,6 +123,36 @@ class SQLiteSessionStoreContractTests(unittest.TestCase):
             self.assertIsNone(store.load_session(session.id))
             self.assertEqual(store.list_sessions("project"), [])
 
+    def test_delete_project_removes_its_sessions_and_keeps_other_projects(self):
+        # Sessions reference their task without a cascade, so deleting a
+        # project that still has sessions used to fail the foreign key check.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(tmp)
+            store.ensure_project("doomed", "Doomed", "/tmp/doomed")
+            store.ensure_task("doomed", "one", "One")
+            store.ensure_task("doomed", "two", "Two")
+            first = store.create_session("doomed", "one", "First")
+            second = store.create_session("doomed", "two", "Second")
+            store.set_session_labels(first.id, ["one", "two"], "one")
+            store.append_event(_event(first.id, 0))
+            store.store_attachment(first.id, "capture.png", b"png", "image/png")
+            store.ensure_project("kept", "Kept", "/tmp/kept")
+            store.ensure_task("kept", "task", "Task")
+            survivor = store.create_session("kept", "task", "Survivor")
+
+            removed = store.delete_project("doomed")
+
+            self.assertEqual(sorted(removed), sorted([first.id, second.id]))
+            self.assertIsNone(store.get_project("doomed"))
+            self.assertIsNone(store.load_session(first.id))
+            self.assertIsNone(store.load_session(second.id))
+            self.assertEqual(store.load_events(first.id), [])
+            self.assertFalse((Path(tmp) / "attachments" / first.id).exists())
+            self.assertEqual(store.load_session(survivor.id).title, "Survivor")
+            with sqlite3.connect(Path(tmp) / store._database_filename) as connection:
+                self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
+                self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+
     def test_default_user_facing_title_uses_thread_terminology(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = SessionStore(tmp)

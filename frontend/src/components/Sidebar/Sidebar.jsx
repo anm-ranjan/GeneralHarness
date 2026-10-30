@@ -78,9 +78,9 @@ export default function Sidebar() {
         dispatch({ type: 'CLEAR_SESSION' })
       }
     } catch (err) {
-      console.error('Failed to delete session:', err)
+      reportError(err)
     }
-  }, [tree, state.currentSessionId, dispatch])
+  }, [tree, state.currentSessionId, dispatch, reportError])
 
   const importSession = useCallback((projectId, taskId) => {
     const input = document.createElement('input')
@@ -274,10 +274,10 @@ export default function Sidebar() {
               currentSessionId={state.currentSessionId}
               onSelectSession={selectSession}
               onRenameProject={tree.renameProject}
-              onDeleteProject={tree.deleteProject}
+              onDeleteProject={pid => tree.deleteProject(pid).catch(reportError)}
               onCreateTask={(pid) => tree.createTask(pid, 'New Label')}
               onRenameTask={tree.renameTask}
-              onDeleteTask={tree.deleteTask}
+              onDeleteTask={(pid, tid) => tree.deleteTask(pid, tid).catch(reportError)}
               onCreateSession={createSession}
               onImportSession={importSession}
               onRenameSession={tree.renameSession}
