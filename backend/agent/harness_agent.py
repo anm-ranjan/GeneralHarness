@@ -464,6 +464,12 @@ def call_api(
     provider_preferences = utils.build_openrouter_provider_preferences()
     if provider_preferences:
         payload["provider"] = provider_preferences
+    # Thinking level applies to the agent's own turns, not to calls that pick a
+    # specific model (history compaction).
+    if model is None:
+        reasoning = utils.build_openrouter_reasoning(_run_setting(ui, "reasoning_effort", ""))
+        if reasoning:
+            payload["reasoning"] = reasoning
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"

@@ -70,10 +70,14 @@ def _effective_run_settings(meta) -> dict:
         if meta.provider == "codex-app-server"
         else utils.CLAUDE_AGENT_MODEL if meta.provider == CLAUDE_PROVIDER_ID else utils.MODEL
     )
+    # Native sends a level only when the user picks one; the model otherwise
+    # keeps its own default.
     default_effort = (
         "high"
         if meta.provider == CLAUDE_PROVIDER_ID
         else utils.CODEX_APP_SERVER_REASONING_EFFORT
+        if meta.provider == "codex-app-server"
+        else ""
     )
     return {
         "approval_mode": rs.get("approval_mode") or utils.APPROVAL_MODE,
@@ -584,7 +588,7 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
             _emit_session_event(
                 session_id,
                 EventType.STATUS,
-                {"text": f"Thinking (this session): {effective['reasoning_effort']}. Usage: /thinking <{'|'.join(thinking_levels)}>"},
+                {"text": f"Thinking (this session): {effective['reasoning_effort'] or 'model default'}. Usage: /thinking <{'|'.join(thinking_levels)}>"},
             )
         else:
             level = parts[1].strip().lower()

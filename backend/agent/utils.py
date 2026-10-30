@@ -254,6 +254,30 @@ NATIVE_ENABLED = native_enabled()
 HEADERS = api_headers()
 
 
+# Thinking levels offered for the native provider. They are sent to OpenRouter
+# as its unified `reasoning.effort`, which it translates for each model and
+# ignores for models that do not reason.
+NATIVE_REASONING_EFFORTS = ("low", "medium", "high")
+
+
+def build_openrouter_reasoning(effort, base_url: str | None = None) -> dict | None:
+    """The `reasoning` request field for a thinking level, or None.
+
+    Unset or unrecognised levels send nothing, so the model keeps its own
+    default. Like provider routing, this is only sent to OpenRouter: generic
+    OpenAI-compatible servers must never receive an unsupported field.
+    """
+    level = str(effort or "").strip().lower()
+    if level not in NATIVE_REASONING_EFFORTS:
+        return None
+    raw_url = str(BASE_URL if base_url is None else base_url).strip()
+    parsed = urlparse(raw_url if "://" in raw_url else f"//{raw_url}")
+    hostname = (parsed.hostname or "").rstrip(".").lower()
+    if hostname != "openrouter.ai" and not hostname.endswith(".openrouter.ai"):
+        return None
+    return {"effort": level}
+
+
 def build_openrouter_provider_preferences(
     base_url: str | None = None,
     configured_provider=None,

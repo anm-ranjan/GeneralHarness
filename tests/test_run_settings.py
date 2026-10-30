@@ -112,7 +112,8 @@ class EffectiveRunSettingsTests(unittest.TestCase):
             self.assertEqual(effective["approval_mode"], utils.APPROVAL_MODE)
             self.assertEqual(effective["verbose_tools"], utils.UI_VERBOSE_TOOLS)
             self.assertEqual(effective["max_iterations"], utils.MAX_AGENT_ITERATIONS)
-            self.assertEqual(effective["reasoning_effort"], utils.CODEX_APP_SERVER_REASONING_EFFORT)
+            # Native sends no thinking level unless the user picks one.
+            self.assertEqual(effective["reasoning_effort"], "")
 
     def test_session_overrides_win_and_bad_values_fall_back(self):
         with tempfile.TemporaryDirectory() as tmp:

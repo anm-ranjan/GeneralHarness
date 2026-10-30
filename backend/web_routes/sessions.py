@@ -417,14 +417,14 @@ def get_session_model_options(session_id: str):
     return {
         "provider": "native",
         "current_model": effective["model"] or "",
-        "current_effort": "",
+        "current_effort": effective["reasoning_effort"],
         "models": [{
             "id": effective["model"] or "",
             "display_name": effective["model"] or "Native default",
             "description": "Configured API model",
             "is_default": True,
             "default_effort": "",
-            "supported_efforts": [],
+            "supported_efforts": list(utils.NATIVE_REASONING_EFFORTS),
         }],
     }
 
@@ -441,7 +441,11 @@ def update_session_run_settings(session_id: str, req: UpdateRunSettingsRequest):
     effort = (req.reasoning_effort or "").strip().lower()
     if not model:
         raise HTTPException(status_code=400, detail="Choose a model")
-    allowed_efforts = _CLAUDE_EFFORTS if meta.provider == "claude-agent" else _CODEX_EFFORTS
+    allowed_efforts = (
+        _CLAUDE_EFFORTS if meta.provider == "claude-agent"
+        else utils.NATIVE_REASONING_EFFORTS if meta.provider == "native"
+        else _CODEX_EFFORTS
+    )
     if effort and effort not in allowed_efforts:
         raise HTTPException(
             status_code=400,
@@ -449,7 +453,12 @@ def update_session_run_settings(session_id: str, req: UpdateRunSettingsRequest):
         )
 
     settings = dict(meta.run_settings or {})
-    settings["model"] = model
+    # Native has a single configured model; pinning it would stop the session
+    # following later changes to that configuration.
+    if meta.provider == "native" and model == utils.MODEL:
+        settings.pop("model", None)
+    else:
+        settings["model"] = model
     if effort:
         settings["reasoning_effort"] = effort
     meta.run_settings = settings
