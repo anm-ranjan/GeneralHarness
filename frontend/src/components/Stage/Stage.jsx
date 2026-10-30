@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react'
 import { api } from '../../api'
 import { useApp, useAppStateRef } from '../../context/AppContext'
 import { handleSessionEvent } from '../../eventHandlers'
@@ -10,11 +10,9 @@ import MessageBubble from './MessageBubble'
 import StatusMessage from './StatusMessage'
 import ErrorMessage from './ErrorMessage'
 import InlineIndicator from './InlineIndicator'
-import WorkGroup from './WorkGroup'
+import TurnNotes from './TurnNotes'
+import { buildTurns, sameTurn } from '../../turnModel'
 import ApprovalCard from './ApprovalCard'
-import CodexCommand from './CodexCommand'
-import CodexFileChange from './CodexFileChange'
-import ThinkingBlock from './ThinkingBlock'
 import QuestionCard from './QuestionCard'
 
 export default function Stage() {
@@ -105,18 +103,10 @@ export default function Stage() {
     [answerQuestion, sessionId],
   )
 
-  if (!sessionId) {
-    return <SplashScreen />
-  }
-
-  function renderItem(item) {
+  const renderItem = useCallback(function renderItem(item) {
     switch (item.type) {
       case 'user_message':
         return <MessageBubble role="user" text={item.text} images={item.images} attachments={item.attachments} steering={item.steering} />
-      case 'thinking':
-        return <ThinkingBlock markdown={item.markdown} />
-      case 'thinking_stream':
-        return <ThinkingBlock markdown={item.markdown} streaming />
       case 'assistant_message':
         return <MessageBubble role="assistant" markdown={item.markdown} />
       case 'assistant_stream':
@@ -127,14 +117,6 @@ export default function Stage() {
         return <ErrorMessage text={item.text} />
       case 'indicator':
         return <InlineIndicator text={item.text} />
-      case 'work_group':
-        return (
-          <WorkGroup
-            tools={item.tools}
-            startTime={item.startTime}
-            finalized={item.finalized}
-          />
-        )
       case 'approval':
         return (
           <ApprovalCard
@@ -161,32 +143,58 @@ export default function Stage() {
             onRespond={handleQuestion}
           />
         )
-      case 'codex_command':
-        return <CodexCommand command={item.command} status={item.status} />
-      case 'codex_file_change':
-        return <CodexFileChange path={item.path} status={item.status} />
       default:
         return null
     }
+  }, [handleApproval, handleQuestion])
+
+  const turns = useMemo(() => buildTurns(state.stageItems), [state.stageItems])
+
+  if (!sessionId) {
+    return <SplashScreen />
   }
 
   return (
     <div
       ref={stageRef}
-      className="flex-1 overflow-y-auto px-7 py-5"
+      className="@container flex-1 overflow-y-auto px-9 py-5"
     >
-      <div className="max-w-[820px] mx-auto flex flex-col">
-        {state.stageItems.map((item, i) => {
-          const key = item._id || i
+      <div className="max-w-[1080px] mx-auto flex flex-col gap-10">
+        {turns.map((turn, i) => (
+          <Turn
+            key={turn.id}
+            turn={turn}
+            renderItem={renderItem}
+            live={state.isRunning && i === turns.length - 1}
+            isLast={i === turns.length - 1}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// One exchange: what was said on the left, what the agent did in the margin.
+// Below ~48rem of stage width the notes drop underneath. Settled turns skip
+// re-rendering while a later turn streams.
+const Turn = memo(function Turn({ turn, renderItem, live, isLast }) {
+  const talk = [...(turn.user ? [turn.user] : []), ...turn.talk]
+  return (
+    <section className="grid gap-x-10 gap-y-3 @3xl:grid-cols-[minmax(0,1fr)_17rem]">
+      <div className="flex min-w-0 flex-col">
+        {talk.map((item, i) => {
           const node = renderItem(item)
           if (node === null) return null
           return (
-            <div key={key} className="flex flex-col" data-evt-index={item.eventIndex ?? undefined}>
+            <div key={item._id || i} className="flex flex-col" data-evt-index={item.eventIndex ?? undefined}>
               {node}
             </div>
           )
         })}
       </div>
-    </div>
+      <div className="min-w-0 @3xl:border-l @3xl:border-line @3xl:pl-5">
+        <TurnNotes turn={turn} live={live} isLast={isLast} />
+      </div>
+    </section>
   )
-}
+}, (a, b) => a.live === b.live && a.isLast === b.isLast && a.renderItem === b.renderItem && sameTurn(a.turn, b.turn))

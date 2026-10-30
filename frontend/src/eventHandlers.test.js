@@ -490,3 +490,11 @@ test('final answer embedding a generated image replaces the early preview', asyn
   assert.match(markdowns[0], /other\.png/)
   assert.equal(markdowns[1], 'Chart: ![a](/w/a%20b.png)')
 })
+
+test('turn_note events become transcript items, empty ones are ignored', () => {
+  const ctx = collect()
+  handleSessionEvent({ type: 'turn_note', data: { text: 'Found the cause.' } }, ctx.dispatch, ctx.stateRef)
+  handleSessionEvent({ type: 'turn_note', data: { text: '' } }, ctx.dispatch, ctx.stateRef)
+  assert.equal(ctx.actions.length, 1)
+  assert.deepEqual(ctx.actions[0], { type: 'APPEND_STAGE_ITEM', payload: { type: 'turn_note', text: 'Found the cause.' } })
+})

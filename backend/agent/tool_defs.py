@@ -326,6 +326,27 @@ READ_ONLY_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "turn_note",
+            "description": (
+                "Add one short note to the margin beside your work, for the user. Write a single plain "
+                "sentence in the past tense about what you just did or found, naming the files involved, e.g. "
+                "'Found that sessions points at tasks without a cascade.' Call it together with your other "
+                "tool calls in the same step rather than on its own, and only after a meaningful step: "
+                "understanding something, finding a cause, finishing a change, a test result. Skip routine "
+                "reads and searches. It does not replace your final reply, and it is not a place for the plan."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "One sentence, at most about 200 characters."},
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "ask_user",
             "description": (
                 "Ask the user one clarifying question and wait for their answer. Use it when the request is "

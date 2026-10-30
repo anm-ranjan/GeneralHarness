@@ -241,59 +241,39 @@ export default function Sidebar() {
 
 
   return (
-    <div className="flex flex-col h-full px-5 pt-8 pb-5">
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <h1 className="text-[18px] font-bold text-text-bright mb-0.5">{appName}</h1>
-          <p className="text-[12px] text-faint mb-4">Projects & Threads</p>
-        </div>
-        <div className="mt-0.5 flex items-center gap-0.5" role="tablist" aria-label="Sidebar view">
-          <ViewButton active={view === 'projects'} label="Projects" onClick={() => dispatch({ type: 'SET_SIDEBAR_VIEW', payload: 'projects' })}>
-            <BookIcon />
-          </ViewButton>
-          <ViewButton active={view === 'activity'} label="Activity — all threads by recent activity" onClick={() => dispatch({ type: 'SET_SIDEBAR_VIEW', payload: 'activity' })}>
-            <BellIcon />
-          </ViewButton>
-          <button
-            onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
-            className="p-1.5 rounded text-faint hover:text-accent hover:bg-surface-hover transition-colors"
-            title={`Hide sidebar (${shortcutLabel('B')})`}
-            aria-label="Hide sidebar"
-          >
-            <SidebarIcon />
-          </button>
-        </div>
+    <div className="flex flex-col h-full pl-6 pr-4 pt-7 pb-5">
+      <div className="flex items-center gap-2 mb-5">
+        <h1 className="font-display text-[19px] font-bold leading-none text-text-bright">{appName}</h1>
+        <button
+          onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
+          className="ml-auto p-1 rounded text-faint hover:text-accent hover:bg-surface-hover transition-colors"
+          title={`Hide sidebar (${shortcutLabel('B')})`}
+          aria-label="Hide sidebar"
+        >
+          <SidebarIcon />
+        </button>
       </div>
 
-      <HostSwitcher />
+      <button
+        onClick={() => dispatch({ type: 'OPEN_DIR_PICKER' })}
+        className="w-full text-left px-2 py-2.5 mb-3 rounded-lg text-[13.5px] font-bold text-text-bright hover:bg-surface-hover transition-colors"
+      >
+        Add project
+      </button>
 
       <SearchInput value={search} onChange={setSearch} />
 
-      <button
-        onClick={() => dispatch({ type: 'OPEN_SEARCH' })}
-        className="mt-2 w-full py-1.5 text-[12px] font-medium text-muted border border-line rounded-md hover:text-accent hover:border-accent/30 hover:bg-accent-soft transition-colors flex items-center justify-center gap-1.5"
-        title={`Search all transcripts (${shortcutLabel('K')})`}
-      >
-        <span>Search transcripts</span>
-        <span className="text-[10px] text-faint">{shortcutLabel('K')}</span>
-      </button>
-
-      <div className="mt-2 mb-3 grid grid-cols-2 gap-2">
-        <button
-          onClick={() => startChat()}
-          className="py-2 text-[13px] font-medium text-accent border border-accent/30 rounded-md hover:bg-accent-soft transition-colors"
-        >
-          + Chat
-        </button>
-        <button
-          onClick={() => dispatch({ type: 'OPEN_DIR_PICKER' })}
-          className="py-2 text-[13px] font-medium text-accent border border-accent/30 rounded-md hover:bg-accent-soft transition-colors"
-        >
-          + Project
-        </button>
+      <div className="mt-3 mb-4 flex items-center gap-1 text-[12.5px] text-faint" role="tablist" aria-label="Sort threads by">
+        <span className="mr-1">Sort by</span>
+        <ViewButton active={view === 'projects'} label="Sort by project" onClick={() => dispatch({ type: 'SET_SIDEBAR_VIEW', payload: 'projects' })}>
+          <FolderIcon />
+        </ViewButton>
+        <ViewButton active={view === 'activity'} label="Sort by most recent activity" onClick={() => dispatch({ type: 'SET_SIDEBAR_VIEW', payload: 'activity' })}>
+          <ClockIcon />
+        </ViewButton>
       </div>
 
-      <div className="flex-1 overflow-y-auto -mx-1 px-1">
+      <div className="flex-1 overflow-y-auto -ml-2 -mr-2 pl-2 pr-2">
         {view === 'activity' ? (
           activity.length === 0 ? (
             <p className="text-[13px] text-faint italic text-center mt-8 mb-4">{filtering ? 'No matching threads.' : 'No threads yet.'}</p>
@@ -318,7 +298,7 @@ export default function Sidebar() {
         ) : (
           <>
             {realProjects.length === 0 ? (
-              <p className="text-[13px] text-faint italic text-center mt-8 mb-4">No projects yet. Click "+ Project" to start.</p>
+              <p className="text-[13px] text-faint italic text-center mt-8 mb-4">No projects yet. Use "Add project" above to start.</p>
             ) : !projectGroups.some(g => g.visible) ? (
               <p className="text-[13px] text-faint italic text-center mt-8 mb-4">No matching threads.</p>
             ) : (
@@ -345,7 +325,7 @@ export default function Sidebar() {
                 sessions={chatSessions}
                 emptyText="No chats yet."
                 filtering={filtering}
-                action={<button onClick={() => startChat()} className="text-faint hover:text-ok text-[11px] px-0.5" title="New chat">+</button>}
+                action={<button onClick={() => startChat()} className="text-faint hover:text-accent text-[15px] leading-none px-1" title="New chat" aria-label="New chat">+</button>}
                 {...rowProps}
               />
             )}
@@ -367,6 +347,8 @@ export default function Sidebar() {
           </div>
         )}
       </div>
+
+      <HostSwitcher />
 
       {menu && <SessionContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={closeContextMenu} />}
 
@@ -399,27 +381,26 @@ function ViewButton({ active, label, onClick, children }) {
       aria-label={label}
       title={label}
       onClick={onClick}
-      className={`p-1.5 rounded transition-colors ${active ? 'text-accent bg-accent-soft' : 'text-faint hover:text-accent hover:bg-surface-hover'}`}
+      className={`p-1 rounded transition-colors ${active ? 'text-accent bg-accent-soft' : 'hover:text-accent hover:bg-surface-hover'}`}
     >
       {children}
     </button>
   )
 }
 
-function BookIcon() {
+function FolderIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5v14Z" />
-      <path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5" />
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
     </svg>
   )
 }
 
-function BellIcon() {
+function ClockIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
     </svg>
   )
 }

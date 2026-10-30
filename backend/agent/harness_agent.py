@@ -1012,6 +1012,16 @@ def _plan_fragment() -> str:
     )
 
 
+def _notes_fragment() -> str:
+    return (
+        "MARGIN NOTES: The user sees short notes beside your work. After a meaningful step (understanding "
+        "something, finding a cause, finishing a change, a test result), call turn_note with one plain "
+        "past-tense sentence naming the files involved. Put it in the same step as your other tool calls "
+        "instead of spending a step on it, write no more than a handful per reply, and skip routine reads "
+        "and searches. It never replaces your final answer. "
+    )
+
+
 def _clarification_fragment() -> str:
     return (
         "AMBIGUITY: When the request could reasonably mean two different things and the readings would lead "
@@ -1040,6 +1050,7 @@ def _build_managed_system_content(workspace_root: str | None = None) -> str:
         "shell_run is ONLY for running scripts, tests, builds, and commands that have no tool equivalent. "
         + _gather_context_fragment()
         + _plan_fragment()
+        + _notes_fragment()
         + _clarification_fragment()
         + utils.skill_registry.prompt_fragment()
         + f"You can only access these directories: {', '.join(utils.ALLOWED_PATHS)}. "
@@ -1298,6 +1309,12 @@ def execute_tool(
             except ValueError:
                 pass
         return result
+    if name == "turn_note":
+        text = arguments.get("text", "")
+        result = utils.tool_turn_note(text)
+        if ui and not result.startswith("ERROR") and hasattr(ui, "show_turn_note"):
+            ui.show_turn_note(utils.normalize_turn_note(text))
+        return result
     if name == "ask_user":
         return _ask_user(arguments, ui)
     if not request_approval(name, arguments, ui=ui):
@@ -1532,6 +1549,8 @@ def _tool_status_line(func_name: str, func_args: dict) -> str:
     if func_name == "plan_update":
         n = len(func_args.get("items") or [])
         return f"Plan: {n} step{'s' if n != 1 else ''}"
+    if func_name == "turn_note":
+        return "Note"
     if func_name == "ask_user":
         return f"Ask: {func_args.get('question', '')}"
     if func_name in {"web_fetch", "web_request"}:

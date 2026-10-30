@@ -31,6 +31,7 @@
   --color-info: #60a5fa;
   --color-info-soft: rgba(96, 165, 250, 0.10);
 
+  --font-display: "Bricolage Grotesque Variable", "Atkinson Hyperlegible", system-ui, sans-serif;
   --font-sans: "DM Sans", system-ui, -apple-system, sans-serif;
   --font-mono: "IBM Plex Mono", "Cascadia Code", "Liberation Mono", Menlo, monospace;
 
@@ -86,18 +87,11 @@ html, body, #root {
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
-    height: 1.8rem;
-    padding: 0 0.55rem 0 0.35rem;
-    border: 1px solid var(--color-line);
-    border-radius: var(--radius-sm);
-    background: var(--color-surface);
     color: var(--color-muted);
-    transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+    transition: color 160ms ease;
   }
   .model-trigger:hover,
   .model-trigger-open {
-    border-color: var(--color-line-hover);
-    background: var(--color-surface-hover);
     color: var(--color-accent);
   }
   .model-trigger:disabled { opacity: 0.45; cursor: not-allowed; }

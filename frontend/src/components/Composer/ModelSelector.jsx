@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, isAbandonedRequest } from '../../api'
 import { useApp } from '../../context/AppContext'
 import ProviderLogo from '../ProviderLogo'
+import { modelSentence } from '../../approvalMode'
 
 const PROVIDERS = [
   { id: 'native', command: 'native', label: 'Native' },
@@ -131,14 +132,8 @@ export default function ModelSelector() {
         aria-expanded={open}
         title="Choose provider, model, and thinking level"
       >
-        <span className="model-mark">
-          <ProviderLogo provider={provider} model={currentModel || state.model} className="h-3.5 w-3.5" />
-        </span>
-        <span className="max-w-32 truncate text-text-bright">{modelLabel}</span>
-        {currentEffort && <span className="model-effort">{currentEffort}</span>}
-        <svg viewBox="0 0 12 8" className={`h-2 w-3 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" aria-hidden="true">
-          <path d="m1 1.5 5 5 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+        <ProviderLogo provider={provider} model={currentModel || state.model} className="h-3.5 w-3.5 shrink-0" />
+        <span className="max-w-64 truncate">{modelSentence(modelLabel, currentEffort)}</span>
       </button>
 
       {open && (

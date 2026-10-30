@@ -56,11 +56,11 @@ function MessageBubble({ role, text, markdown, images = [], attachments = [], st
   }, [role, text, markdown, workspaceRoot, streaming])
 
   return (
-    <article className={`flex min-w-0 flex-col max-w-[min(720px,85%)] mb-3 ${streaming ? '' : 'animate-fade-up'} ${role === 'user' ? 'self-start' : 'self-end'}`}>
-      <div className="text-[11px] text-faint uppercase tracking-wider mb-1 px-1">{steering ? 'user · steering' : role}</div>
+    <article className={`min-w-0 max-w-full ${role === 'user' ? 'mb-4' : 'mb-5'} ${streaming ? '' : 'animate-fade-up'}`}>
+      {steering && <div className="text-[12px] text-faint mb-0.5">You added, while it was working:</div>}
       {role === 'assistant' ? (
         <div
-          className={`markdown-body max-w-full overflow-x-auto bg-surface rounded-lg px-4 py-3 text-[14px] leading-relaxed ${streaming ? 'stream-caret' : ''}`}
+          className={`markdown-body max-w-full overflow-x-auto text-[15px] leading-relaxed ${streaming ? 'stream-caret' : ''}`}
           onClick={e => {
             const link = e.target.closest('[data-artifact-path]')
             if (link) { e.preventDefault(); dispatch({ type: 'OPEN_ARTIFACT', payload: link.dataset.artifactPath }); return }
@@ -69,17 +69,17 @@ function MessageBubble({ role, text, markdown, images = [], attachments = [], st
           dangerouslySetInnerHTML={{ __html: html }}
         />
       ) : (
-        <div className="bg-surface-raised rounded-lg px-4 py-3 text-[14px] leading-relaxed whitespace-pre-wrap">
+        <div className={`whitespace-pre-wrap text-[15px] leading-relaxed ${steering ? 'text-muted' : 'font-medium text-text-bright'}`}>
           {text && <div>{text}</div>}
           {displayAttachments.length > 0 && (
-            <div className="mt-3 grid grid-cols-2 gap-2">
+            <div className="mt-3 grid grid-cols-2 gap-2 font-normal">
               {displayAttachments.map((attachment, i) => (
                 <a
                   key={`${attachment.url || attachment.name || 'attachment'}_${i}`}
                   href={attachment.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="block rounded-md border border-line bg-black/10 p-2 text-[12px] text-muted hover:border-line-hover hover:text-accent"
+                  className="block rounded-lg border border-line p-2 text-[12px] text-muted hover:border-line-hover hover:text-accent"
                   title={attachment.name || `Attachment ${i + 1}`}
                 >
                   {attachment.mime?.startsWith('image/') ? (

@@ -55,6 +55,12 @@ class AgentUI(typing.Protocol):
         this."""
         ...
 
+    def show_turn_note(self, text: str) -> None:
+        """Optional: a one-sentence margin note from the model (turn_note tool).
+        Callers feature-detect with hasattr, so UIs without a margin may omit
+        this."""
+        ...
+
     def ask_user_question(
         self,
         question: str,

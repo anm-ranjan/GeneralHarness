@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp } from '../../context/AppContext'
 import ThemeSwatch from './ThemeSwatch'
 import CredentialSettings from './CredentialSettings'
+import AppSettings from './AppSettings'
 import {
   DEFAULT_SPEC, FONT_PRESETS, GLASS_PRESETS, PALETTES, RADIUS_PRESETS,
   applySpec, auditTokens, completePalette, exportPalette, findPalette,
@@ -176,6 +177,7 @@ export default function SettingsModal() {
             {[
               ['appearance', 'Appearance'],
               ['credentials', 'Credentials'],
+              ['app', 'App'],
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -189,7 +191,7 @@ export default function SettingsModal() {
             ))}
           </div>
           <span className="text-[12px] text-faint">
-            {section === 'appearance' ? 'Applies to this browser or desktop app' : 'Host-local encrypted values'}
+            {section === 'appearance' ? 'Applies to this browser or desktop app' : section === 'credentials' ? 'Host-local encrypted values' : 'Connection and quit'}
           </span>
           <button
             onClick={() => close(false)}
@@ -201,7 +203,7 @@ export default function SettingsModal() {
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
-          {section === 'credentials' ? <CredentialSettings /> : <>
+          {section === 'credentials' ? <CredentialSettings /> : section === 'app' ? <AppSettings /> : <>
           {/* ── Theme grid ── */}
           <div className="flex items-center gap-2">
             <input

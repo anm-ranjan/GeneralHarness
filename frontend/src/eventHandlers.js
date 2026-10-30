@@ -159,6 +159,12 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       dispatch({ type: 'SET_PLAN', payload: data.items || [] })
       break
 
+    case 'turn_note':
+      // A model-written margin note. Stored with the transcript, so replays
+      // show the same notes as the live run.
+      if (data.text) dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'turn_note', text: data.text } })
+      break
+
     case 'assistant_delta':
       // Live-only streamed text; never part of stored replays.
       if (stateRef.current.isReplaying) break
@@ -181,36 +187,36 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       // Streamed commentary preceding tool calls is not persisted; drop it so
       // the live view matches the stored transcript.
       dispatch({ type: 'CLEAR_ASSISTANT_STREAM' })
-      if (data.verbose) {
-        dispatch({
-          type: 'APPEND_TOOL_CALL',
-          payload: {
-            callId: data.call_id,
-            name: data.name,
-            args: data.args,
-            detail: toolDetail(data.name, data.args),
-            statusLine: data.status_line || data.name,
-            status: 'running',
-            resultPreview: null,
-            startedAt: evt.created_at ? Date.parse(evt.created_at) : Date.now(),
-          },
-        })
-      }
+      // Recorded in every verbosity mode: the margin notes are built from these.
+      // With verbose off the backend sends no arguments and only the first
+      // line of each result, so the raw details are marked as hidden.
+      dispatch({
+        type: 'APPEND_TOOL_CALL',
+        payload: {
+          callId: data.call_id,
+          name: data.name,
+          args: data.args,
+          detail: data.args ? toolDetail(data.name, data.args) : '',
+          statusLine: data.status_line || data.name,
+          status: 'running',
+          resultPreview: null,
+          detailsHidden: !data.verbose,
+          startedAt: evt.created_at ? Date.parse(evt.created_at) : Date.now(),
+        },
+      })
       break
 
     case 'tool_result':
-      if (data.verbose) {
-        dispatch({
-          type: 'UPDATE_TOOL_RESULT',
-          payload: {
-            callId: data.call_id,
-            name: data.name,
-            preview: data.preview || '',
-            ok: data.ok !== false,
-            durationMs: data.duration_ms,
-          },
-        })
-      }
+      dispatch({
+        type: 'UPDATE_TOOL_RESULT',
+        payload: {
+          callId: data.call_id,
+          name: data.name,
+          preview: data.preview || '',
+          ok: data.ok !== false,
+          durationMs: data.duration_ms,
+        },
+      })
       break
 
     case 'approval_required':

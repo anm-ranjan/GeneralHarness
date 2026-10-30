@@ -9,7 +9,7 @@ import { audioBlobToWav } from '../../audioWav'
 
 export default function Composer() {
   const { state, dispatch } = useApp()
-  const { sendMessage, sendSilentCommand } = useApi()
+  const { sendMessage, sendSilentCommand, cancelRun } = useApi()
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState([])
   const [attachmentError, setAttachmentError] = useState('')
@@ -383,10 +383,10 @@ export default function Composer() {
   }
 
   return (
-    <div className="border-t border-line px-7 pt-4 pb-3">
+    <div className="px-9 pt-2 pb-4">
       <div className="max-w-[min(1100px,calc(100vw-2rem))] mx-auto">
-        <div className="flex items-end gap-2">
-          <div className="flex-1 min-w-0">
+        <div>
+          <div className="min-w-0">
             <textarea
               ref={inputRef}
               value={input}
@@ -396,9 +396,9 @@ export default function Composer() {
               onDrop={handleDrop}
               onDragOver={e => e.preventDefault()}
               disabled={sending}
-              placeholder="Type a message, paste, or drop files..."
+              placeholder="Reply, or type / for commands"
               rows={1}
-              className="w-full min-h-[52px] max-h-[32vh] resize-y bg-surface border border-line rounded-lg px-4 py-3 text-[14px] leading-5 text-text-default placeholder:text-faint outline-none focus:border-line-hover transition-colors disabled:opacity-50"
+              className="w-full min-h-[56px] max-h-[32vh] resize-y bg-transparent border border-line rounded-xl px-4 py-3 text-[14.5px] leading-6 text-text-default placeholder:text-faint outline-none focus:border-accent transition-colors disabled:opacity-50"
             />
             {input.startsWith('/') && (
               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -407,7 +407,7 @@ export default function Composer() {
                     key={cmd}
                     type="button"
                     onClick={() => setInput(cmd)}
-                    className="px-2 py-0.5 rounded border border-line text-[11px] text-muted hover:text-accent hover:border-line-hover"
+                    className="text-[12px] text-faint underline decoration-line underline-offset-4 hover:text-accent"
                   >
                     {cmd}
                   </button>
@@ -425,68 +425,6 @@ export default function Composer() {
               e.target.value = ''
             }}
           />
-          <div className="flex shrink-0 items-center gap-2 self-end">
-            {state.audioEnabled && (
-              <button
-                type="button"
-                onClick={recording ? stopRecording : startRecording}
-                disabled={!audioAvailable || transcribing}
-                className={`h-9 w-10 border rounded-lg transition disabled:opacity-40 flex items-center justify-center ${
-                  recording
-                    ? 'border-danger text-danger bg-danger-soft animate-rec-ring'
-                    : 'border-line text-muted hover:text-accent hover:border-line-hover'
-                }`}
-                title={recording ? 'Finish recording and transcribe' : (audioAvailable ? 'Record voice prompt' : 'Audio recording is unavailable in this browser')}
-                aria-label={recording ? 'Finish recording and transcribe' : 'Record voice prompt'}
-              >
-                {recording ? (
-                  <span className="h-3 w-3 rounded-sm bg-current" aria-hidden="true" />
-                ) : (
-                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                    <path d="M12 19v3" />
-                  </svg>
-                )}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => fileRef.current?.click()}
-              disabled={attachments.length >= 4}
-              className="h-9 px-2 sm:px-3 text-[13px] font-medium text-muted border border-line rounded-lg hover:text-accent hover:border-line-hover transition disabled:opacity-40"
-              title="Attach files"
-            >
-              Attach
-            </button>
-            <button
-              onClick={handleArrowClick}
-              onPointerDown={e => {
-                if (e.button !== 0 || !input.trim()) return
-                e.currentTarget.setPointerCapture(e.pointerId)
-                holdTimerRef.current = setTimeout(() => {
-                  stashArmedRef.current = true
-                  setStashArmed(true)
-                }, 550)
-              }}
-              onPointerUp={() => clearTimeout(holdTimerRef.current)}
-              onPointerCancel={cancelHold}
-              onKeyDown={e => {
-                if (e.key === 'Escape') cancelHold()
-                if (e.key === 'ArrowDown' && input.trim()) {
-                  e.preventDefault()
-                  stashArmedRef.current = true
-                  setStashArmed(true)
-                }
-              }}
-              disabled={(!input.trim() && attachments.length === 0) || sending}
-              className="h-9 min-w-10 px-2 text-[18px] font-semibold text-bg bg-accent rounded-lg hover:brightness-110 transition disabled:opacity-40"
-              title="Send · hold to stash (keyboard: Down, then Enter)"
-              aria-label={stashArmed ? 'Stash prompt' : state.isRunning ? 'Queue message' : 'Send message'}
-            >
-              {stashArmed ? <span className="text-[12px]">Stash</span> : '↑'}
-            </button>
-          </div>
         </div>
         {!!state.currentMeta?.prompt_stash?.length && <button type="button"
           onClick={() => setStashesOpen(true)}
@@ -542,7 +480,7 @@ export default function Composer() {
             <span className="text-shimmer">Transcribing audio…</span>
           </div>
         )}
-        <div className="mt-3 border-t border-line/50 pt-2">
+        <div className="mt-2">
           {attachments.length > 0 && (
             <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
               {attachments.map((attachment, i) => (
@@ -567,7 +505,81 @@ export default function Composer() {
               ))}
             </div>
           )}
-          <ComposerToolbar />
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <ComposerToolbar />
+            <div className="ml-auto flex shrink-0 items-center gap-3">
+              {state.isRunning && (
+                <button
+                  type="button"
+                  onClick={() => cancelRun(state.currentSessionId)}
+                  disabled={state.isCancelling}
+                  className="text-[12.5px] text-danger underline decoration-danger/40 underline-offset-4 hover:text-text-bright disabled:opacity-50"
+                >
+                  {state.isCancelling ? 'Interrupting…' : 'Stop'}
+                </button>
+              )}
+              {state.audioEnabled && (
+                <button
+                  type="button"
+                  onClick={recording ? stopRecording : startRecording}
+                  disabled={!audioAvailable || transcribing}
+                  className={`h-8 w-8 border rounded-lg transition disabled:opacity-40 flex items-center justify-center ${
+                    recording
+                      ? 'border-danger text-danger bg-danger-soft animate-rec-ring'
+                      : 'border-transparent text-muted hover:text-accent'
+                  }`}
+                  title={recording ? 'Finish recording and transcribe' : (audioAvailable ? 'Record voice prompt' : 'Audio recording is unavailable in this browser')}
+                  aria-label={recording ? 'Finish recording and transcribe' : 'Record voice prompt'}
+                >
+                  {recording ? (
+                    <span className="h-3 w-3 rounded-sm bg-current" aria-hidden="true" />
+                  ) : (
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                      <path d="M12 19v3" />
+                    </svg>
+                  )}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                disabled={attachments.length >= 4}
+                className="text-[12.5px] text-muted underline decoration-line underline-offset-4 hover:text-accent transition disabled:opacity-40"
+                title="Attach files"
+              >
+                Attach
+              </button>
+              <button
+                onClick={handleArrowClick}
+                onPointerDown={e => {
+                  if (e.button !== 0 || !input.trim()) return
+                  e.currentTarget.setPointerCapture(e.pointerId)
+                  holdTimerRef.current = setTimeout(() => {
+                    stashArmedRef.current = true
+                    setStashArmed(true)
+                  }, 550)
+                }}
+                onPointerUp={() => clearTimeout(holdTimerRef.current)}
+                onPointerCancel={cancelHold}
+                onKeyDown={e => {
+                  if (e.key === 'Escape') cancelHold()
+                  if (e.key === 'ArrowDown' && input.trim()) {
+                    e.preventDefault()
+                    stashArmedRef.current = true
+                    setStashArmed(true)
+                  }
+                }}
+                disabled={(!input.trim() && attachments.length === 0) || sending}
+                className="h-8 px-4 text-[13px] font-bold text-panel bg-accent rounded-lg hover:opacity-90 transition disabled:opacity-40"
+                title="Send · hold to stash (keyboard: Down, then Enter)"
+                aria-label={stashArmed ? 'Stash prompt' : state.isRunning ? 'Queue message' : 'Send message'}
+              >
+                {stashArmed ? 'Stash' : state.isRunning ? 'Queue' : 'Send'}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

@@ -2,10 +2,34 @@
 // palette omits is derived by `completePalette` in engine.js, so a minimal
 // entry only needs bg / text / accent.
 //
-// `ember` pins every token to the values that used to live in index.css so the
-// default look is unchanged.
+// `ember` pins every token to the values that used to live in index.css; it was
+// the default until `meadow` replaced it.
 
 export const PALETTES = [
+  {
+    id: 'meadow',
+    name: 'Meadow',
+    appearance: 'light',
+    bg: '#eef1ec',
+    panel: '#f8f9f6',
+    surface: '#e4e9e1',
+    surfaceRaised: '#ffffff',
+    surfaceHover: '#e1e7de',
+    line: '#d3dacf',
+    text: '#1e2b24',
+    textBright: '#101a15',
+    muted: '#5a6a60',
+    faint: '#7d8b82',
+    accent: '#2f6b4a',
+    accent2: '#5a6a60',
+    accent3: '#7d8b82',
+    ok: '#2f7a4b',
+    warn: '#a86a0c',
+    danger: '#a8452f',
+    info: '#3b6a8a',
+    syntax: { keyword: '#7a4d9c', string: '#2f7a4b', number: '#a86a0c', comment: '#7d8b82' },
+  },
+
   {
     id: 'ember',
     name: 'Ember',
@@ -338,7 +362,7 @@ export const PALETTES = [
   },
 ]
 
-export const DEFAULT_PALETTE_ID = 'ember'
+export const DEFAULT_PALETTE_ID = 'meadow'
 
 /** Look a palette up by id across the catalog and any user-saved palettes. */
 export function findPalette(id, customPalettes = []) {

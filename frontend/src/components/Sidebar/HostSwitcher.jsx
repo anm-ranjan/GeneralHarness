@@ -7,24 +7,6 @@ import {
   summarizeOtherHosts,
 } from '../../fleet'
 
-function ComputerIcon({ className }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="2.5" y="4" width="19" height="12" rx="1.5" />
-      <path d="M8.5 20h7M12 16v4" />
-    </svg>
-  )
-}
-
 /**
  * Picks which machine the whole app is working against.
  *
@@ -53,37 +35,12 @@ export default function HostSwitcher() {
         ? `${others.offline} host${others.offline === 1 ? '' : 's'} unreachable`
         : ''
 
-  return (
-    <div className="mb-3">
-      <button
-        onClick={() => setOpen(value => !value)}
-        className="w-full flex items-center gap-2 px-2 py-1.5 text-left border border-line rounded-md hover:border-accent/30 hover:bg-accent-soft transition-colors"
-        title="Switch which machine you are working on"
-        aria-expanded={open}
-      >
-        <ComputerIcon className="w-4 h-4 text-accent shrink-0" />
-        <span className="flex-1 min-w-0">
-          <span className="block text-[13px] font-medium truncate">
-            {active ? active.label : 'Select a host'}
-          </span>
-          {summary && (
-            <span
-              className={`block text-[11px] truncate ${
-                elsewhereNeedsAttention ? 'text-amber-500' : 'text-faint'
-              }`}
-            >
-              {summary}
-            </span>
-          )}
-        </span>
-        {state.hostSwitching && (
-          <span className="text-[10px] text-faint shrink-0">switching…</span>
-        )}
-        <span className="text-[10px] text-faint shrink-0">{open ? '▲' : '▼'}</span>
-      </button>
+  const hostName = active ? active.label : 'no host selected'
 
+  return (
+    <div className="mt-4 text-[12.5px] text-muted">
       {open && (
-        <ul className="mt-1 border border-line rounded-md overflow-hidden">
+        <ul className="mb-2 border-t border-line">
           {state.fleetHosts.map(host => {
             const status = state.fleetStatuses[host.id]
             const isActive = host.id === state.activeHostId
@@ -105,7 +62,7 @@ export default function HostSwitcher() {
                     setOpen(false)
                     switchHost(host.id)
                   }}
-                  className={`w-full flex items-center gap-2 px-2 py-1.5 text-left transition-colors ${
+                  className={`w-full flex items-center gap-2 px-1 py-1.5 text-left transition-colors ${
                     isActive
                       ? 'bg-accent-soft'
                       : selectable
@@ -124,20 +81,17 @@ export default function HostSwitcher() {
                           : `${host.label} is not responding at ${host.url}`
                   }
                 >
-                  <ComputerIcon
-                    className={`w-4 h-4 shrink-0 ${isActive ? 'text-accent' : 'text-muted'}`}
-                  />
-                  <span className="flex-1 min-w-0">
+                                    <span className="flex-1 min-w-0">
                     <span className="block text-[13px] truncate">{host.label}</span>
                     <span
                       className={`block text-[11px] truncate ${
-                        hostNeedsAttention(status) ? 'text-amber-500' : 'text-faint'
+                        hostNeedsAttention(status) ? 'text-warn' : 'text-faint'
                       }`}
                     >
                       {describeHostStatus(status)}
                     </span>
                     {mismatch && (
-                      <span className="block text-[11px] text-amber-500 truncate">
+                      <span className="block text-[11px] text-warn truncate">
                         calls itself “{mismatch}”, not “{host.id}”
                       </span>
                     )}
@@ -148,6 +102,21 @@ export default function HostSwitcher() {
             )
           })}
         </ul>
+      )}
+
+      <p>
+        Working on {hostName}.{' '}
+        <button
+          onClick={() => setOpen(value => !value)}
+          className="underline decoration-line underline-offset-4 hover:text-accent transition-colors"
+          title="Switch which machine you are working on"
+          aria-expanded={open}
+        >
+          {state.hostSwitching ? 'Switching…' : 'Switch'}
+        </button>
+      </p>
+      {summary && (
+        <p className={elsewhereNeedsAttention ? 'text-warn' : 'text-faint'}>{summary}</p>
       )}
     </div>
   )

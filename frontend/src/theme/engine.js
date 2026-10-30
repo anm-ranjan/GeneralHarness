@@ -12,6 +12,13 @@ export const CUSTOM_PALETTES_KEY = 'myharness.theme.custom'
 
 export const FONT_PRESETS = [
   {
+    id: 'meadow',
+    name: 'Atkinson Hyperlegible / JetBrains Mono',
+    display: '"Bricolage Grotesque Variable", "Atkinson Hyperlegible", system-ui, sans-serif',
+    sans: '"Atkinson Hyperlegible", system-ui, -apple-system, sans-serif',
+    mono: '"JetBrains Mono Variable", "Cascadia Code", Menlo, Consolas, monospace',
+  },
+  {
     id: 'default',
     name: 'DM Sans / IBM Plex Mono',
     sans: '"DM Sans", system-ui, -apple-system, sans-serif',
@@ -51,11 +58,11 @@ export const GLASS_PRESETS = [
 ]
 
 export const DEFAULT_SPEC = {
-  paletteId: 'ember',
+  paletteId: 'meadow',
   accent: null,
-  fontId: 'default',
+  fontId: 'meadow',
   radiusId: 'default',
-  glassId: 'full',
+  glassId: 'off',
   overrides: {},
 }
 
@@ -108,7 +115,7 @@ export function deriveTokens(rawPalette, spec = {}) {
   const p = completePalette(rawPalette)
   const accent = isColor(spec.accent) ? spec.accent : p.accent
   const dark = p.appearance === 'dark'
-  const glass = byId(GLASS_PRESETS, spec.glassId, 2)
+  const glass = byId(GLASS_PRESETS, spec.glassId, 0)
   const font = byId(FONT_PRESETS, spec.fontId, 0)
   const radius = byId(RADIUS_PRESETS, spec.radiusId, 1)
 
@@ -161,6 +168,7 @@ export function deriveTokens(rawPalette, spec = {}) {
     '--color-syntax-number': p.syntax.number,
     '--color-syntax-comment': p.syntax.comment,
 
+    '--font-display': font.display || font.sans,
     '--font-sans': font.sans,
     '--font-mono': font.mono,
 
@@ -231,7 +239,7 @@ export function normalizeSpec(spec) {
     accent: isColor(s.accent) ? s.accent : null,
     fontId: byId(FONT_PRESETS, s.fontId, 0).id,
     radiusId: byId(RADIUS_PRESETS, s.radiusId, 1).id,
-    glassId: byId(GLASS_PRESETS, s.glassId, 2).id,
+    glassId: byId(GLASS_PRESETS, s.glassId, 0).id,
     overrides: s.overrides && typeof s.overrides === 'object' ? { ...s.overrides } : {},
   }
 }

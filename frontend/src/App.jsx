@@ -2,8 +2,6 @@ import { AppProvider } from './context/AppContext'
 import Sidebar from './components/Sidebar/Sidebar'
 import TopBar from './components/TopBar'
 import Stage from './components/Stage/Stage'
-import RunStatusDock from './components/Stage/RunStatusDock'
-import PlanPanel from './components/Stage/PlanPanel'
 import Composer from './components/Composer/Composer'
 import QueuedMessages from './components/Composer/QueuedMessages'
 import DirectoryPicker from './components/Modals/DirectoryPicker'
@@ -56,7 +54,7 @@ function AppLayout() {
       style={{ gridTemplateColumns: cols }}
     >
       {sidebarOpen && (
-        <aside className="sidebar-desktop glass-panel relative flex flex-col border-r border-line overflow-hidden">
+        <aside className="sidebar-desktop relative flex flex-col overflow-hidden">
           <Sidebar />
           <div
             {...sidebarHandle}
@@ -65,11 +63,9 @@ function AppLayout() {
         </aside>
       )}
 
-      <main className="main-area flex flex-col overflow-hidden">
+      <main className="main-area flex flex-col overflow-hidden bg-panel">
         <TopBar />
         <Stage />
-        <PlanPanel />
-        <RunStatusDock />
         <QueuedMessages key={state.currentSessionId || 'none'} />
         <Composer key={state.currentSessionId || 'none'} />
       </main>

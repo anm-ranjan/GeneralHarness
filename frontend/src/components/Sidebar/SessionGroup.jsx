@@ -19,8 +19,8 @@ function SessionGroup({
   const open = (filtering && sessions.length > 0) || !collapsed
 
   return (
-    <div className={`mb-2 rounded-md transition-colors ${containsActive ? 'bg-accent-glow/40' : ''}`}>
-      <div className={`flex items-center gap-1.5 group rounded-md px-1.5 py-1 ${containsActive ? 'text-accent' : ''}`}
+    <div className="mb-4 rounded-md">
+      <div className={`flex items-center gap-1.5 group rounded-md px-1.5 py-0.5`}
         tabIndex={0} aria-expanded={open}
         onClick={e => { if (!isRowAction(e.target)) setCollapsed(v => !v) }}
         onKeyDown={e => { if (!isRowAction(e.target) && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setCollapsed(v => !v) } }}>
@@ -32,7 +32,7 @@ function SessionGroup({
         >
           ▼
         </button>
-        <span className={`text-[13px] font-semibold truncate cursor-pointer ${muted ? 'text-muted' : 'text-text-bright'}`}>
+        <span className={`font-display text-[14px] font-medium truncate cursor-pointer ${muted ? 'text-faint' : 'text-muted'}`}>
           {title}
         </span>
         <span className="ml-1 text-[10px] text-faint tabular-nums">{sessions.length}</span>
@@ -40,7 +40,7 @@ function SessionGroup({
       </div>
 
       <div className={`collapse-grid ${open ? 'open' : ''}`}>
-        <div hidden={!open} className="mt-0.5 pl-4 space-y-px">
+        <div hidden={!open} className="mt-1 space-y-px">
           {sessions.length === 0 ? (
             <p className="text-[12px] text-faint italic py-1 px-2">{emptyText}</p>
           ) : (

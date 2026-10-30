@@ -39,6 +39,7 @@ class EventType(str, Enum):
     QUEUE_UPDATED = "queue_updated"
     WORKSPACE_CHANGED = "workspace_changed"
     PLAN_UPDATE = "plan_update"
+    TURN_NOTE = "turn_note"
 
 
 def _evt_id() -> str:

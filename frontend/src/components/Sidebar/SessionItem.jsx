@@ -52,10 +52,10 @@ function SessionItem({ session, labels = [], subtitle = '', isActive, onSelect, 
 
   return (
     <div
-      className={`group relative grid grid-cols-[1fr_auto] items-center gap-x-1 px-2 py-1.5 rounded-md cursor-pointer text-[13px] transition-[background-color,color,box-shadow,transform] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70 ${
+      className={`group relative grid grid-cols-[1fr_auto] items-center gap-x-1 px-2.5 py-1.5 rounded-lg cursor-pointer text-[13.5px] leading-snug transition-[background-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70 ${
         isActive
-          ? 'bg-accent-soft text-accent shadow-[inset_2px_0_0_var(--color-accent),0_0_0_1px_rgba(245,158,11,0.16)]'
-          : 'text-muted hover:bg-surface hover:text-text-default hover:translate-x-0.5'
+          ? 'bg-panel text-text-bright shadow-[0_0_0_1px_var(--color-line)]'
+          : 'text-text-default hover:bg-surface-hover'
       }`}
       tabIndex={0}
       draggable={!editing && session.kind !== 'chat' && !runState}
@@ -91,11 +91,14 @@ function SessionItem({ session, labels = [], subtitle = '', isActive, onSelect, 
               title={runStateBadge(runState).label}
             />
           )}
-          <span className="truncate">{session.title || session.id.slice(0, 8)}</span>
+          <span className="truncate">
+            {session.title || session.id.slice(0, 8)}
+            {labels.length > 0 && <span className="ml-1.5 text-[12px] text-faint" title={labels.join(', ')}>{labels.join(', ')}</span>}
+          </span>
         </span>
       )}
       <span className="relative flex items-center justify-end">
-        <span className={`text-[11px] transition-opacity group-hover:opacity-0 group-focus-within:opacity-0 ${copied ? 'opacity-0' : ''} ${isActive ? 'text-accent/80' : 'text-faint'}`}>
+        <span className={`text-[11px] transition-opacity group-hover:opacity-0 group-focus-within:opacity-0 ${copied ? 'opacity-0' : ''} text-faint`}>
           {relativeTime(session.updated_at)}
         </span>
         <span className={`absolute right-0 flex gap-0.5 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 ${copied ? 'opacity-100' : 'opacity-0'}`}>
@@ -109,13 +112,8 @@ function SessionItem({ session, labels = [], subtitle = '', isActive, onSelect, 
           )}
         </span>
       </span>
-      {(labels.length > 0 || subtitle) && !editing && (
-        <span className="col-span-2 mt-0.5 flex flex-wrap items-center gap-1 min-w-0 text-[10px] leading-4">
-          {subtitle && <span className="truncate text-faint max-w-full">{subtitle}</span>}
-          {labels.map(label => (
-            <span key={label} className="rounded px-1 border border-line text-faint truncate max-w-[10rem]" title={label}>{label}</span>
-          ))}
-        </span>
+      {subtitle && !editing && (
+        <span className="col-span-2 truncate text-[11.5px] leading-4 text-faint">{subtitle}</span>
       )}
     </div>
   )

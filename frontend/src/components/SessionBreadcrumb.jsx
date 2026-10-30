@@ -74,36 +74,36 @@ export default function SessionBreadcrumb({ meta }) {
   }
 
   return (
-    <nav className="flex items-center gap-1 min-w-0 text-[15px]" aria-label="Session location">
-      <div className="relative min-w-0 shrink">
-        <button
-          type="button"
-          onClick={() => setOpen(v => v === 'project' ? null : 'project')}
-          aria-haspopup="listbox"
-          aria-expanded={open === 'project'}
-          className={`max-w-[16rem] truncate rounded px-1.5 py-0.5 text-muted hover:text-text-bright hover:bg-surface-hover transition-colors ${open === 'project' ? 'bg-surface-hover text-text-bright' : ''}`}
-          title={`${projectName} — switch project`}
-        >
-          {projectName}
-        </button>
-        {open === 'project' && (
-          <BreadcrumbMenu items={projectItems} onChoose={chooseProject} onClose={() => setOpen(null)} filterPlaceholder="Find project" />
-        )}
-      </div>
-      <span className="text-faint select-none" aria-hidden="true">/</span>
+    <nav className="flex items-baseline gap-1.5 min-w-0" aria-label="Session location">
       <div className="relative min-w-0 shrink">
         <button
           type="button"
           onClick={() => setOpen(v => v === 'session' ? null : 'session')}
           aria-haspopup="listbox"
           aria-expanded={open === 'session'}
-          className={`max-w-[28rem] truncate rounded px-1.5 py-0.5 font-semibold text-text-bright hover:bg-surface-hover transition-colors ${open === 'session' ? 'bg-surface-hover' : ''}`}
+          className={`max-w-[32rem] truncate rounded px-1 -mx-1 font-display text-[20px] font-bold leading-tight text-text-bright hover:bg-surface-hover transition-colors ${open === 'session' ? 'bg-surface-hover' : ''}`}
           title={`${sessionTitle} — switch thread`}
         >
           {sessionTitle}
         </button>
         {open === 'session' && (
           <BreadcrumbMenu items={sessionItems} onChoose={chooseSession} onClose={() => setOpen(null)} filterPlaceholder="Find thread" />
+        )}
+      </div>
+      <span className="text-[13px] text-faint select-none">in</span>
+      <div className="relative min-w-0 shrink">
+        <button
+          type="button"
+          onClick={() => setOpen(v => v === 'project' ? null : 'project')}
+          aria-haspopup="listbox"
+          aria-expanded={open === 'project'}
+          className={`max-w-[16rem] truncate rounded px-1 -mx-1 text-[13px] text-muted hover:text-text-bright hover:bg-surface-hover transition-colors ${open === 'project' ? 'bg-surface-hover text-text-bright' : ''}`}
+          title={`${projectName} — switch project`}
+        >
+          {projectName}
+        </button>
+        {open === 'project' && (
+          <BreadcrumbMenu items={projectItems} onChoose={chooseProject} onClose={() => setOpen(null)} filterPlaceholder="Find project" />
         )}
       </div>
     </nav>
@@ -149,7 +149,7 @@ function BreadcrumbMenu({ items, onChoose, onClose, filterPlaceholder }) {
       ref={ref}
       tabIndex={-1}
       onKeyDown={onKeyDown}
-      className="absolute left-0 top-full mt-1 z-40 w-[22rem] max-w-[80vw] rounded-md border border-line bg-bg shadow-2xl text-[13px] font-normal outline-none"
+      className="absolute left-0 top-full mt-1 z-40 w-[22rem] max-w-[80vw] rounded-lg border border-line bg-panel shadow-2xl text-[13px] font-normal outline-none"
     >
       {showFilter && (
         <div className="p-1.5 border-b border-line">
@@ -178,9 +178,7 @@ function BreadcrumbMenu({ items, onChoose, onClose, filterPlaceholder }) {
             <span className="min-w-0 flex-1">
               <span className="block truncate">{item.label}</span>
               {item.tags?.length > 0 && (
-                <span className="flex flex-wrap gap-1 mt-0.5">
-                  {item.tags.map(tag => <span key={tag} className="rounded px-1 border border-line text-[10px] text-faint">{tag}</span>)}
-                </span>
+                <span className="block truncate text-[11.5px] text-faint">{item.tags.join(', ')}</span>
               )}
             </span>
             <span className="shrink-0 text-[11px] text-faint">{item.detail}</span>

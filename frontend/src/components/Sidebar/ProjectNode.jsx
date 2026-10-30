@@ -33,7 +33,7 @@ function ProjectNode({
 
   return (
     <div
-      className={`mb-2 rounded-md transition-colors ${dragOver ? 'bg-accent-soft ring-1 ring-accent/40' : containsActiveSession ? 'bg-accent-glow/40' : ''}`}
+      className={`mb-4 rounded-md transition-colors ${dragOver ? 'bg-accent-soft ring-1 ring-accent/40' : ''}`}
       onDragOver={e => {
         if (e.dataTransfer.types.includes('application/x-myharness-session')) {
           e.preventDefault(); setDragOver(true); e.dataTransfer.dropEffect = 'move'
@@ -49,7 +49,7 @@ function ProjectNode({
       }}
     >
       <div
-        className={`flex items-center gap-1.5 group rounded-md px-1.5 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70 ${containsActiveSession ? 'text-accent' : ''}`}
+        className={`flex items-center gap-1.5 group rounded-md px-1.5 py-0.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70`}
         tabIndex={0}
         role="group"
         onKeyDown={handleHeaderKeyDown}
@@ -72,7 +72,7 @@ function ProjectNode({
           />
         ) : (
           <span
-            className="text-[13px] font-semibold text-text-bright truncate cursor-pointer"
+            className="font-display text-[14px] font-medium text-muted truncate cursor-pointer"
             onDoubleClick={() => setEditing(true)}
             title={project.root ? `${project.name}\n${project.root}` : project.name}
           >
@@ -82,7 +82,13 @@ function ProjectNode({
         <span className="ml-1 text-[10px] text-faint tabular-nums">
           {filtering && sessions.length !== totalCount ? `${sessions.length}/${totalCount}` : totalCount}
         </span>
-        <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity ml-auto shrink-0">
+        <button
+          onClick={() => { setCollapsed(false); onCreateSession(project.id) }}
+          className="ml-auto shrink-0 text-faint hover:text-accent text-[15px] leading-none px-1"
+          title="New thread in this project"
+          aria-label={`New thread in ${project.name}`}
+        >+</button>
+        <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0">
           <button
             onClick={() => setEditing(true)}
             className="text-faint hover:text-accent text-[11px] px-0.5"
@@ -108,16 +114,11 @@ function ProjectNode({
             className="text-faint hover:text-ok text-[11px] px-0.5"
             title="Import thread backup (.zip)"
           >⇪</button>
-          <button
-            onClick={() => { setCollapsed(false); onCreateSession(project.id) }}
-            className="text-faint hover:text-ok text-[11px] px-0.5"
-            title="New thread"
-          >+</button>
         </div>
       </div>
 
       <div className={`collapse-grid ${open ? 'open' : ''}`}>
-        <div hidden={!open} className="mt-0.5 pl-4 space-y-px">
+        <div hidden={!open} className="mt-1 space-y-px">
           {sessions.length === 0 ? (
             <p className="text-[12px] text-faint italic py-1 px-2">{filtering ? 'No matching threads.' : 'No threads yet.'}</p>
           ) : sessions.map(s => (

@@ -1657,6 +1657,27 @@ def tool_plan_update(items) -> str:
     return summary
 
 
+MAX_TURN_NOTE_CHARS = 240
+
+
+def normalize_turn_note(text) -> str:
+    """Collapse a turn_note to one trimmed line; raises ValueError if empty."""
+    line = " ".join(str(text or "").split())
+    if not line:
+        raise ValueError("'text' must be a non-empty sentence.")
+    if len(line) > MAX_TURN_NOTE_CHARS:
+        line = line[: MAX_TURN_NOTE_CHARS - 3].rstrip() + "..."
+    return line
+
+
+def tool_turn_note(text) -> str:
+    try:
+        normalize_turn_note(text)
+    except ValueError as e:
+        return f"ERROR: {e}"
+    return "Noted."
+
+
 # How many tool calls may go by after a plan_update before the agent is
 # reminded that its published plan is stale.
 PLAN_REMINDER_AFTER_TOOL_CALLS = 6
@@ -2914,6 +2935,7 @@ _REQUIRED_ARGS = {
     "shell_check": ["job_id"],
     "shell_kill": ["job_id"],
     "plan_update": ["items"],
+    "turn_note": ["text"],
     "spawn_agent": ["task"],
     "send_message": ["target", "message"],
     "followup_task": ["target", "task"],

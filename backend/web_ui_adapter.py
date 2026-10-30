@@ -448,6 +448,9 @@ class WebUI:
     def show_plan_update(self, items: list[dict]) -> None:
         self._emit(EventType.PLAN_UPDATE, {"items": items})
 
+    def show_turn_note(self, text: str) -> None:
+        self._emit(EventType.TURN_NOTE, {"text": text})
+
     def show_generated_artifact(self, path: str, media_type: str) -> None:
         version = str(time.time_ns())
         try:

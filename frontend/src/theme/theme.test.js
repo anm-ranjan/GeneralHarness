@@ -6,6 +6,9 @@ import { GLASS_PRESETS, applyTokens, auditTokens, completePalette, deriveTokens,
 import { PALETTES, findPalette } from './palettes.js'
 import { exportPalette, importPalette } from './importExport.js'
 
+// The pre-Meadow default look, pinned so the original-token tests keep meaning.
+const EMBER = { paletteId: 'ember', fontId: 'default', glassId: 'full' }
+
 test('parseHex handles 3, 6 and 8 digit forms', () => {
   assert.deepEqual(parseHex('#fff'), { r: 255, g: 255, b: 255, a: 1 })
   assert.deepEqual(parseHex('101214'), { r: 16, g: 18, b: 20, a: 1 })
@@ -32,7 +35,7 @@ test('contrastRatio matches known WCAG values', () => {
 })
 
 test('the default palette reproduces the original index.css tokens', () => {
-  const tokens = deriveTokens(findPalette('ember'), normalizeSpec({}))
+  const tokens = deriveTokens(findPalette('ember'), normalizeSpec(EMBER))
   assert.equal(tokens['--color-bg'], '#101214')
   assert.equal(tokens['--color-panel'], 'rgba(22, 24, 27, 0.82)')
   assert.equal(tokens['--color-surface'], 'rgba(31, 35, 40, 0.72)')
@@ -52,9 +55,9 @@ test('the default palette reproduces the original index.css tokens', () => {
 })
 
 test('every bundled palette derives a complete, valid token set', () => {
-  const reference = Object.keys(deriveTokens(findPalette('ember'), normalizeSpec({})))
+  const reference = Object.keys(deriveTokens(findPalette('ember'), normalizeSpec(EMBER)))
   for (const palette of PALETTES) {
-    const tokens = deriveTokens(palette, normalizeSpec({}))
+    const tokens = deriveTokens(palette, normalizeSpec(EMBER))
     assert.deepEqual(Object.keys(tokens), reference, `${palette.id} token keys`)
     for (const [key, value] of Object.entries(tokens)) {
       assert.ok(typeof value === 'string' && value.length > 0, `${palette.id} ${key} empty`)
@@ -66,7 +69,7 @@ test('every bundled palette derives a complete, valid token set', () => {
 
 test('bundled palettes keep body text readable on their own background', () => {
   for (const palette of PALETTES) {
-    const tokens = deriveTokens(palette, normalizeSpec({}))
+    const tokens = deriveTokens(palette, normalizeSpec(EMBER))
     const [body] = auditTokens(tokens)
     assert.ok(body.ratio >= 4.5, `${palette.id} body contrast ${body.ratio}`)
   }
@@ -89,8 +92,8 @@ test('accent override wins over the palette accent and retints derivatives', () 
 })
 
 test('glass level pushes surfaces toward opaque', () => {
-  const full = deriveTokens(findPalette('ember'), normalizeSpec({ glassId: 'full' }))
-  const off = deriveTokens(findPalette('ember'), normalizeSpec({ glassId: 'off' }))
+  const full = deriveTokens(findPalette('ember'), normalizeSpec({ ...EMBER, glassId: 'full' }))
+  const off = deriveTokens(findPalette('ember'), normalizeSpec({ ...EMBER, glassId: 'off' }))
   assert.equal(full['--color-panel'], 'rgba(22, 24, 27, 0.82)')
   assert.equal(off['--color-panel'], '#16181b')
   assert.equal(off['--glass-blur'], '0px')
@@ -98,8 +101,8 @@ test('glass level pushes surfaces toward opaque', () => {
 })
 
 test('light palettes invert the code-block wash and the console scanline', () => {
-  const dark = deriveTokens(findPalette('ember'), normalizeSpec({}))
-  const light = deriveTokens(findPalette('github-light'), normalizeSpec({}))
+  const dark = deriveTokens(findPalette('ember'), normalizeSpec(EMBER))
+  const light = deriveTokens(findPalette('github-light'), normalizeSpec(EMBER))
   assert.equal(dark['--color-scanline'], 'rgba(255, 255, 255, 0.035)')
   assert.equal(light['--color-scanline'], 'rgba(0, 0, 0, 0.035)')
   assert.equal(dark['--color-code-bg'], 'rgba(0, 0, 0, 0.35)')
@@ -117,17 +120,17 @@ test('overrides are applied last and ignore junk keys', () => {
 
 test('normalizeSpec falls back for unknown ids and bad accents', () => {
   const spec = normalizeSpec({ fontId: 'nope', radiusId: 'nope', glassId: 'nope', accent: 'blue' })
-  assert.equal(spec.fontId, 'default')
+  assert.equal(spec.fontId, 'meadow')
   assert.equal(spec.radiusId, 'default')
-  assert.equal(spec.glassId, 'full')
+  assert.equal(spec.glassId, 'off')
   assert.equal(spec.accent, null)
-  assert.equal(normalizeSpec(null).paletteId, 'ember')
+  assert.equal(normalizeSpec(null).paletteId, 'meadow')
 })
 
 test('findPalette prefers user palettes and falls back to the default', () => {
   const custom = { id: 'nord', name: 'My Nord', bg: '#000000', text: '#ffffff', accent: '#ff0000' }
   assert.equal(findPalette('nord', [custom]).name, 'My Nord')
-  assert.equal(findPalette('does-not-exist').id, 'ember')
+  assert.equal(findPalette('does-not-exist').id, 'meadow')
 })
 
 test('applyTokens writes to a target and snapshots round-trip', () => {
@@ -210,7 +213,7 @@ test('imported palettes derive a full token set', () => {
   const { palette } = importPalette(JSON.stringify({
     name: 'Sparse', colors: { 'editor.background': '#101010', 'editor.foreground': '#eeeeee' },
   }))
-  const tokens = deriveTokens(palette, normalizeSpec({}))
+  const tokens = deriveTokens(palette, normalizeSpec(EMBER))
   for (const value of Object.values(tokens)) {
     assert.ok(!String(value).includes('undefined'))
   }
@@ -229,4 +232,16 @@ test('import reports errors instead of throwing', () => {
   assert.match(importPalette('').error, /Nothing/)
   assert.ok(importPalette('%%%not a theme%%%').error)
   assert.ok(importPalette(JSON.stringify({ hello: 'world' })).error)
+})
+
+test('meadow is the default and passes every readability check', () => {
+  const tokens = deriveTokens(findPalette('meadow'), normalizeSpec({}))
+  assert.equal(tokens['--appearance'], 'light')
+  assert.equal(tokens['--glass-blur'], '0px')
+  assert.match(tokens['--font-sans'], /Atkinson Hyperlegible/)
+  assert.match(tokens['--font-display'], /Bricolage Grotesque/)
+  for (const check of auditTokens(tokens)) assert.ok(check.ok, `${check.label} ${check.ratio} < ${check.min}`)
+  // Faint text sits behind meta lines and placeholders, so hold it near 3:1.
+  assert.ok(contrastRatio(tokens['--color-faint'], tokens['--color-bg']) >= 3)
+  assert.ok(contrastRatio(tokens['--color-danger'], tokens['--color-panel']) >= 4.5)
 })
