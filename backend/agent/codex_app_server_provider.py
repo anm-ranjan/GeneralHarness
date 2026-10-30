@@ -474,6 +474,8 @@ def _allowed_paths_block() -> str:
 
 def _web_output_block() -> str:
     return (
+        "Reply, and write any chart titles and labels, in the language of the user's latest message; "
+        "keep stored data values (names, categories) exactly as they are. "
         "Showing results: this is a web UI. Never open GUI apps, browsers, or Computer Use tools to "
         "display something. Save images as PNG and embed them with Markdown image syntax and an "
         "absolute path. "
