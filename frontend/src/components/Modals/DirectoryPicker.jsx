@@ -13,6 +13,8 @@ export default function DirectoryPicker() {
   const [directPath, setDirectPath] = useState('')
   const [message, setMessage] = useState('')
   const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState(null) // null = closed, string = name being typed
+  const [makingFolder, setMakingFolder] = useState(false)
 
   async function loadDir(path) {
     try {
@@ -51,6 +53,27 @@ export default function DirectoryPicker() {
     }
   }
 
+  // Create the folder inside the one being viewed, then step into it so
+  // "Select this directory" picks the new folder.
+  async function handleNewFolder(e) {
+    e.preventDefault()
+    const name = (newName || '').trim()
+    if (!name || !currentPath || makingFolder) return
+    setMakingFolder(true)
+    setMessage('')
+    try {
+      const data = await api('POST', '/api/browse/mkdir', { parent: currentPath, name })
+      setNewName(null)
+      await loadDir(data.path)
+    } catch (err) {
+      setMessage(err.status === 403
+        ? 'This path is not within the allowed directories.'
+        : (err.detail || `Could not create the folder: ${err.message}`))
+    } finally {
+      setMakingFolder(false)
+    }
+  }
+
   function handleDirectPathSubmit(e) {
     e.preventDefault()
     if (directPath.trim()) loadDir(directPath.trim())
@@ -83,6 +106,43 @@ export default function DirectoryPicker() {
               Go
             </button>
           </form>
+          {newName === null ? (
+            <button
+              type="button"
+              onClick={() => setNewName('')}
+              disabled={isRootList || !currentPath}
+              title={isRootList ? 'Open a folder first' : 'Create a folder here'}
+              className="mt-2 px-3 py-1 text-[12px] font-medium text-muted border border-line rounded hover:text-text-bright hover:border-line-hover transition-colors disabled:opacity-40"
+            >
+              New folder
+            </button>
+          ) : (
+            <form onSubmit={handleNewFolder} className="flex gap-2 mt-2">
+              <input
+                autoFocus
+                type="text"
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); setNewName(null) } }}
+                placeholder="New folder name"
+                className="flex-1 bg-surface border border-line rounded px-3 py-1.5 text-[13px] text-text-default placeholder:text-faint outline-none focus:border-line-hover"
+              />
+              <button
+                type="submit"
+                disabled={makingFolder || !newName.trim()}
+                className="px-3 py-1.5 text-[12px] font-medium text-accent border border-accent/30 rounded hover:bg-accent-soft transition-colors disabled:opacity-40"
+              >
+                {makingFolder ? 'Creating...' : 'Create'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setNewName(null)}
+                className="px-3 py-1.5 text-[12px] text-muted border border-line rounded hover:bg-surface transition-colors"
+              >
+                Cancel
+              </button>
+            </form>
+          )}
           {message && <p className="text-[12px] text-danger mt-2">{message}</p>}
         </div>
 

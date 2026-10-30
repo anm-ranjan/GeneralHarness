@@ -22,7 +22,7 @@ import credential_store
 import performance_log
 import utils
 from web_desktop import _is_desktop_request
-from web_models import AudioTranscriptionRequest, BrowseDirectoryRequest, CredentialUpdateRequest
+from web_models import AudioTranscriptionRequest, BrowseDirectoryRequest, CreateDirectoryRequest, CredentialUpdateRequest
 
 import web_app
 
@@ -315,6 +315,32 @@ def browse_directory(req: BrowseDirectoryRequest):
         "parent": parent,
         "entries": entries,
     }
+
+
+@router.post("/api/browse/mkdir")
+def create_directory(req: CreateDirectoryRequest):
+    """Create one new folder inside an existing allowed folder (the picker's
+    "New folder"). A single path component only: no nesting, no traversal."""
+    name = req.name.strip()
+    if not name or name in {".", ".."} or "/" in name or "\\" in name or "\x00" in name:
+        raise HTTPException(status_code=400, detail="Enter a folder name without slashes")
+    parent = web_app._resolve_path(req.parent)
+    if not utils.is_path_allowed(parent):
+        raise HTTPException(status_code=403, detail="Path not within allowed paths")
+    if not os.path.isdir(parent):
+        raise HTTPException(status_code=404, detail="Not a directory")
+    target = os.path.join(parent, name)
+    if not utils.is_path_allowed(target):
+        raise HTTPException(status_code=403, detail="Path not within allowed paths")
+    try:
+        os.mkdir(target)
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail=f"A folder named '{name}' already exists")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Permission denied")
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not create the folder: {exc.strerror or exc}")
+    return {"path": target, "name": name}
 
 
 @router.get("/api/files/image")

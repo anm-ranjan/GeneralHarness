@@ -203,6 +203,11 @@ class BrowseDirectoryRequest(BaseModel):
     path: str = ""
 
 
+class CreateDirectoryRequest(BaseModel):
+    parent: str
+    name: str
+
+
 class ApprovalResponse(BaseModel):
     approval_id: str
     approved: bool
