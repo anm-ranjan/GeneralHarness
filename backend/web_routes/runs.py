@@ -53,6 +53,30 @@ def _request_attachments(req: SendMessageRequest) -> list:
     return req.attachments or req.images or []
 
 
+@router.get("/api/sessions/{session_id}/agents")
+def list_agents(session_id: str):
+    """Native child agents of the active run. Codex and Claude report theirs
+    through events only, so they are not listed here."""
+    run = web_app._manager.get_active_run(session_id)
+    if run is None or run.orchestrator is None:
+        return {"agents": []}
+    return {"agents": run.orchestrator.list_agents()}
+
+
+@router.post("/api/sessions/{session_id}/agents/{agent_path:path}/interrupt")
+def interrupt_agent(session_id: str, agent_path: str):
+    """Stop one native child agent (and its descendants). The root agent is
+    protected; stop the run itself to end that."""
+    run = web_app._manager.get_active_run(session_id)
+    if run is None or run.orchestrator is None:
+        raise HTTPException(status_code=404, detail="No native orchestration run")
+    target = agent_path if agent_path.startswith("/") else f"/{agent_path}"
+    result = run.orchestrator.interrupt_agent("/root", target)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
 @router.websocket("/api/events")
 async def global_events(websocket: WebSocket):
     """Application-level stream of run-state changes across all sessions:

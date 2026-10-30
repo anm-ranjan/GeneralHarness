@@ -343,6 +343,7 @@ from web_routes.sessions import (  # noqa: F401
     create_project,
     create_session,
     create_task,
+    delete_last_prompt,
     delete_project,
     delete_session,
     delete_task,
@@ -363,6 +364,8 @@ from web_routes.sessions import (  # noqa: F401
 from web_routes.runs import (  # noqa: F401
     _QueueReorderRequest,
     cancel_run,
+    interrupt_agent,
+    list_agents,
     remove_queued_message,
     reorder_queued_messages,
     resolve_approval,

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildTurns, formatElapsed, notesForTurn, nowLine, sameTurn, summarizeTools, turnDurationMs } from './turnModel.js'
+import { buildTurns, formatElapsed, notesForTurn, nowLine, sameTurn, summarizeTools, turnDurationMs, unansweredLastTurn } from './turnModel.js'
 
 const tool = (name, statusLine, extra = {}) => ({ name, statusLine, status: 'done', ...extra })
 
@@ -146,4 +146,24 @@ test('without model notes the rule-based notes are used unchanged', () => {
     { type: 'work_group', startTime: 1, tools: [tool('file_read', 'Read a.py')] },
   ])
   assert.deepEqual(notesForTurn(turns[0]).map(n => n.text), ['Read a.py.'])
+})
+
+test('the latest prompt is unanswered when it has no assistant text and nothing is running', () => {
+  const failed = buildTurns([
+    { type: 'user_message', text: 'first' },
+    { type: 'assistant_message', markdown: 'answer' },
+    { type: 'user_message', text: 'second' },
+    { type: 'work_group', startTime: 1, tools: [tool('file_read', 'Read a.py')] },
+    { type: 'error', text: 'FhGenie timed out' },
+  ])
+  assert.equal(unansweredLastTurn(failed, false), failed[1])
+  assert.equal(unansweredLastTurn(failed, true), null)
+})
+
+test('an answered, streaming, empty or prompt-less last turn offers nothing', () => {
+  assert.equal(unansweredLastTurn(buildTurns([{ type: 'user_message', text: 'q' }, { type: 'assistant_message', markdown: 'a' }]), false), null)
+  assert.equal(unansweredLastTurn(buildTurns([{ type: 'user_message', text: 'q' }, { type: 'assistant_stream', text: 'par' }]), false), null)
+  assert.notEqual(unansweredLastTurn(buildTurns([{ type: 'user_message', text: 'q' }, { type: 'assistant_message', markdown: '  ' }]), false), null)
+  assert.equal(unansweredLastTurn(buildTurns([{ type: 'status', text: 'only a status' }]), false), null)
+  assert.equal(unansweredLastTurn([], false), null)
 })

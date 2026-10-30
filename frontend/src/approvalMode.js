@@ -1,6 +1,7 @@
 // Plain-language names for the approval modes the backend exposes through
 // `/approve <mode>`. Unknown modes are shown as-is rather than hidden.
 export const APPROVAL_MODES = {
+  always_ask: 'Asks before changes and commands',
   shell_only: 'Asks before shell commands',
   auto_approve: 'Runs commands without asking',
 }

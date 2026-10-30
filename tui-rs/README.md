@@ -52,6 +52,13 @@ newline support; classic `cmd.exe` windows need `Alt+Enter` instead.
   newlines. The TUI enables the kitty keyboard protocol when the terminal
   supports it so Shift+Enter is distinguishable from Enter; in terminals
   without that support (e.g. macOS Terminal.app), use `Alt+Enter` instead
+- Pasting: the TUI relies on bracketed paste to keep a paste's newlines out of
+  the send path. When a terminal or multiplexer doesn't forward bracketed
+  paste (common over tmux passthrough or some SSH setups), a multi-line paste
+  arrives as a burst of individual key events instead; the TUI detects an
+  `Enter` that is immediately followed by more already-buffered input and
+  treats it as a newline rather than a submit, so pasted multi-line text still
+  lands as one draft
 - Pasting an image: on `Ctrl+V`/`Cmd+V` the TUI checks the OS clipboard for
   image data (macOS and Windows natively, Linux under X11) before falling
   back to pasted text, and attaches it to the next sent message the same way

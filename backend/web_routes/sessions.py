@@ -14,6 +14,7 @@ import base64
 import session_backup
 import session_export
 import session_search
+import turn_delete
 import utils
 from pydantic import BaseModel as _PydanticBaseModel
 from session_store import CHATS_PROJECT_ID, CHATS_TASK_ID
@@ -227,6 +228,41 @@ def delete_session(session_id: str):
     _file_snapshots.pop(session_id, None)
     web_app._discard_run_lock(session_id)
     return {"status": "deleted"}
+
+
+@router.delete("/api/sessions/{session_id}/last-prompt")
+def delete_last_prompt(session_id: str):
+    """Remove the latest prompt when it never got a reply (failed, timed out or
+    stopped), so it can be sent again without duplicates piling up. Answered
+    prompts are part of the model's context and are refused. Native sessions
+    only: Codex and Claude keep their context in the provider's own thread,
+    where a failed turn may still be remembered."""
+    with web_app._run_lock_for(session_id):
+        meta = web_app._store.load_session(session_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if meta.provider != "native":
+            raise HTTPException(
+                status_code=409,
+                detail="This provider keeps its own conversation history, so a prompt cannot be removed from here. Use Resend instead.",
+            )
+        if web_app._manager.get_active_run(session_id):
+            raise HTTPException(status_code=409, detail="Stop the run before deleting its prompt.")
+        start, events = web_app._store.last_prompt_events(session_id)
+        reason = turn_delete.assess_last_prompt(events)
+        if reason:
+            raise HTTPException(status_code=409, detail=reason)
+        prompt = events[0].data or {}
+        try:
+            removed = web_app._store.archive_tail(session_id, start)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        return {
+            "status": "deleted",
+            "removed_events": removed,
+            "text": str(prompt.get("text", "")),
+            "attachments": prompt.get("attachments") or prompt.get("images") or [],
+        }
 
 
 @router.patch("/api/sessions/{session_id}")

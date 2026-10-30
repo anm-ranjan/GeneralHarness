@@ -235,6 +235,9 @@ if the user should be asked about it.
 | POST | `/api/sessions` | Create a session |
 | POST | `/api/chats` | Create a sandboxed chat |
 | GET/PATCH/DELETE | `/api/sessions/{id}` | Read, rename, delete a session |
+| DELETE | `/api/sessions/{id}/last-prompt` | Delete the latest prompt when it never got a reply, native sessions only. Allowed when the run is idle and ended `interrupted`, `error` or `api timeout` (or never finished), the cases where `run_agent` rolls the context back; `max iterations reached`, `no content returned`, `completed` and answered prompts are refused with 409. Its events move to the `deleted_events` table. Rules in `backend/turn_delete.py` |
+| GET | `/api/sessions/{id}/agents` | Native child agents of the active run |
+| POST | `/api/sessions/{id}/agents/{agent_path}/interrupt` | Stop one native child agent (not the root) |
 | GET | `/api/sessions/{id}/model-options` | Provider model catalog and supported thinking levels |
 | PATCH | `/api/sessions/{id}/run-settings` | Persist the session model and thinking level |
 | POST | `/api/sessions/{id}/move` | Move a session to another task |

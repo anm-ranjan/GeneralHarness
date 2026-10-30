@@ -1,14 +1,12 @@
 import { isSlashCommand } from './constants.js'
 import { parseContextUsage } from './utils.js'
 import { artifactPath } from './artifacts.js'
+import { agentStatus, isAgentStateEvent } from './agents.js'
 
 function previewLink(path, name = '') {
   const label = (name || String(path).split(/[\\/]/).pop()).replace(/[\[\]]/g, '')
   return `[View ${label}](${encodeURI(path).replace(/\(/g, '%28').replace(/\)/g, '%29')})`
 }
-
-// Child-agent progress (tool calls, status lines) is shown only in verbose mode.
-const AGENT_LIFECYCLE_ACTIONS = new Set(['spawned', 'started', 'completed', 'failed', 'interrupted', 'error'])
 
 export function toolDetail(_name, args) {
   if (!args) return ''
@@ -113,6 +111,8 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
 
     case 'user_message': {
       if (stateRef.current.silentCommand || isSlashCommand(data.text)) break
+      // A new prompt starts a fresh set of agents; the last turn's are done with.
+      if (!data.steering && Object.keys(stateRef.current.agentsById || {}).length) dispatch({ type: 'CLEAR_AGENTS' })
       const isLiveRunStart = !stateRef.current.isReplaying && !stateRef.current.isRunning
       if (isLiveRunStart) {
         dispatch({ type: 'SET_RUNNING' })
@@ -358,11 +358,17 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       break
 
     case 'agent_event': {
+      // State changes feed the Agents list in the margin notes, in every
+      // verbosity mode. Progress lines (what a child is reading or running) stay
+      // verbose-only status items.
+      if (isAgentStateEvent(data)) {
+        const status = agentStatus(data)
+        dispatch({ type: 'UPSERT_AGENT', payload: status === undefined ? { ...data } : { ...data, status } })
+      }
       const verbose = stateRef.current.verbose
-      if (!verbose && !AGENT_LIFECYCLE_ACTIONS.has(data.action)) break
+      if (!verbose) break
       const agent = data.agent_path || data.agent_id || 'agent'
-      let detail = String(data.error || data.result || data.text || data.task || data.status || '')
-      if (!verbose && detail.length > 240) detail = `${detail.slice(0, 240)}…`
+      const detail = String(data.error || data.result || data.text || data.task || data.status || '')
       const text = `[${agent}] ${data.action || 'updated'}${detail ? `: ${detail}` : ''}`
       dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: data.action === 'error' || data.action === 'failed' ? 'error' : 'status', text } })
       break
@@ -398,6 +404,7 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       dispatch({ type: 'CLEAR_ASSISTANT_STREAM' })
       dispatch({ type: 'CLEAR_THINKING_STREAM' })
       dispatch({ type: 'FINALIZE_WORK_GROUP' })
+      if (Object.keys(stateRef.current.agentsById || {}).length) dispatch({ type: 'FINALIZE_AGENTS' })
       if (data.reason === 'max iterations reached') {
         dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: 'Max iterations were reached and no response was generated. Increase the limit with /maxiters n and try again.' } })
       } else if (data.reason === 'interrupted') {

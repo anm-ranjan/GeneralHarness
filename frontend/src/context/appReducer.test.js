@@ -373,3 +373,62 @@ test('sidebar visibility toggles and view accepts only known values', () => {
   assert.equal(reducer(initialState, { type: 'SET_SIDEBAR_VIEW', payload: 'activity' }).sidebarView, 'activity')
   assert.equal(reducer(initialState, { type: 'SET_SIDEBAR_VIEW', payload: 'bogus' }).sidebarView, 'projects')
 })
+
+test('DROP_LAST_TURN removes the latest real prompt and everything after it', () => {
+  const stage = [
+    { type: 'user_message', text: 'first' },
+    { type: 'assistant_message', markdown: 'answer' },
+    { type: 'user_message', text: 'second' },
+    { type: 'user_message', text: 'nudge', steering: true },
+    { type: 'work_group', tools: [] },
+    { type: 'error', text: 'timed out' },
+  ]
+  const before = { ...initialState, stageItems: stage, eventTotal: 10, plan: [{ content: 'step', status: 'pending' }] }
+  const after = reducer(before, { type: 'DROP_LAST_TURN', payload: { removedEvents: 4 } })
+  assert.deepEqual(after.stageItems.map(i => i.text || i.markdown), ['first', 'answer'])
+  assert.equal(after.eventTotal, 6)
+  assert.deepEqual(after.plan, [])
+})
+
+test('DROP_LAST_TURN is a no-op without a prompt and never drives the total below zero', () => {
+  const noPrompt = { ...initialState, stageItems: [{ type: 'status', text: 'x' }] }
+  assert.equal(reducer(noPrompt, { type: 'DROP_LAST_TURN', payload: { removedEvents: 2 } }), noPrompt)
+  const small = { ...initialState, stageItems: [{ type: 'user_message', text: 'a' }], eventTotal: 1 }
+  assert.equal(reducer(small, { type: 'DROP_LAST_TURN', payload: { removedEvents: 9 } }).eventTotal, 0)
+  const unknownTotal = { ...initialState, stageItems: [{ type: 'user_message', text: 'a' }] }
+  assert.equal(reducer(unknownTotal, { type: 'DROP_LAST_TURN', payload: {} }).eventTotal, null)
+})
+
+test('RESTORE_DRAFT hands a prompt to the composer and CLEAR_DRAFT_RESTORE takes it back', () => {
+  const draft = { sessionId: 's1', text: 'again', attachments: [], send: true }
+  const set = reducer(initialState, { type: 'RESTORE_DRAFT', payload: draft })
+  assert.deepEqual(set.draftRestore, draft)
+  assert.equal(reducer(set, { type: 'CLEAR_DRAFT_RESTORE' }).draftRestore, null)
+  // Clearing nothing keeps the identical state, so it cannot cause a re-render.
+  assert.equal(reducer(initialState, { type: 'CLEAR_DRAFT_RESTORE' }), initialState)
+})
+
+test('UPSERT_AGENT merges events for one agent whichever id they carry', () => {
+  const spawned = reducer(initialState, { type: 'UPSERT_AGENT', payload: { agent_id: 'thr_1', agent_path: '/root/a', status: 'pending', role: 'worker' } })
+  const running = reducer(spawned, { type: 'UPSERT_AGENT', payload: { agent_path: '/root/a', status: 'running' } })
+  assert.equal(Object.keys(running.agentsById).length, 1)
+  assert.deepEqual(running.agentsById.thr_1, { agent_id: 'thr_1', agent_path: '/root/a', status: 'running', role: 'worker' })
+  assert.equal(reducer(initialState, { type: 'UPSERT_AGENT', payload: { status: 'running' } }), initialState)
+})
+
+test('FINALIZE_AGENTS stops what was still going, CLEAR_AGENTS empties, and sessions start clean', () => {
+  const agents = {
+    a: { agent_path: '/root/a', status: 'running' },
+    b: { agent_path: '/root/b', status: 'completed' },
+    c: { agent_path: '/root/c', status: 'interrupting' },
+    d: { agent_path: '/root/d', status: 'pending' },
+  }
+  const done = reducer({ ...initialState, agentsById: agents }, { type: 'FINALIZE_AGENTS' })
+  assert.deepEqual(Object.values(done.agentsById).map(a => a.status), ['interrupted', 'completed', 'interrupted', 'interrupted'])
+  const cleared = reducer({ ...initialState, agentsById: agents }, { type: 'CLEAR_AGENTS' })
+  assert.deepEqual(cleared.agentsById, {})
+  assert.equal(reducer(initialState, { type: 'CLEAR_AGENTS' }), initialState)
+  const selected = reducer({ ...initialState, agentsById: agents }, { type: 'SELECT_SESSION', payload: { meta: { id: 's1', status: 'idle' }, workspaceRoot: '' } })
+  assert.deepEqual(selected.agentsById, {})
+  assert.deepEqual(reducer({ ...initialState, agentsById: agents }, { type: 'CLEAR_SESSION' }).agentsById, {})
+})

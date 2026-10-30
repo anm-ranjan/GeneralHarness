@@ -20,6 +20,9 @@ export default function Composer() {
   const [stashesOpen, setStashesOpen] = useState(false)
   const [sending, setSending] = useState(false)
   const [stashArmed, setStashArmed] = useState(false)
+  const [sendTick, setSendTick] = useState(0)
+  const sendRestoredRef = useRef(false)
+  const previousDraftRef = useRef(null)
   const holdTimerRef = useRef(null)
   const stashArmedRef = useRef(false)
   const stashDialogRef = useRef(null)
@@ -53,6 +56,37 @@ export default function Composer() {
     if (!state.currentSessionId) return
     localStorage.setItem(draftKey(state.activeHostId, state.currentSessionId), input)
   }, [state.currentSessionId, input])
+
+  // Resend / Retry / Delete hand a prompt back through the store. Delete only
+  // fills the box. Resend and Retry then send it through handleSend, so every
+  // normal guard applies (provider checks, queueing); a draft that was being
+  // typed is put back once the send went through.
+  const restoreRequest = state.draftRestore
+  useEffect(() => {
+    if (!restoreRequest || restoreRequest.sessionId !== state.currentSessionId) return
+    dispatch({ type: 'CLEAR_DRAFT_RESTORE' })
+    if (restoreRequest.send) {
+      previousDraftRef.current = { input, attachments }
+      sendRestoredRef.current = true
+    }
+    setInput(restoreRequest.text || '')
+    setAttachments(restoreRequest.attachments || [])
+    setAttachmentError('')
+    setSendTick(tick => tick + 1)
+  }, [restoreRequest])
+
+  useEffect(() => {
+    if (!sendRestoredRef.current) return
+    sendRestoredRef.current = false
+    const previous = previousDraftRef.current
+    previousDraftRef.current = null
+    handleSend().then(sent => {
+      if (sent && previous && (previous.input.trim() || previous.attachments.length)) {
+        setInput(previous.input)
+        setAttachments(previous.attachments)
+      }
+    })
+  }, [sendTick])
 
   useEffect(() => {
     if (!recording) return
@@ -184,8 +218,10 @@ export default function Composer() {
         setInput(''); setAttachments([]); setAttachmentError('')
         localStorage.removeItem(draftKey(state.activeHostId, sid))
         requestAnimationFrame(resizeInput)
+        return true
       }
     } finally { setSending(false) }
+    return false
   }
 
   async function fileToPayload(file) {

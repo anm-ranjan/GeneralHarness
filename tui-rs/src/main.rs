@@ -1612,6 +1612,7 @@ fn spawn_input_reader() -> mpsc::UnboundedReceiver<InputUpdate> {
             match event::poll(Duration::from_millis(100)) {
                 Ok(true) => match event::read() {
                     Ok(event) => {
+                        let event = downgrade_burst_enter(event);
                         if tx.send(InputUpdate::Event(event)).is_err() {
                             break;
                         }
@@ -1630,6 +1631,30 @@ fn spawn_input_reader() -> mpsc::UnboundedReceiver<InputUpdate> {
         }
     });
     rx
+}
+
+/// Terminals and multiplexers that don't forward bracketed paste (common over
+/// tmux passthrough or some SSH setups) deliver a multi-line paste as a rapid
+/// burst of individual key events, including a bare Enter for each embedded
+/// newline, which would otherwise submit the composer after every line. A
+/// real Enter keypress leaves the terminal idle right after; a pasted one is
+/// immediately followed by more input already sitting in the terminal's
+/// buffer. Detect that and route it through the existing Shift+Enter
+/// newline-insert path instead of submit.
+fn downgrade_burst_enter(event: Event) -> Event {
+    if let Event::Key(key) = event {
+        if key.code == KeyCode::Enter
+            && key.kind == KeyEventKind::Press
+            && key.modifiers.is_empty()
+            && matches!(event::poll(Duration::from_millis(0)), Ok(true))
+        {
+            let mut key = key;
+            key.modifiers |= KeyModifiers::SHIFT;
+            return Event::Key(key);
+        }
+        return Event::Key(key);
+    }
+    event
 }
 
 impl Drop for TerminalSession {

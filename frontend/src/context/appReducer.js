@@ -40,6 +40,8 @@ export const initialState = {
   queuedMessages: [],
   pendingSteering: [],
   plan: [],
+  // Child agents of the current run, keyed by agent id (see agents.js).
+  agentsById: {},
 
   contextPercent: 0,
   contextLabel: '',
@@ -81,6 +83,10 @@ export const initialState = {
   scrollTarget: null,
   eventWindowOffset: 0,
   eventTotal: null,
+
+  // A prompt to put back into the composer (Resend, Retry, Delete): { sessionId,
+  // text, attachments, send }. The composer consumes it and clears it.
+  draftRestore: null,
 
   // session_id -> 'running' | 'waiting_approval' for non-idle sessions,
   // fed by the application-level /api/events stream.
@@ -308,6 +314,7 @@ export function reducer(state, action) {
         queuedMessages: (meta.message_queue || []).map(queueItemView),
         pendingSteering: (meta.steering_queue || []).map(queueItemView),
         plan: [],
+        agentsById: {},
         touchedFiles: [],
         diffViewerFile: null,
         // The editor points at a path in the previous session's workspace.
@@ -340,6 +347,7 @@ export function reducer(state, action) {
         queuedMessages: [],
         pendingSteering: [],
         plan: [],
+        agentsById: {},
         isRunning: false,
         isCancelling: false,
         iterationN: null,
@@ -384,6 +392,54 @@ export function reducer(state, action) {
 
     case 'SET_PLAN':
       return { ...state, plan: action.payload || [] }
+
+    // The latest prompt was deleted on the server: drop it and everything after
+    // it from the stage (the log is cut at the same place), and forget the plan
+    // that belonged to it.
+    case 'DROP_LAST_TURN': {
+      const items = state.stageItems
+      let index = items.length - 1
+      while (index >= 0 && !(items[index].type === 'user_message' && !items[index].steering)) index--
+      if (index < 0) return state
+      const removed = Number(action.payload?.removedEvents) || 0
+      return {
+        ...state,
+        stageItems: items.slice(0, index),
+        plan: [],
+        eventTotal: state.eventTotal == null ? null : Math.max(0, state.eventTotal - removed),
+      }
+    }
+
+    // An agent_event that changes an agent's own state. Events for the same
+    // agent merge, whichever id they carry (native sends the path, Codex a thread id).
+    case 'UPSERT_AGENT': {
+      const agent = action.payload || {}
+      const known = state.agentsById || {}
+      const pathId = agent.agent_path && Object.keys(known).find(key => known[key]?.agent_path === agent.agent_path)
+      const id = agent.agent_id || pathId || agent.agent_path
+      if (!id) return state
+      return { ...state, agentsById: { ...known, [id]: { ...known[id], ...agent } } }
+    }
+
+    case 'CLEAR_AGENTS':
+      return Object.keys(state.agentsById || {}).length ? { ...state, agentsById: {} } : state
+
+    // The run ended: whatever was still working was cut off with it.
+    case 'FINALIZE_AGENTS': {
+      const agentsById = {}
+      for (const [id, agent] of Object.entries(state.agentsById || {})) {
+        agentsById[id] = agent.status === 'running' || agent.status === 'pending' || agent.status === 'interrupting'
+          ? { ...agent, status: 'interrupted' }
+          : agent
+      }
+      return { ...state, agentsById }
+    }
+
+    case 'RESTORE_DRAFT':
+      return { ...state, draftRestore: action.payload || null }
+
+    case 'CLEAR_DRAFT_RESTORE':
+      return state.draftRestore ? { ...state, draftRestore: null } : state
 
     case 'SET_WS_CONNECTED':
       return patched(state, { wsConnected: action.payload })

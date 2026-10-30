@@ -280,6 +280,20 @@ class SessionStore:
             CREATE INDEX IF NOT EXISTS events_session_type_sequence
                 ON events(session_id, type, sequence);
 
+            -- Prompts deleted from a transcript (see turn_delete). Additive: older
+            -- builds ignore the table, and it is cleared with its session.
+            CREATE TABLE IF NOT EXISTS deleted_events (
+                session_id TEXT NOT NULL,
+                deleted_at TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                event_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                data_json TEXT NOT NULL,
+                PRIMARY KEY(session_id, deleted_at, sequence),
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS change_manifests (
                 session_id TEXT NOT NULL,
                 run_id TEXT NOT NULL,
@@ -1195,6 +1209,51 @@ class SessionStore:
                 (session_id, count),
             ).fetchall()
         return [self._row_to_event(row) for row in reversed(rows)]
+
+    def last_prompt_events(self, session_id: str) -> tuple[int, list[EventEnvelope]]:
+        """(sequence, events) from the latest real prompt to the end of the log.
+
+        Reads only as much of the tail as needed. Returns (-1, []) when the log
+        holds no real prompt.
+        """
+        import turn_delete
+
+        total = self.event_count(session_id)
+        window = 200
+        while True:
+            events = self.load_recent_events(session_id, window)
+            index = turn_delete.last_prompt_index(events)
+            if index is not None:
+                with self._lock:
+                    first = self._conn.execute(
+                        "SELECT sequence FROM events WHERE session_id=? AND event_id=?",
+                        (session_id, events[index].id),
+                    ).fetchone()
+                if first is None:
+                    return -1, []
+                return first[0], events[index:]
+            if window >= total:
+                return -1, []
+            window *= 4
+
+    def archive_tail(self, session_id: str, start_sequence: int) -> int:
+        """Move events from `start_sequence` to the end into `deleted_events`.
+        Earlier events keep their sequence numbers, and new events continue
+        straight after them. Returns how many were moved; the originals stay in
+        the database."""
+        with self._lock, self._conn:
+            moved = self._conn.execute(
+                """INSERT INTO deleted_events(session_id,deleted_at,sequence,event_id,type,created_at,data_json)
+                   SELECT session_id, ?, sequence, event_id, type, created_at, data_json
+                   FROM events WHERE session_id=? AND sequence>=?""",
+                (datetime.now(timezone.utc).isoformat(), session_id, start_sequence),
+            ).rowcount
+            if moved <= 0:
+                raise ValueError("Nothing to remove at that position.")
+            self._conn.execute(
+                "DELETE FROM events WHERE session_id=? AND sequence>=?", (session_id, start_sequence)
+            )
+            return moved
 
     def export_events_jsonl(self, session_id: str) -> bytes:
         lines = [

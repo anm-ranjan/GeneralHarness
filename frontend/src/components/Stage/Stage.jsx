@@ -11,7 +11,8 @@ import StatusMessage from './StatusMessage'
 import ErrorMessage from './ErrorMessage'
 import InlineIndicator from './InlineIndicator'
 import TurnNotes from './TurnNotes'
-import { buildTurns, sameTurn } from '../../turnModel'
+import PromptActions from './PromptActions'
+import { buildTurns, sameTurn, unansweredLastTurn } from '../../turnModel'
 import ApprovalCard from './ApprovalCard'
 import QuestionCard from './QuestionCard'
 
@@ -149,6 +150,8 @@ export default function Stage() {
   }, [handleApproval, handleQuestion])
 
   const turns = useMemo(() => buildTurns(state.stageItems), [state.stageItems])
+  // The latest prompt, when it never got a reply: the one Retry / Delete apply to.
+  const unansweredTurn = useMemo(() => unansweredLastTurn(turns, state.isRunning), [turns, state.isRunning])
 
   if (!sessionId) {
     return <SplashScreen />
@@ -169,6 +172,7 @@ export default function Stage() {
             // of work, so they get no live line.
             live={state.isRunning && !state.silentCommand && i === turns.length - 1}
             isLast={i === turns.length - 1}
+            unanswered={turn === unansweredTurn}
           />
         ))}
       </div>
@@ -179,7 +183,7 @@ export default function Stage() {
 // One exchange: what was said on the left, what the agent did in the margin.
 // Below ~48rem of stage width the notes drop underneath. Settled turns skip
 // re-rendering while a later turn streams.
-const Turn = memo(function Turn({ turn, renderItem, live, isLast }) {
+const Turn = memo(function Turn({ turn, renderItem, live, isLast, unanswered }) {
   const talk = [...(turn.user ? [turn.user] : []), ...turn.talk]
   return (
     <section className="grid gap-x-10 gap-y-3 @3xl:grid-cols-[minmax(0,1fr)_17rem]">
@@ -187,9 +191,11 @@ const Turn = memo(function Turn({ turn, renderItem, live, isLast }) {
         {talk.map((item, i) => {
           const node = renderItem(item)
           if (node === null) return null
+          const isPrompt = item === turn.user
           return (
-            <div key={item._id || i} className="flex flex-col" data-evt-index={item.eventIndex ?? undefined}>
+            <div key={item._id || i} className={`flex flex-col ${isPrompt ? 'group/prompt' : ''}`} data-evt-index={item.eventIndex ?? undefined}>
               {node}
+              {isPrompt && !live && <PromptActions item={item} unanswered={unanswered} />}
             </div>
           )
         })}
@@ -204,4 +210,4 @@ const Turn = memo(function Turn({ turn, renderItem, live, isLast }) {
       </div>
     </section>
   )
-}, (a, b) => a.live === b.live && a.isLast === b.isLast && a.renderItem === b.renderItem && sameTurn(a.turn, b.turn))
+}, (a, b) => a.live === b.live && a.isLast === b.isLast && a.unanswered === b.unanswered && a.renderItem === b.renderItem && sameTurn(a.turn, b.turn))

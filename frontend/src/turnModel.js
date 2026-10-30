@@ -251,6 +251,23 @@ export function notesForTurn(turn) {
   return [...written, ...rules.filter(note => FACT_KINDS.has(note.kind) || note.tone === 'bad')]
 }
 
+/**
+ * The latest turn when its prompt went unanswered: nothing running, and no
+ * assistant text in it. The server makes the real decision (it checks how the
+ * run finished and refuses answered prompts); this only decides whether to
+ * offer the action.
+ */
+export function unansweredLastTurn(turns, running) {
+  if (running || !turns.length) return null
+  const last = turns[turns.length - 1]
+  if (!last.user) return null
+  const replied = last.talk.some(item => (
+    (item.type === 'assistant_message' && String(item.markdown || '').trim())
+    || item.type === 'assistant_stream'
+  ))
+  return replied ? null : last
+}
+
 function sameItems(a, b) {
   return a.length === b.length && a.every((item, i) => item === b[i])
 }

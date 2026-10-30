@@ -2,6 +2,9 @@ import { memo, useEffect, useMemo, useState } from 'react'
 import { useApp } from '../../context/AppContext'
 import useApi from '../../hooks/useApi'
 import { baseName, formatElapsed, notesForTurn, nowLine, turnDurationMs } from '../../turnModel'
+import { waitingPhrase } from '../../waitingPhrase'
+import { agentIsLive, agentLabel, agentStatusLabel, canInterruptAgent, sortedAgents } from '../../agents'
+import { api } from '../../api'
 import ThinkingBlock from './ThinkingBlock'
 import ToolCardCompact from './ToolCardCompact'
 
@@ -28,16 +31,23 @@ function LiveLine({ turn }) {
 
   const current = nowLine(turn.tools)
   const started = turn.startTime || state.lastActivityTime
+  // Time since the last sign of life: the run starting or the latest tool
+  // finishing. Each tool return restarts the waiting phrases at "Thinking…".
+  const lastToolEnd = turn.tools.reduce(
+    (latest, tool) => (tool.startedAt ? Math.max(latest, tool.startedAt + (tool.durationMs || 0)) : latest),
+    0,
+  )
+  const idleMs = now - Math.max(lastToolEnd, state.lastActivityTime || 0)
   const label = state.showCodexRunning && !current
-    ? 'Codex is working'
+    ? 'Codex is working…'
     : current
       ? null
-      : 'Thinking'
+      : waitingPhrase(idleMs)
 
   return (
     <div aria-live="polite">
       <p className="font-medium text-text-bright">
-        {label ? <span className="text-shimmer">{label}…</span> : <>{current.verb}{current.rest && <> <span className="font-mono text-[12px]">{current.rest}</span></>}…</>}
+        {label ? <span className="text-shimmer">{label}</span> : <>{current.verb}{current.rest && <> <span className="font-mono text-[12px]">{current.rest}</span></>}…</>}
       </p>
       <p className="mt-1">
         Running for {formatElapsed(now - started)}
@@ -62,6 +72,18 @@ function TurnNotes({ turn, live, isLast }) {
   const plan = state.plan || []
   const planDone = plan.filter(item => item.status === 'completed').length
   const showPlan = isLast && plan.length > 0 && (live || planDone < plan.length)
+  // Child agents belong to the latest turn; they stay listed after it ends so
+  // their outcome can be read, until the next prompt starts a fresh set.
+  const agents = useMemo(() => (isLast ? sortedAgents(state.agentsById) : []), [isLast, state.agentsById])
+
+  async function stopAgent(agent) {
+    const path = String(agent.agent_path || '').replace(/^\//, '').split('/').map(encodeURIComponent).join('/')
+    try {
+      await api('POST', `/api/sessions/${encodeURIComponent(state.currentSessionId)}/agents/${path}/interrupt`)
+    } catch (err) {
+      dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: err.detail || err.message } })
+    }
+  }
   const first = turn.tools.find(tool => tool.startedAt)
   const took = turnDurationMs(turn.tools)
 
@@ -71,7 +93,7 @@ function TurnNotes({ turn, live, isLast }) {
       .filter(Boolean)
   }
 
-  if (!live && !notes.length && !turn.thinking.length && !showPlan && !turn.tools.length) return null
+  if (!live && !notes.length && !turn.thinking.length && !showPlan && !turn.tools.length && !agents.length) return null
 
   return (
     <aside className="min-w-0 space-y-2 text-[13px] leading-snug text-muted" aria-label="What the agent did">
@@ -117,6 +139,36 @@ function TurnNotes({ turn, live, isLast }) {
             </li>
           ))}
         </ol>
+      )}
+
+      {agents.length > 0 && (
+        <div aria-label="Agents">
+          <p className="text-[12px] text-faint">Agents</p>
+          <ul className="space-y-0.5">
+            {agents.map(agent => (
+              <li key={agent.agent_id || agent.agent_path} title={agent.error || agent.task || ''}>
+                <div className="flex items-baseline gap-2">
+                  <span className={`min-w-0 flex-1 truncate ${agentIsLive(agent) ? 'text-text-bright' : ''}`}>
+                    {agentLabel(agent)}{agent.role ? ` · ${agent.role}` : ''}
+                  </span>
+                  <span className={`shrink-0 text-[12px] ${agent.status === 'failed' ? 'text-danger' : 'text-faint'}`}>{agentStatusLabel(agent.status)}</span>
+                  {canInterruptAgent(agent) && (
+                    <button
+                      type="button"
+                      onClick={() => stopAgent(agent)}
+                      className="shrink-0 text-[12px] text-faint underline decoration-line underline-offset-4 hover:text-danger"
+                    >
+                      stop
+                    </button>
+                  )}
+                </div>
+                {agent.status === 'failed' && agent.error && (
+                  <p className="truncate text-[12px] text-danger">{agent.error}</p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {live && <LiveLine turn={turn} />}

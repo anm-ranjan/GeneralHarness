@@ -45,16 +45,55 @@ test('toolDetail prefers useful fields', () => {
   assert.equal(toolDetail('content_search', { query: 'needle' }), 'needle')
 })
 
-test('subagent lifecycle events render as compact status items', () => {
-  const ctx = collect()
-  handleSessionEvent({
+test('subagent lifecycle events update the Agents list, and also show as status items when verbose', () => {
+  const event = {
     type: 'agent_event',
-    data: { agent_path: '/root/reviewer', action: 'completed', result: 'Looks good' },
-  }, ctx.dispatch, ctx.stateRef)
-  assert.deepEqual(ctx.actions[0], {
-    type: 'APPEND_STAGE_ITEM',
-    payload: { type: 'status', text: '[/root/reviewer] completed: Looks good' },
-  })
+    data: { agent_id: '/root/reviewer', agent_path: '/root/reviewer', action: 'completed', result: 'Looks good' },
+  }
+  const quiet = collect()
+  handleSessionEvent(event, quiet.dispatch, quiet.stateRef)
+  assert.equal(quiet.actions.length, 1)
+  assert.equal(quiet.actions[0].type, 'UPSERT_AGENT')
+  assert.equal(quiet.actions[0].payload.status, 'completed')
+
+  const verbose = collect({ verbose: true })
+  handleSessionEvent(event, verbose.dispatch, verbose.stateRef)
+  assert.deepEqual(verbose.actions.map(a => a.type), ['UPSERT_AGENT', 'APPEND_STAGE_ITEM'])
+  assert.deepEqual(verbose.actions[1].payload, { type: 'status', text: '[/root/reviewer] completed: Looks good' })
+})
+
+test('a failing child shows as an error item when verbose, and as a failed agent otherwise', () => {
+  const data = { agent_id: '/root/a', agent_path: '/root/a', action: 'failed', error: 'boom' }
+  const quiet = collect()
+  handleSessionEvent({ type: 'agent_event', data }, quiet.dispatch, quiet.stateRef)
+  assert.equal(quiet.actions[0].payload.status, 'failed')
+  assert.equal(quiet.actions[0].payload.error, 'boom')
+  const verbose = collect({ verbose: true })
+  handleSessionEvent({ type: 'agent_event', data }, verbose.dispatch, verbose.stateRef)
+  assert.equal(verbose.actions[1].payload.type, 'error')
+})
+
+test('Codex thread statuses reach the Agents list as working or idle', () => {
+  const ctx = collect()
+  handleSessionEvent({ type: 'agent_event', data: { provider: 'codex-app-server', action: 'status', agent_id: 'thr_1', status: 'active' } }, ctx.dispatch, ctx.stateRef)
+  assert.equal(ctx.actions[0].payload.status, 'running')
+})
+
+test('a new prompt clears last turn\'s agents and the end of a run finalizes the live ones', () => {
+  const withAgents = collect({ agentsById: { a: { agent_path: '/root/a', status: 'running' } } })
+  handleSessionEvent({ type: 'user_message', data: { text: 'next' } }, withAgents.dispatch, withAgents.stateRef)
+  assert.ok(withAgents.actions.some(a => a.type === 'CLEAR_AGENTS'))
+
+  const steering = collect({ agentsById: { a: { agent_path: '/root/a', status: 'running' } } })
+  handleSessionEvent({ type: 'user_message', data: { text: 'nudge', steering: true } }, steering.dispatch, steering.stateRef)
+  assert.ok(!steering.actions.some(a => a.type === 'CLEAR_AGENTS'))
+
+  const finishing = collect({ agentsById: { a: { agent_path: '/root/a', status: 'running' } } })
+  handleSessionEvent({ type: 'run_finished', data: { reason: 'completed' } }, finishing.dispatch, finishing.stateRef)
+  assert.ok(finishing.actions.some(a => a.type === 'FINALIZE_AGENTS'))
+  const idle = collect()
+  handleSessionEvent({ type: 'run_finished', data: { reason: 'completed' } }, idle.dispatch, idle.stateRef)
+  assert.ok(!idle.actions.some(a => a.type === 'FINALIZE_AGENTS'))
 })
 
 test('composer throughput shows only the generation speed', () => {
