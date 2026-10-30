@@ -967,12 +967,13 @@ def _workspace_fragment(workspace_root: str | None = None) -> str:
 
 def _web_output_fragment() -> str:
     return (
-        "WEB UI OUTPUT: When asked to display, show, or plot an image/figure, do not rely on GUI windows, "
-        "matplotlib show(), open, or OS image viewers. Save the image file under the current workspace root "
-        "using a browser-compatible format such as PNG, then include it in the final response as Markdown image "
-        "syntax with the absolute path, for example: ![description](/absolute/path/to/plot.png). "
-        "The web client will render allowed local image paths inline. "
-        + utils.CHART_GUIDANCE + " "
+        "WEB UI OUTPUT: "
+        + utils.CHART_GUIDANCE
+        + " When an image file is the right output, do not rely on GUI windows, matplotlib show(), open, or OS "
+        "image viewers: save the image under the current workspace root in a browser-compatible format such as "
+        "PNG, then include it in the final response as Markdown image syntax with the absolute path, for "
+        "example: ![description](/absolute/path/to/plot.png). The web client will render allowed local image "
+        "paths inline. "
     )
 
 

@@ -306,13 +306,18 @@ PYTHON_INTERPRETER = str(nested_get(CONFIG, ["python", "interpreter"], "")).stri
 # backend at this path, so html chart previews work without internet access.
 CHART_JS_URL = "/vendor/chart-4.5.1.umd.min.js"
 CHART_GUIDANCE = (
-    "CHARTS: For charts or plots of data you already have (for example query results or a small table), "
-    "prefer an interactive chart in the final answer: one self-contained HTML document in a ```html "
-    "fenced block with the data embedded. Load the bundled Chart.js 4.5.1 with "
+    "CHARTS: When asked to plot, chart or graph data (curves over time, bar charts, scatter plots, "
+    "histograms), answer with an interactive chart by default: one self-contained HTML document in a ```html "
+    "fenced block with the data embedded. This holds when the numbers sit in files: read them with the file "
+    "tools, or with a short script that prints compact JSON, then embed the values (a few thousand points is "
+    "fine). Load the bundled Chart.js 4.5.1 with "
     f'<script src="{CHART_JS_URL}"></script> (Chart.js v4 API, global Chart); never load scripts from '
     "the internet. Simple visuals may use inline SVG instead. The web UI renders the block as a sandboxed "
-    "live preview whose scripts cannot reach local files, the app, or MyHarness APIs. Use image files "
-    "instead for scientific plots that need Python libraries or very large data."
+    "live preview whose scripts cannot reach local files, the app, or MyHarness APIs. Write the chart once, in the "
+    "answer: do not also save the same HTML to a file unless the user asks for a file (a saved copy loads "
+    "Chart.js from the app, so it only draws inside MyHarness). Use an image file (PNG) only when the user asks "
+    "for an image, a figure or matplotlib output, or the plot needs rendering that HTML cannot do (3D, "
+    "contour or mesh plots, very large data)."
 )
 MANAGED_TOOLS = str(nested_get(CONFIG, ["agent", "managed_tools"], "false")).lower() in ("true", "1", "yes")
 DEFAULT_PROVIDER = str(nested_get(CONFIG, ["agent", "default_provider"], "native") or "native").strip()
