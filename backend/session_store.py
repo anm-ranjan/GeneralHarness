@@ -65,6 +65,15 @@ def _validate_database_filename(value: str) -> str:
     return name
 
 
+# Buckets that hold unlabeled sessions; they never show as a label.
+_PLACEHOLDER_LABEL_IDS = frozenset({"general", "unlabelled", CHATS_TASK_ID})
+_PLACEHOLDER_LABEL_NAMES = frozenset({"general", "unlabelled", "unlabeled", "new task", "chats"})
+
+
+def _is_placeholder_label(label_id: str, name: str) -> bool:
+    return label_id in _PLACEHOLDER_LABEL_IDS or name.strip().lower() in _PLACEHOLDER_LABEL_NAMES
+
+
 def _label_color(label_id: str) -> str:
     digest = hashlib.sha256(label_id.encode("utf-8")).digest()
     return LABEL_COLORS[digest[0] % len(LABEL_COLORS)]
@@ -931,6 +940,16 @@ class SessionStore:
                 attachments=attachments, created_at=item["created_at"],
             ))
         prompt_lists = self._load_prompt_lists(row["id"])
+        labels = [
+            item["name"]
+            for item in self._conn.execute(
+                """SELECT t.id, t.name FROM session_labels sl
+                   JOIN tasks t ON t.project_id=sl.project_id AND t.id=sl.task_id
+                   WHERE sl.session_id=? ORDER BY sl.is_primary DESC, t.position, t.id""",
+                (row["id"],),
+            )
+            if not _is_placeholder_label(item["id"], item["name"])
+        ]
         return SessionMeta(
             id=row["id"], project_id=row["project_id"], task_id=row["task_id"], title=row["title"],
             summary=row["summary"], created_at=row["created_at"], updated_at=row["updated_at"],
@@ -940,7 +959,7 @@ class SessionStore:
             claude_state=_from_json(row["claude_state_json"], {}),
             message_queue=queue, run_settings=_from_json(row["run_settings_json"], {}),
             prompt_stash=prompt_lists["stash"], steering_queue=prompt_lists["steering"],
-            archived=bool(row["archived"]),
+            archived=bool(row["archived"]), labels=labels,
         )
 
     def get_project(self, project_id: str) -> ProjectInfo | None:
@@ -1026,6 +1045,48 @@ class SessionStore:
                     (primary, position, session_id),
                 )
         return self.load_session(session_id)
+
+    def default_task_id(self, project_id: str) -> str:
+        """Return the bucket that holds a project's unlabeled sessions."""
+        if project_id == CHATS_PROJECT_ID:
+            return CHATS_TASK_ID
+        return self.ensure_task(project_id, task_id="general", name="General").id
+
+    def set_session_label_names(self, session_id: str, names: list[str]) -> SessionMeta:
+        """Replace a session's labels by display name, creating missing ones.
+
+        The first real label becomes primary; with none left, the session
+        returns to the unlabeled bucket. Chats keep their bucket as primary.
+        """
+        meta = self.load_session(session_id)
+        if meta is None:
+            raise ValueError(f"Session {session_id} not found")
+        project = self.get_project(meta.project_id)
+        if project is None:
+            raise ValueError(f"Project {meta.project_id} not found")
+        by_name = {task.name.strip().lower(): task.id for task in project.tasks}
+        known_ids = {task.id for task in project.tasks}
+        label_ids: list[str] = []
+        for raw in names:
+            name = " ".join(str(raw).split())[:48]
+            if not name or name.lower() in _PLACEHOLDER_LABEL_NAMES:
+                continue
+            label_id = by_name.get(name.lower())
+            if label_id is None:
+                base = "".join(ch if ch.isalnum() else "_" for ch in name.lower()).strip("_") or "label"
+                label_id, counter = base, 2
+                while label_id in known_ids or label_id in _PLACEHOLDER_LABEL_IDS:
+                    label_id, counter = f"{base}_{counter}", counter + 1
+                self.ensure_task(meta.project_id, task_id=label_id, name=name)
+                by_name[name.lower()] = label_id
+                known_ids.add(label_id)
+            if label_id not in label_ids:
+                label_ids.append(label_id)
+        if meta.project_id == CHATS_PROJECT_ID:
+            primary = meta.task_id
+        else:
+            primary = label_ids[0] if label_ids else self.default_task_id(meta.project_id)
+        return self.set_session_labels(session_id, label_ids, primary_label_id=primary)
 
     def _save_session(self, meta: SessionMeta) -> None:
         self.update_session(meta)

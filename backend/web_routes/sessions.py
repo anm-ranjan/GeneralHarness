@@ -231,12 +231,14 @@ def delete_session(session_id: str):
 
 @router.patch("/api/sessions/{session_id}")
 def rename_session(session_id: str, req: RenameSessionRequest):
-    if req.title is None and req.archived is None:
+    if req.title is None and req.labels is None and req.archived is None:
         raise HTTPException(status_code=400, detail="Nothing to update")
     try:
         meta = None
         if req.title is not None:
             meta = web_app._store.rename_session(session_id, req.title)
+        if req.labels is not None:
+            meta = web_app._store.set_session_label_names(session_id, req.labels)
         if req.archived is not None:
             if req.archived and web_app._manager.get_active_run(session_id):
                 raise HTTPException(status_code=409, detail="Cannot archive a session while its agent is running")
@@ -262,7 +264,14 @@ def move_session(session_id: str, req: MoveSessionRequest):
         if req.project_id != meta.project_id and not utils.is_path_allowed(target.root):
             raise HTTPException(status_code=403, detail="Target workspace is outside allowed paths")
         try:
-            moved = web_app._store.move_session(session_id, req.project_id, req.task_id)
+            if req.task_id:
+                moved = web_app._store.move_session(session_id, req.project_id, req.task_id)
+            else:
+                # Labels are per project: recreate them by name in the target.
+                task_id = web_app._store.default_task_id(req.project_id)
+                moved = web_app._store.move_session(session_id, req.project_id, task_id)
+                if meta.labels:
+                    moved = web_app._store.set_session_label_names(session_id, meta.labels)
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e))
         if req.project_id != meta.project_id:

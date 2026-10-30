@@ -1,26 +1,27 @@
-import { useEffect, useState } from 'react'
-import { useApp } from '../../context/AppContext'
+import { memo, useEffect, useState } from 'react'
+import { useAppDispatch } from '../../context/AppContext'
 import InlineEdit from './InlineEdit'
-import TaskRow from './TaskRow'
+import SessionItem from './SessionItem'
 import { lastSessionId, isRowAction } from '../../sidebarState'
 
-export default function ProjectNode({
-  project, sessionsById, currentSessionId,
-  onSelectSession, onRenameProject, onDeleteProject,
-  onCreateTask, onRenameTask, onDeleteTask,
-  onCreateSession, onImportSession, onRenameSession, onMoveSession, onDeleteSession,
-  onDropSession,
+// A project and its threads, newest first. Labels are not a level here: they
+// show as chips on each thread row.
+function ProjectNode({
+  project, sessions, totalCount, labelsById, currentSessionId, filtering = false,
+  onSelectSession, onRenameSession, onSessionContextMenu, renameSessionId, onRenameHandled,
+  onRenameProject, onDeleteProject, onCreateSession, onImportSession, onDropSession,
 }) {
-  const { state, dispatch } = useApp()
+  const dispatch = useAppDispatch()
   const [editing, setEditing] = useState(false)
-  const [collapsed, setCollapsed] = useState(() => !(project.tasks || []).some(t => (t.sessions || []).includes(currentSessionId || lastSessionId())))
-  const tasks = project.tasks || []
-  const sessionCount = tasks.reduce((total, task) => total + (task.sessions || []).length, 0)
-  const containsActiveSession = tasks.some(task => (task.sessions || []).includes(currentSessionId))
+  const [dragOver, setDragOver] = useState(false)
+  const containsActiveSession = sessions.some(s => s.id === currentSessionId)
+  const [collapsed, setCollapsed] = useState(() => !sessions.some(s => s.id === (currentSessionId || lastSessionId())))
 
   useEffect(() => {
     if (containsActiveSession) setCollapsed(false)
   }, [containsActiveSession, currentSessionId])
+
+  const open = filtering || !collapsed
 
   function handleHeaderKeyDown(e) {
     if (editing || isRowAction(e.target)) return
@@ -31,20 +32,35 @@ export default function ProjectNode({
   }
 
   return (
-    <div className={`mb-3 rounded-md transition-colors ${containsActiveSession ? 'bg-accent-glow/40' : ''}`}>
+    <div
+      className={`mb-2 rounded-md transition-colors ${dragOver ? 'bg-accent-soft ring-1 ring-accent/40' : containsActiveSession ? 'bg-accent-glow/40' : ''}`}
+      onDragOver={e => {
+        if (e.dataTransfer.types.includes('application/x-myharness-session')) {
+          e.preventDefault(); setDragOver(true); e.dataTransfer.dropEffect = 'move'
+        }
+      }}
+      onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false) }}
+      onDrop={e => {
+        const id = e.dataTransfer.getData('application/x-myharness-session')
+        setDragOver(false)
+        if (!id) return
+        e.preventDefault()
+        onDropSession?.(id, project.id)
+      }}
+    >
       <div
         className={`flex items-center gap-1.5 group rounded-md px-1.5 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70 ${containsActiveSession ? 'text-accent' : ''}`}
         tabIndex={0}
         role="group"
         onKeyDown={handleHeaderKeyDown}
         onClick={e => { if (!editing && !isRowAction(e.target)) setCollapsed(v => !v) }}
-        aria-expanded={!collapsed}
+        aria-expanded={open}
       >
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className={`text-faint text-[10px] w-4 h-4 shrink-0 transition-transform ${collapsed ? '-rotate-90' : ''}`}
-          aria-label={collapsed ? 'Expand project' : 'Collapse project'}
-          aria-expanded={!collapsed}
+          className={`text-faint text-[10px] w-4 h-4 shrink-0 transition-transform ${open ? '' : '-rotate-90'}`}
+          aria-label={open ? 'Collapse project' : 'Expand project'}
+          aria-expanded={open}
         >
           ▼
         </button>
@@ -58,13 +74,15 @@ export default function ProjectNode({
           <span
             className="text-[13px] font-semibold text-text-bright truncate cursor-pointer"
             onDoubleClick={() => setEditing(true)}
-            title={project.name}
+            title={project.root ? `${project.name}\n${project.root}` : project.name}
           >
             {project.name}
           </span>
         )}
-        <span className="ml-1 text-[10px] text-faint tabular-nums">{sessionCount}</span>
-        <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ml-auto shrink-0">
+        <span className="ml-1 text-[10px] text-faint tabular-nums">
+          {filtering && sessions.length !== totalCount ? `${sessions.length}/${totalCount}` : totalCount}
+        </span>
+        <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity ml-auto shrink-0">
           <button
             onClick={() => setEditing(true)}
             className="text-faint hover:text-accent text-[11px] px-0.5"
@@ -75,7 +93,7 @@ export default function ProjectNode({
               type: 'OPEN_CONFIRM',
               payload: {
                 title: 'Delete project?',
-                message: `This removes the project from ${state.appName} and deletes its threads, events, and attachments.`,
+                message: 'This removes the project and deletes its threads, events, and attachments.',
                 detail: project.name,
                 confirmLabel: 'Delete',
                 tone: 'danger',
@@ -86,37 +104,33 @@ export default function ProjectNode({
             title="Delete project"
           >✕</button>
           <button
-            onClick={() => onCreateTask(project.id)}
+            onClick={() => onImportSession(project.id)}
             className="text-faint hover:text-ok text-[11px] px-0.5"
-            title="New label"
-          >+ label</button>
+            title="Import thread backup (.zip)"
+          >⇪</button>
           <button
-            onClick={() => onCreateSession(project.id, '')}
+            onClick={() => { setCollapsed(false); onCreateSession(project.id) }}
             className="text-faint hover:text-ok text-[11px] px-0.5"
-            title="New thread with the General label"
-          >+ thread</button>
+            title="New thread"
+          >+</button>
         </div>
       </div>
 
-      <div className={`collapse-grid ${collapsed ? '' : 'open'}`}>
-        <div hidden={collapsed} className="mt-1">
-          {tasks.map(task => (
-            <TaskRow
-              key={task.id}
-              task={task}
-              projectId={project.id}
-              sessions={task.sessions || []}
-              sessionsById={sessionsById}
-              currentSessionId={currentSessionId}
-              onSelectSession={onSelectSession}
-              onRenameTask={onRenameTask}
-              onDeleteTask={onDeleteTask}
-              onCreateSession={onCreateSession}
-              onImportSession={onImportSession}
-              onRenameSession={onRenameSession}
-              onMoveSession={onMoveSession}
-              onDropSession={onDropSession}
-              onDeleteSession={onDeleteSession}
+      <div className={`collapse-grid ${open ? 'open' : ''}`}>
+        <div hidden={!open} className="mt-0.5 pl-4 space-y-px">
+          {sessions.length === 0 ? (
+            <p className="text-[12px] text-faint italic py-1 px-2">{filtering ? 'No matching threads.' : 'No threads yet.'}</p>
+          ) : sessions.map(s => (
+            <SessionItem
+              key={s.id}
+              session={s}
+              labels={labelsById[s.id]}
+              isActive={s.id === currentSessionId}
+              onSelect={onSelectSession}
+              onRename={onRenameSession}
+              onContextMenu={onSessionContextMenu}
+              renameRequested={renameSessionId === s.id}
+              onRenameDone={onRenameHandled}
             />
           ))}
         </div>
@@ -124,3 +138,5 @@ export default function ProjectNode({
     </div>
   )
 }
+
+export default memo(ProjectNode)

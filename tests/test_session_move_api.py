@@ -57,6 +57,20 @@ class MoveSessionApiTests(unittest.TestCase):
             self.assertEqual([s.id for s in store.list_sessions(project_id="proj")], [])
             self.assertEqual([s.id for s in store.list_sessions(project_id="other")], [meta.id])
 
+    def test_move_without_label_keeps_label_names_in_target_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, meta = _seed_store(tmp)
+            store.ensure_project("other", "Other", "/tmp/other")
+            with patch.object(web_app, "_store", store), patch.object(web_app, "_manager", SessionManager()), \
+                    patch("utils.is_path_allowed", return_value=True):
+                labeled = web_app.rename_session(meta.id, web_app.RenameSessionRequest(labels=["Source", "Urgent"]))
+                self.assertEqual(labeled["labels"], ["Source", "Urgent"])
+                moved = web_app.move_session(meta.id, web_app.MoveSessionRequest(project_id="other"))
+            self.assertEqual(moved["project_id"], "other")
+            self.assertEqual(moved["labels"], ["Source", "Urgent"])
+            other = store.get_project("other")
+            self.assertEqual(sorted(t.name for t in other.tasks), ["General", "Source", "Urgent"])
+
     def test_rejects_moving_chats(self):
         with tempfile.TemporaryDirectory() as tmp:
             store, meta = _seed_store(tmp)

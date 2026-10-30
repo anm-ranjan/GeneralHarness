@@ -153,6 +153,26 @@ class SQLiteSessionStoreContractTests(unittest.TestCase):
                 self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
                 self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
 
+    def test_label_names_create_labels_and_drive_the_primary_bucket(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(tmp)
+            store.ensure_project("p", "P", "/tmp/p")
+            session = store.create_session("p", "", "Thread")
+            self.assertEqual(session.task_id, "general")
+            self.assertEqual(store.load_session(session.id).labels, [])
+
+            meta = store.set_session_label_names(session.id, ["Bug fix", " bug  FIX ", "General", "Docs"])
+            self.assertEqual(meta.labels, ["Bug fix", "Docs"])
+            self.assertEqual(meta.task_id, "bug_fix")
+            other = store.create_session("p", "", "Other")
+            self.assertEqual(store.set_session_label_names(other.id, ["docs"]).labels, ["Docs"])
+
+            cleared = store.set_session_label_names(session.id, [])
+            self.assertEqual(cleared.labels, [])
+            self.assertEqual(cleared.task_id, "general")
+            project = store.get_project("p")
+            self.assertIn(session.id, next(t for t in project.tasks if t.id == "general").sessions)
+
     def test_default_user_facing_title_uses_thread_terminology(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = SessionStore(tmp)

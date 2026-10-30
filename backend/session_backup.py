@@ -122,10 +122,11 @@ def import_session_backup(
     project_id = project_id or old_meta.get("project_id") or ""
     task_id = task_id or old_meta.get("task_id") or ""
     project = store.get_project(project_id)
-    if project is None or not any(t.id == task_id for t in project.tasks):
-        raise ValueError(
-            "Import target not found. Choose an existing project and task for the imported session."
-        )
+    if project is None:
+        raise ValueError("Import target not found. Choose an existing project for the imported session.")
+    if not any(t.id == task_id for t in project.tasks):
+        # Labels are per project; an unknown one falls back to the unlabeled bucket.
+        task_id = ""
 
     title = old_meta.get("title") or "Imported session"
     new_meta = store.create_session(
@@ -149,6 +150,9 @@ def import_session_backup(
     if isinstance(run_settings, dict):
         new_meta.run_settings = run_settings
     store.update_session(new_meta)
+    labels = old_meta.get("labels")
+    if isinstance(labels, list) and labels:
+        store.set_session_label_names(new_id, [str(label) for label in labels])
 
     names = set(zf.namelist())
 

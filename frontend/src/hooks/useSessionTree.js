@@ -30,29 +30,11 @@ export default function useSessionTree() {
     await loadTree()
   }, [loadTree])
 
-  const createTask = useCallback(async (projectId, name) => {
-    const task = await api('POST', '/api/tasks', { project_id: projectId, name })
-    await loadTree()
-    return task
-  }, [loadTree])
-
-  const renameTask = useCallback(async (projectId, taskId, name, color) => {
-    const payload = {}
-    if (name !== undefined) payload.name = name
-    if (color !== undefined) payload.color = color
-    await api('PATCH', `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}`, payload)
-    await loadTree()
-  }, [loadTree])
-
-  const deleteTask = useCallback(async (projectId, taskId) => {
-    await api('DELETE', `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}`)
-    await loadTree()
-  }, [loadTree])
-
-  const createSession = useCallback(async (projectId, taskId, title, provider) => {
+  // An empty label id files the thread under the project's unlabeled bucket.
+  const createSession = useCallback(async (projectId, taskId = '', title, provider) => {
     const session = await api('POST', '/api/sessions', {
       project_id: projectId,
-      task_id: taskId,
+      task_id: taskId || '',
       title: title || '',
       provider: provider || 'native',
     })
@@ -69,23 +51,25 @@ export default function useSessionTree() {
     return chat
   }, [loadTree])
 
-  const renameSession = useCallback(async (sessionId, title) => {
-    await api('PATCH', `/api/sessions/${encodeURIComponent(sessionId)}`, { title })
-    await loadTree()
-  }, [loadTree])
-
-  // Archive state lives on the session alone, so apply the returned metadata
-  // locally instead of reloading the whole tree.
+  // Title and archive state live on the session alone, so apply the returned
+  // metadata locally. Labels can create labels and refile the thread under a
+  // new primary label, so they reload the tree.
   const updateSession = useCallback(async (sessionId, changes) => {
     const meta = await api('PATCH', `/api/sessions/${encodeURIComponent(sessionId)}`, changes)
-    dispatch({ type: 'UPDATE_SESSION_META_BY_ID', payload: { sessionId, changes: meta } })
+    if (changes.labels !== undefined) await loadTree()
+    else dispatch({ type: 'UPDATE_SESSION_META_BY_ID', payload: { sessionId, changes: meta } })
     return meta
-  }, [dispatch])
+  }, [dispatch, loadTree])
 
-  const moveSession = useCallback(async (sessionId, projectId, taskId) => {
+  const renameSession = useCallback(
+    (sessionId, title) => updateSession(sessionId, { title }),
+    [updateSession],
+  )
+
+  const moveSession = useCallback(async (sessionId, projectId, taskId = '') => {
     const session = await api('POST', `/api/sessions/${encodeURIComponent(sessionId)}/move`, {
       project_id: projectId,
-      task_id: taskId,
+      task_id: taskId || '',
     })
     await loadTree()
     return session
@@ -99,7 +83,6 @@ export default function useSessionTree() {
   return {
     loadTree,
     createProject, renameProject, deleteProject,
-    createTask, renameTask, deleteTask,
     createSession, renameSession, updateSession, moveSession, deleteSession,
     createChat,
   }

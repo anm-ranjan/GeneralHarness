@@ -132,7 +132,7 @@ export default function ModelSelector() {
         title="Choose provider, model, and thinking level"
       >
         <span className="model-mark">
-          <ProviderLogo provider={provider} className="h-3.5 w-3.5" />
+          <ProviderLogo provider={provider} model={currentModel || state.model} className="h-3.5 w-3.5" />
         </span>
         <span className="max-w-32 truncate text-text-bright">{modelLabel}</span>
         {currentEffort && <span className="model-effort">{currentEffort}</span>}
@@ -146,7 +146,7 @@ export default function ModelSelector() {
           <div className="model-popover-head">
             <div className="flex items-center gap-2">
               <span className="model-mark model-mark-large">
-                <ProviderLogo provider={provider} className="h-4 w-4" />
+                <ProviderLogo provider={provider} model={currentModel || state.model} className="h-4 w-4" />
               </span>
               <div>
                 <div className="text-[12px] font-semibold text-text-bright">Run configuration</div>
@@ -173,7 +173,7 @@ export default function ModelSelector() {
                       disabled={saving}
                     >
                       <span className="model-option-logo">
-                        <ProviderLogo provider={provider} className="h-4 w-4" />
+                        <ProviderLogo provider={provider} model={model.id} className="h-4 w-4" />
                       </span>
                       <span className="min-w-0 flex-1 text-left">
                         <span className="block truncate text-[12px] font-medium text-text-bright">{model.display_name}</span>
@@ -217,7 +217,7 @@ export default function ModelSelector() {
                   className={`provider-chip ${item.id === provider ? 'provider-chip-active' : ''}`}
                   disabled={saving || item.id === provider}
                 >
-                  <ProviderLogo provider={item.id} className="h-3.5 w-3.5" />
+                  <ProviderLogo provider={item.id} model={item.id === provider ? currentModel || state.model : item.id === 'native' ? state.model : ''} className="h-3.5 w-3.5" />
                   {item.label}
                 </button>
               ))}

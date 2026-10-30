@@ -51,7 +51,7 @@ export default function ProviderPicker() {
               disabled={Boolean(selectingProvider)}
               className="w-full py-2.5 text-[13px] font-medium text-text-bright border border-line rounded-md hover:border-accent hover:text-accent transition-colors"
             >
-              <span className="inline-flex items-center gap-2"><ProviderLogo provider="native" /> Native Agent</span>
+              <span className="inline-flex items-center gap-2"><ProviderLogo provider="native" model={state.model} /> Native Agent</span>
             </button>
           )}
           {state.claudeAgentEnabled && (

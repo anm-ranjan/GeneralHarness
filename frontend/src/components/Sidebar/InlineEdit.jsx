@@ -20,7 +20,7 @@ export default function InlineEdit({ value, onSave, onCancel, className = '' }) 
   }
 
   function handleKeyDown(e) {
-    if (e.key === 'Enter' && e.isComposing) return
+    if (e.nativeEvent.isComposing) return
     if (e.key === 'Enter') {
       e.preventDefault()
       finish(true)

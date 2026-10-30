@@ -5,15 +5,12 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub struct SessionRow {
-    pub project_name: String,
-    pub task_name: String,
     pub meta: SessionMeta,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum NavKey {
     Project(String),
-    Task { project_id: String, task_id: String },
     Session(String),
 }
 
@@ -23,11 +20,6 @@ pub enum NavRow {
         id: String,
         name: String,
         root: String,
-    },
-    Task {
-        project_id: String,
-        id: String,
-        name: String,
     },
     Session(SessionRow),
 }
@@ -98,20 +90,9 @@ pub struct ProjectForm {
 }
 
 #[derive(Clone, Debug)]
-pub struct TaskForm {
-    pub project_id: String,
-    pub project_name: String,
-    pub name: String,
-    pub focus: FormFocus,
-    pub state: FormState,
-}
-
-#[derive(Clone, Debug)]
 pub struct SessionForm {
     pub project_id: String,
-    pub task_id: String,
     pub project_name: String,
-    pub task_name: String,
     pub title: String,
     pub providers: Vec<Provider>,
     pub provider_index: usize,
@@ -363,12 +344,6 @@ pub enum DeleteTarget {
         name: String,
         session_count: usize,
     },
-    Task {
-        project_id: String,
-        id: String,
-        name: String,
-        session_count: usize,
-    },
     Session {
         id: String,
         name: String,
@@ -378,9 +353,7 @@ pub enum DeleteTarget {
 impl DeleteTarget {
     pub fn label(&self) -> &str {
         match self {
-            Self::Project { name, .. } | Self::Task { name, .. } | Self::Session { name, .. } => {
-                name
-            }
+            Self::Project { name, .. } | Self::Session { name, .. } => name,
         }
     }
 }
@@ -452,7 +425,6 @@ impl RunState {
 #[derive(Clone, Debug)]
 pub enum Modal {
     Project(ProjectForm),
-    Task(TaskForm),
     Session(SessionForm),
     Delete(DeleteForm),
 }
@@ -461,7 +433,6 @@ impl Modal {
     pub fn state(&self) -> &FormState {
         match self {
             Self::Project(form) => &form.state,
-            Self::Task(form) => &form.state,
             Self::Session(form) => &form.state,
             Self::Delete(form) => &form.state,
         }
@@ -470,7 +441,6 @@ impl Modal {
     pub fn state_mut(&mut self) -> &mut FormState {
         match self {
             Self::Project(form) => &mut form.state,
-            Self::Task(form) => &mut form.state,
             Self::Session(form) => &mut form.state,
             Self::Delete(form) => &mut form.state,
         }
@@ -542,7 +512,7 @@ impl App {
             .unwrap_or(0);
         let active_session_id = rows.get(cursor).and_then(|row| match row {
             NavRow::Session(session) => Some(session.meta.id.clone()),
-            NavRow::Project { .. } | NavRow::Task { .. } => None,
+            NavRow::Project { .. } => None,
         });
         let verbose_tools = effective_verbose(
             &health,
@@ -609,14 +579,13 @@ impl App {
     pub fn selected_session_id(&self) -> Option<String> {
         match self.selected()? {
             NavRow::Session(row) => Some(row.meta.id.clone()),
-            NavRow::Project { .. } | NavRow::Task { .. } => None,
+            NavRow::Project { .. } => None,
         }
     }
 
     pub fn selected_project_target(&self) -> Option<(String, String)> {
         let project_id = match self.selected()? {
             NavRow::Project { id, .. } => id,
-            NavRow::Task { project_id, .. } => project_id,
             NavRow::Session(row) => &row.meta.project_id,
         };
         self.tree
@@ -626,31 +595,11 @@ impl App {
             .map(|project| (project.id.clone(), project.name.clone()))
     }
 
-    pub fn selected_task_target(&self) -> Option<(String, String, String, String)> {
-        let (project_id, task_id) = match self.selected()? {
-            NavRow::Task { project_id, id, .. } => (project_id, id),
-            NavRow::Session(row) => (&row.meta.project_id, &row.meta.task_id),
-            NavRow::Project { .. } => return None,
-        };
-        let project = self
-            .tree
-            .projects
-            .iter()
-            .find(|project| project.id == *project_id)?;
-        let task = project.tasks.iter().find(|task| task.id == *task_id)?;
-        Some((
-            project.id.clone(),
-            task.id.clone(),
-            project.name.clone(),
-            task.name.clone(),
-        ))
-    }
-
     pub fn active(&self) -> Option<&SessionRow> {
         let id = self.active_session_id.as_deref()?;
         self.rows.iter().find_map(|row| match row {
             NavRow::Session(session) if session.meta.id == id => Some(session),
-            NavRow::Project { .. } | NavRow::Task { .. } | NavRow::Session(_) => None,
+            NavRow::Project { .. } | NavRow::Session(_) => None,
         })
     }
 
@@ -735,29 +684,6 @@ impl App {
                     .ok_or_else(|| "Selected project is no longer available.".to_owned())?;
                 let session_count = project.tasks.iter().map(|task| task.sessions.len()).sum();
                 Ok(DeleteTarget::Project {
-                    id: id.clone(),
-                    name: name.clone(),
-                    session_count,
-                })
-            }
-            NavRow::Task {
-                project_id,
-                id,
-                name,
-            } => {
-                if project_id == "__chats__" {
-                    return Err("The reserved Chats task cannot be deleted.".to_owned());
-                }
-                let session_count = self
-                    .tree
-                    .projects
-                    .iter()
-                    .find(|project| project.id == *project_id)
-                    .and_then(|project| project.tasks.iter().find(|task| task.id == *id))
-                    .map(|task| task.sessions.len())
-                    .unwrap_or(0);
-                Ok(DeleteTarget::Task {
-                    project_id: project_id.clone(),
                     id: id.clone(),
                     name: name.clone(),
                     session_count,
@@ -1113,14 +1039,10 @@ impl App {
         self.scroll_from_bottom = self.scroll_from_bottom.saturating_sub(amount);
     }
 
-    /// Fold or unfold the selected project/task, keeping the cursor on it.
+    /// Fold or unfold the selected project, keeping the cursor on it.
     pub fn toggle_collapsed(&mut self) {
         let key = match self.selected() {
             Some(NavRow::Project { id, .. }) => NavKey::Project(id.clone()),
-            Some(NavRow::Task { project_id, id, .. }) => NavKey::Task {
-                project_id: project_id.clone(),
-                task_id: id.clone(),
-            },
             _ => return,
         };
         if !self.collapsed.remove(&key) {
@@ -1465,6 +1387,8 @@ fn latest_plan(events: &[EventEnvelope]) -> Vec<PlanItem> {
         .map_or_else(Vec::new, plan_items_from_event)
 }
 
+/// Project → Session, newest session first, mirroring the web sidebar: stored
+/// labels (tasks) are only a grouping detail and never appear as navigator rows.
 fn flatten_tree(tree: &SessionTree, collapsed: &std::collections::HashSet<NavKey>) -> Vec<NavRow> {
     let mut rows = Vec::new();
     // Keep the reserved Chats collection pinned to the bottom, like the desktop
@@ -1480,82 +1404,54 @@ fn flatten_tree(tree: &SessionTree, collapsed: &std::collections::HashSet<NavKey
         if collapsed.contains(&NavKey::Project(project.id.clone())) {
             continue;
         }
-        for task in &project.tasks {
-            rows.push(NavRow::Task {
-                project_id: project.id.clone(),
-                id: task.id.clone(),
-                name: task.name.clone(),
-            });
-            if collapsed.contains(&NavKey::Task {
-                project_id: project.id.clone(),
-                task_id: task.id.clone(),
-            }) {
-                continue;
-            }
-            for session_id in &task.sessions {
-                let Some(meta) = tree.sessions.get(session_id) else {
-                    continue;
-                };
-                rows.push(NavRow::Session(SessionRow {
-                    project_name: project.name.clone(),
-                    task_name: task.name.clone(),
-                    meta: meta.clone(),
-                }));
-            }
-        }
+        // Archived sessions stay out of the navigator, as in the web sidebar.
+        let mut sessions: Vec<&SessionMeta> = project_session_ids(project)
+            .filter_map(|id| tree.sessions.get(id))
+            .filter(|meta| !meta.archived)
+            .collect();
+        // ISO-8601 UTC timestamps from the backend sort lexicographically.
+        sessions.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        rows.extend(
+            sessions
+                .into_iter()
+                .map(|meta| NavRow::Session(SessionRow { meta: meta.clone() })),
+        );
     }
     rows
 }
 
-/// Ensures every ancestor of `key` is expanded, so a specific navigation
-/// target (e.g. a just-created task or an explicitly requested session) is
-/// reachable in the flattened rows even if its project/task was folded.
+/// Unfolds the project that owns `key` so a specific navigation target (e.g.
+/// a just-created or explicitly requested session) stays visible even when its
+/// project starts, or was left, folded.
 fn expand_ancestors(
     tree: &SessionTree,
     collapsed: &mut std::collections::HashSet<NavKey>,
     key: &NavKey,
 ) {
-    match key {
-        NavKey::Project(id) => {
-            collapsed.remove(&NavKey::Project(id.clone()));
-        }
-        NavKey::Task {
-            project_id,
-            task_id,
-        } => {
-            collapsed.remove(&NavKey::Project(project_id.clone()));
-            collapsed.remove(&NavKey::Task {
-                project_id: project_id.clone(),
-                task_id: task_id.clone(),
-            });
-        }
-        NavKey::Session(session_id) => {
-            let ancestors = tree.projects.iter().find_map(|project| {
-                project.tasks.iter().find_map(|task| {
-                    task.sessions
-                        .iter()
-                        .any(|id| id == session_id)
-                        .then(|| (project.id.clone(), task.id.clone()))
-                })
-            });
-            if let Some((project_id, task_id)) = ancestors {
-                collapsed.remove(&NavKey::Project(project_id.clone()));
-                collapsed.remove(&NavKey::Task {
-                    project_id,
-                    task_id,
-                });
-            }
-        }
+    let project_id = match key {
+        NavKey::Project(id) => Some(id.clone()),
+        NavKey::Session(session_id) => tree
+            .projects
+            .iter()
+            .find(|project| project_session_ids(project).any(|id| id == session_id))
+            .map(|project| project.id.clone()),
+    };
+    if let Some(project_id) = project_id {
+        collapsed.remove(&NavKey::Project(project_id));
     }
+}
+
+fn project_session_ids(project: &crate::api::ProjectInfo) -> impl Iterator<Item = &String> {
+    project.tasks.iter().flat_map(|task| task.sessions.iter())
 }
 
 fn nav_key(row: &NavRow) -> NavKey {
     match row {
         NavRow::Project { id, .. } => NavKey::Project(id.clone()),
-        NavRow::Task { project_id, id, .. } => NavKey::Task {
-            project_id: project_id.clone(),
-            task_id: id.clone(),
-        },
         NavRow::Session(row) => NavKey::Session(row.meta.id.clone()),
     }
 }
@@ -1587,14 +1483,58 @@ mod tests {
             sessions: HashMap::from([(meta.id.clone(), meta)]),
         };
         let rows = flatten_tree(&tree, &std::collections::HashSet::new());
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 2, "sessions sit directly under their project");
         assert!(matches!(rows[0], NavRow::Project { .. }));
-        assert!(matches!(rows[1], NavRow::Task { .. }));
-        assert!(matches!(rows[2], NavRow::Session(_)));
+        assert!(matches!(rows[1], NavRow::Session(_)));
     }
 
     #[test]
-    fn includes_empty_projects_and_tasks_in_navigation() {
+    fn sessions_merge_across_tasks_newest_first_without_archived() {
+        let session = |id: &str, updated_at: &str, archived: bool| SessionMeta {
+            id: id.to_owned(),
+            updated_at: updated_at.to_owned(),
+            archived,
+            ..SessionMeta::default()
+        };
+        let sessions = [
+            session("old", "2026-10-01T00:00:00Z", false),
+            session("new", "2026-10-03T00:00:00Z", false),
+            session("mid", "2026-10-02T00:00:00Z", false),
+            session("gone", "2026-10-04T00:00:00Z", true),
+        ];
+        let tree = SessionTree {
+            projects: vec![ProjectInfo {
+                id: "project".to_owned(),
+                tasks: vec![
+                    TaskInfo {
+                        sessions: vec!["old".to_owned(), "new".to_owned()],
+                        ..TaskInfo::default()
+                    },
+                    TaskInfo {
+                        sessions: vec!["mid".to_owned(), "gone".to_owned()],
+                        ..TaskInfo::default()
+                    },
+                ],
+                ..ProjectInfo::default()
+            }],
+            sessions: sessions
+                .into_iter()
+                .map(|meta| (meta.id.clone(), meta))
+                .collect(),
+        };
+        let rows = flatten_tree(&tree, &std::collections::HashSet::new());
+        let ids: Vec<&str> = rows
+            .iter()
+            .filter_map(|row| match row {
+                NavRow::Session(row) => Some(row.meta.id.as_str()),
+                NavRow::Project { .. } => None,
+            })
+            .collect();
+        assert_eq!(ids, vec!["new", "mid", "old"]);
+    }
+
+    #[test]
+    fn empty_tasks_add_no_navigation_rows() {
         let tree = SessionTree {
             projects: vec![ProjectInfo {
                 id: "project".to_owned(),
@@ -1609,9 +1549,8 @@ mod tests {
             ..SessionTree::default()
         };
         let rows = flatten_tree(&tree, &std::collections::HashSet::new());
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 1);
         assert!(matches!(rows[0], NavRow::Project { .. }));
-        assert!(matches!(rows[1], NavRow::Task { .. }));
     }
 
     #[test]
@@ -1666,9 +1605,9 @@ mod tests {
         assert_eq!(app.rows.len(), 1, "projects start folded");
         app.cursor = 0; // the project row
         app.toggle_collapsed();
-        assert_eq!(app.rows.len(), 3, "expanding reveals task and session");
+        assert_eq!(app.rows.len(), 2, "expanding reveals the session");
         app.toggle_collapsed();
-        assert_eq!(app.rows.len(), 1, "task and session are folded away again");
+        assert_eq!(app.rows.len(), 1, "the session is folded away again");
     }
 
     #[test]
@@ -1821,7 +1760,7 @@ mod tests {
     }
 
     #[test]
-    fn replacing_tree_selects_new_task() {
+    fn replacing_tree_selects_and_reveals_new_session() {
         let initial = SessionTree {
             projects: vec![ProjectInfo {
                 id: "project".to_owned(),
@@ -1836,29 +1775,27 @@ mod tests {
             initial,
             None,
         );
+        let meta = SessionMeta {
+            id: "ses_new".to_owned(),
+            ..SessionMeta::default()
+        };
         let refreshed = SessionTree {
             projects: vec![ProjectInfo {
                 id: "project".to_owned(),
                 name: "Project".to_owned(),
                 tasks: vec![TaskInfo {
-                    id: "new_task".to_owned(),
-                    name: "New task".to_owned(),
-                    ..TaskInfo::default()
+                    id: "general".to_owned(),
+                    name: "General".to_owned(),
+                    sessions: vec![meta.id.clone()],
                 }],
                 ..ProjectInfo::default()
             }],
-            ..SessionTree::default()
+            sessions: HashMap::from([(meta.id.clone(), meta)]),
         };
-        app.replace_tree(
-            refreshed,
-            Some(NavKey::Task {
-                project_id: "project".to_owned(),
-                task_id: "new_task".to_owned(),
-            }),
-        );
+        app.replace_tree(refreshed, Some(NavKey::Session("ses_new".to_owned())));
         assert!(matches!(
             app.selected(),
-            Some(NavRow::Task { id, .. }) if id == "new_task"
+            Some(NavRow::Session(row)) if row.meta.id == "ses_new"
         ));
     }
 
@@ -2277,9 +2214,7 @@ mod tests {
         let mut app = empty_app();
         app.modal = Some(Modal::Session(SessionForm {
             project_id: "project".to_owned(),
-            task_id: "task".to_owned(),
             project_name: "Project".to_owned(),
-            task_name: "Task".to_owned(),
             title: String::new(),
             providers: vec![Provider::Native],
             provider_index: 0,

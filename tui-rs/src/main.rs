@@ -11,7 +11,7 @@ use std::{io, thread, time::Duration};
 use anyhow::{Context, Result};
 use app::{
     App, DeleteForm, DeleteTarget, FormFocus, FormState, Modal, NavKey, NavRow, PaneFocus,
-    ProjectForm, RunState, SessionForm, TaskForm,
+    ProjectForm, RunState, SessionForm,
 };
 use args::Args;
 use clap::Parser;
@@ -294,10 +294,7 @@ async fn run_ui(
             KeyCode::Home => app.scroll_up(u16::MAX),
             KeyCode::End => app.scroll_from_bottom = 0,
             KeyCode::Enter => {
-                let is_folder = matches!(
-                    app.selected(),
-                    Some(NavRow::Project { .. }) | Some(NavRow::Task { .. })
-                );
+                let is_folder = matches!(app.selected(), Some(NavRow::Project { .. }));
                 if is_folder {
                     app.toggle_collapsed();
                 } else {
@@ -315,7 +312,6 @@ async fn run_ui(
                 }
             }
             KeyCode::Char('p') => open_project_form(app),
-            KeyCode::Char('t') => open_task_form(app),
             KeyCode::Char('n') => {
                 open_session_form(app);
                 refresh_health(client.clone(), actions_tx.clone());
@@ -351,42 +347,16 @@ fn open_project_form(app: &mut App) {
     }));
 }
 
-fn open_task_form(app: &mut App) {
-    let Some((project_id, project_name)) = app.selected_project_target() else {
-        app.notice = Some("Select a project, task, or session first.".to_owned());
-        return;
-    };
-    if project_id == "__chats__" {
-        app.notice = Some("The reserved Chats collection cannot contain project tasks.".to_owned());
-        return;
-    }
-    app.modal = Some(Modal::Task(TaskForm {
-        project_id,
-        project_name,
-        name: String::new(),
-        focus: FormFocus::First,
-        state: FormState::default(),
-    }));
-}
-
 fn open_session_form(app: &mut App) {
-    let target = app.selected_task_target().or_else(|| {
-        // The Chats bucket has no per-task grouping, so allow starting a
-        // general chat straight from the reserved Chats project row.
-        match app.selected_project_target() {
-            Some((id, name)) if id == "__chats__" => Some((id.clone(), id, name.clone(), name)),
-            _ => None,
-        }
-    });
-    let Some((project_id, task_id, project_name, task_name)) = target else {
-        app.notice = Some("Select a task or session first.".to_owned());
+    // New sessions file under the project's unlabeled bucket on the backend;
+    // the Chats row starts a general chat.
+    let Some((project_id, project_name)) = app.selected_project_target() else {
+        app.notice = Some("Select a project or session first.".to_owned());
         return;
     };
     app.modal = Some(Modal::Session(SessionForm {
         project_id,
-        task_id,
         project_name,
-        task_name,
         title: String::new(),
         providers: app.available_providers(),
         provider_index: 0,
@@ -724,7 +694,6 @@ fn modal_submitting(app: &App) -> bool {
 fn modal_focus(app: &App) -> Option<FormFocus> {
     match app.modal.as_ref()? {
         Modal::Project(form) => Some(form.focus),
-        Modal::Task(form) => Some(form.focus),
         Modal::Session(form) => Some(form.focus),
         Modal::Delete(_) => None,
     }
@@ -740,14 +709,6 @@ fn move_form_focus(app: &mut App, backwards: bool) {
     };
     match app.modal.as_mut() {
         Some(Modal::Project(form)) => form.focus = move_focus(form.focus),
-        Some(Modal::Task(form)) => {
-            form.focus = match (form.focus, backwards) {
-                (FormFocus::First, false) | (FormFocus::Second, false) => FormFocus::Submit,
-                (FormFocus::Submit, false) => FormFocus::First,
-                (FormFocus::Submit, true) | (FormFocus::Second, true) => FormFocus::First,
-                (FormFocus::First, true) => FormFocus::Submit,
-            };
-        }
         Some(Modal::Session(form)) => form.focus = move_focus(form.focus),
         Some(Modal::Delete(_)) => {}
         None => {}
@@ -779,7 +740,6 @@ fn edit_focused_text(app: &mut App, edit: impl FnOnce(&mut String)) {
     match app.modal.as_mut() {
         Some(Modal::Project(form)) if form.focus == FormFocus::First => edit(&mut form.name),
         Some(Modal::Project(form)) if form.focus == FormFocus::Second => edit(&mut form.root),
-        Some(Modal::Task(form)) if form.focus == FormFocus::First => edit(&mut form.name),
         Some(Modal::Session(form)) if form.focus == FormFocus::First => edit(&mut form.title),
         _ => {}
     }
@@ -910,15 +870,6 @@ async fn run_delete(
         DeleteTarget::Project { id, name, .. } => {
             let result = client.delete_project(id).await?;
             Ok((format!("project '{name}'"), result.removed_sessions))
-        }
-        DeleteTarget::Task {
-            project_id,
-            id,
-            name,
-            ..
-        } => {
-            let result = client.delete_task(project_id, id).await?;
-            Ok((format!("task '{name}'"), result.removed_sessions))
         }
         DeleteTarget::Session { id, name } => {
             client.delete_session(id).await?;
@@ -1125,13 +1076,8 @@ enum CreationRequest {
         name: String,
         root: String,
     },
-    Task {
-        project_id: String,
-        name: String,
-    },
     Session {
         project_id: String,
-        task_id: String,
         title: String,
         provider: &'static str,
     },
@@ -1153,16 +1099,6 @@ fn submit_modal(
                 root: form.root.trim().to_owned(),
             }
         }
-        Some(Modal::Task(form)) => {
-            if form.name.trim().is_empty() {
-                set_modal_error(app, "Task name is required.");
-                return;
-            }
-            CreationRequest::Task {
-                project_id: form.project_id.clone(),
-                name: form.name.trim().to_owned(),
-            }
-        }
         Some(Modal::Session(form)) => {
             let Some(provider) = form.providers.get(form.provider_index).copied() else {
                 set_modal_error(app, "No backend provider is currently available.");
@@ -1170,7 +1106,6 @@ fn submit_modal(
             };
             CreationRequest::Session {
                 project_id: form.project_id.clone(),
-                task_id: form.task_id.clone(),
                 title: form.title.trim().to_owned(),
                 provider: provider.api_value(),
             }
@@ -1225,21 +1160,8 @@ async fn run_creation(
             let notice = project_creation_notice(&created.name, existed);
             (NavKey::Project(created.id), None, notice)
         }
-        CreationRequest::Task { project_id, name } => {
-            let created = client.create_task(&project_id, &name).await?;
-            let notice = format!("Created task '{}'.", created.name);
-            (
-                NavKey::Task {
-                    project_id,
-                    task_id: created.id,
-                },
-                None,
-                notice,
-            )
-        }
         CreationRequest::Session {
             project_id,
-            task_id,
             title,
             provider,
         } => {
@@ -1248,9 +1170,7 @@ async fn run_creation(
             let created = if project_id == "__chats__" {
                 client.create_chat(&title, provider).await?
             } else {
-                client
-                    .create_session(&project_id, &task_id, &title, provider)
-                    .await?
+                client.create_session(&project_id, &title, provider).await?
             };
             let id = created.id;
             let notice = format!("Created and opened session '{}'.", created.title);

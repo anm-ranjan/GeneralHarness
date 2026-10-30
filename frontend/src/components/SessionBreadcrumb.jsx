@@ -4,21 +4,17 @@ import useSelectSession from '../hooks/useSelectSession'
 import useSessionTree from '../hooks/useSessionTree'
 import { CHATS_PROJECT_ID } from '../constants'
 import { relativeTime } from '../utils'
-import { isChatSession, projectSessions } from '../sessionList'
-import { labelColorStyle } from '../labelColors'
+import { isChatSession, labelsFor, projectSessions, taskNamesFor } from '../sessionLabels'
 
 const selectProjects = state => state.projects
 const selectSessionsById = state => state.sessionsById
-const selectTaskNames = state => state.taskNames
 
-// "Project / Label / Session" header. Clicking the project or session opens a
-// list: projects jump to their most recent thread, sessions switch within the
-// current project. The label is shown for orientation only.
+// "Project / Thread" header. Clicking either part opens a list: projects jump
+// to their most recent thread, threads switch within the current project.
 export default function SessionBreadcrumb({ meta }) {
   const dispatch = useAppDispatch()
   const projects = useAppSelector(selectProjects)
   const sessionsById = useAppSelector(selectSessionsById)
-  const taskNames = useAppSelector(selectTaskNames)
   const selectSession = useSelectSession()
   const tree = useSessionTree()
   const [open, setOpen] = useState(null)
@@ -26,9 +22,8 @@ export default function SessionBreadcrumb({ meta }) {
   const projectId = isChat ? CHATS_PROJECT_ID : meta.project_id
   const project = projects.find(p => p.id === projectId)
   const projectName = isChat ? 'Chats' : (project?.name || meta.project_id)
-  const labelName = isChat ? '' : (taskNames[meta.task_id] || meta.task_id)
-  const labelColor = project?.tasks?.find(task => task.id === meta.task_id)?.color || meta.task_id
   const sessionTitle = meta.title || meta.id?.slice(0, 8)
+  const taskNamesByProject = useMemo(() => taskNamesFor(projects), [projects])
 
   const projectItems = useMemo(() => {
     const ordered = [...projects.filter(p => p.id !== CHATS_PROJECT_ID), ...projects.filter(p => p.id === CHATS_PROJECT_ID)]
@@ -52,11 +47,11 @@ export default function SessionBreadcrumb({ meta }) {
       id: s.id,
       label: s.title || s.id.slice(0, 8),
       detail: relativeTime(s.updated_at),
-      tags: !isChat && taskNames[s.task_id] ? [taskNames[s.task_id]] : [],
+      tags: labelsFor(s, taskNamesByProject),
       title: s.title || s.id,
       current: s.id === meta.id,
     }))
-  }, [project, sessionsById, meta, taskNames, isChat])
+  }, [project, sessionsById, meta, taskNamesByProject])
 
   async function chooseProject(item) {
     setOpen(null)
@@ -96,16 +91,6 @@ export default function SessionBreadcrumb({ meta }) {
         )}
       </div>
       <span className="text-faint select-none" aria-hidden="true">/</span>
-      {labelName && <>
-        <span
-          className="label-chip max-w-[10rem] truncate rounded-full px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider"
-          style={labelColorStyle(labelColor)}
-          title="Primary label"
-        >
-          {labelName}
-        </span>
-        <span className="text-faint select-none" aria-hidden="true">/</span>
-      </>}
       <div className="relative min-w-0 shrink">
         <button
           type="button"

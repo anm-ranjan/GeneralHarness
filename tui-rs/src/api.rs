@@ -49,6 +49,9 @@ pub struct SessionMeta {
     pub kind: String,
     pub message_queue: Vec<Value>,
     pub run_settings: RunSettings,
+    pub updated_at: String,
+    pub labels: Vec<String>,
+    pub archived: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -149,26 +152,17 @@ impl MyHarnessClient {
             .await
     }
 
-    pub async fn create_task(&self, project_id: &str, name: &str) -> Result<TaskInfo> {
-        self.post_json(
-            "api/tasks",
-            &json!({ "project_id": project_id, "name": name }),
-        )
-        .await
-    }
-
     pub async fn create_session(
         &self,
         project_id: &str,
-        task_id: &str,
         title: &str,
         provider: &str,
     ) -> Result<SessionMeta> {
+        // No task id: the backend files new sessions under the unlabeled bucket.
         self.post_json(
             "api/sessions",
             &json!({
                 "project_id": project_id,
-                "task_id": task_id,
                 "title": title,
                 "provider": provider,
             }),
@@ -269,11 +263,6 @@ impl MyHarnessClient {
 
     pub async fn delete_project(&self, project_id: &str) -> Result<DeleteResult> {
         self.delete_json(&format!("api/projects/{project_id}"))
-            .await
-    }
-
-    pub async fn delete_task(&self, project_id: &str, task_id: &str) -> Result<DeleteResult> {
-        self.delete_json(&format!("api/projects/{project_id}/tasks/{task_id}"))
             .await
     }
 

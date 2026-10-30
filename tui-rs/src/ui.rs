@@ -431,21 +431,6 @@ fn nav_line<'a>(
                 Span::styled(format!("  {root}"), Style::default().fg(Color::DarkGray)),
             ])
         }
-        NavRow::Task {
-            project_id,
-            id,
-            name,
-        } => {
-            let folded = collapsed.contains(&NavKey::Task {
-                project_id: project_id.clone(),
-                task_id: id.clone(),
-            });
-            Line::from(vec![
-                Span::raw("  "),
-                Span::styled(fold_marker(folded), Style::default().fg(Color::Yellow)),
-                Span::styled(name, Style::default().add_modifier(Modifier::BOLD)),
-            ])
-        }
         NavRow::Session(session) => session_line(session, active_id),
     }
 }
@@ -479,14 +464,10 @@ fn session_line<'a>(row: &'a SessionRow, active_id: Option<&str>) -> Line<'a> {
     };
     Line::from(vec![
         Span::styled(
-            format!("{active} [{provider}] "),
+            format!("  {active} [{provider}] "),
             Style::default().fg(Color::Cyan),
         ),
         Span::raw(title),
-        Span::styled(
-            format!("\n  {}/{}", row.project_name, row.task_name),
-            Style::default().fg(Color::DarkGray),
-        ),
     ])
 }
 
@@ -685,19 +666,6 @@ fn draw_modal(frame: &mut Frame, modal: &Modal) {
             form.state.error.as_deref(),
             form.state.submitting,
         ),
-        Modal::Task(form) => (
-            " Create task ",
-            vec![
-                Line::styled(
-                    format!("Project: {}", form.project_name),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                field_line("Name", &form.name, form.focus == FormFocus::First),
-                submit_line(form.focus == FormFocus::Submit, "Create task"),
-            ],
-            form.state.error.as_deref(),
-            form.state.submitting,
-        ),
         Modal::Session(form) => {
             let provider = form
                 .providers
@@ -708,7 +676,7 @@ fn draw_modal(frame: &mut Frame, modal: &Modal) {
                 " Create session ",
                 vec![
                     Line::styled(
-                        format!("Target: {} / {}", form.project_name, form.task_name),
+                        format!("Project: {}", form.project_name),
                         Style::default().fg(Color::DarkGray),
                     ),
                     field_line(
@@ -728,9 +696,6 @@ fn draw_modal(frame: &mut Frame, modal: &Modal) {
                 DeleteTarget::Project { session_count, .. } => format!(
                     "Removes the project and {session_count} session(s) from the Harness; workspace files stay untouched."
                 ),
-                DeleteTarget::Task { session_count, .. } => {
-                    format!("Removes the task and {session_count} session(s) from the Harness.")
-                }
                 DeleteTarget::Session { .. } => {
                     "Removes the transcript, events, attachments, and session data.".to_owned()
                 }
@@ -758,7 +723,7 @@ fn draw_modal(frame: &mut Frame, modal: &Modal) {
     if submitting {
         let progress = match modal {
             Modal::Delete(_) => "Deleting…",
-            Modal::Project(_) | Modal::Task(_) | Modal::Session(_) => "Creating…",
+            Modal::Project(_) | Modal::Session(_) => "Creating…",
         };
         content.push(Line::styled(
             progress,
@@ -774,7 +739,7 @@ fn draw_modal(frame: &mut Frame, modal: &Modal) {
     } else {
         let hint = match modal {
             Modal::Delete(_) => "y or Enter deletes · n or Esc cancels",
-            Modal::Project(_) | Modal::Task(_) | Modal::Session(_) => {
+            Modal::Project(_) | Modal::Session(_) => {
                 "Tab changes focus · Enter advances/submits · Esc cancels"
             }
         };

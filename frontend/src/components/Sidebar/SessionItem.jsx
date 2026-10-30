@@ -1,24 +1,30 @@
-import { useEffect, useState } from 'react'
-import { useAppDispatch, useAppSelector } from '../../context/AppContext'
+import { memo, useEffect, useState } from 'react'
+import { useAppSelector } from '../../context/AppContext'
 import InlineEdit from './InlineEdit'
 import { relativeTime } from '../../utils'
 import { runStateBadge } from '../../runStates'
-import { downloadSessionBackup, downloadSessionExport } from '../../api'
-import { useSidebarActions } from './SidebarActions'
+import { copyText } from '../../clipboard'
+import { sessionReference } from '../../sessionLabels'
 
-export default function SessionItem({ session, isActive, onSelect, onRename, onMove, onDelete, subtitle = '' }) {
-  const dispatch = useAppDispatch()
+const selectProjectNames = state => state.projectNames
+
+// One sidebar row. Hover shows rename and copy; everything else lives in the
+// right-click menu. `subtitle` names the project in the flat Activity view.
+function SessionItem({ session, labels = [], subtitle = '', isActive, onSelect, onRename, onContextMenu, renameRequested = false, onRenameDone }) {
   const [editing, setEditing] = useState(false)
-  const { openContextMenu, renameSessionId, clearRenameRequest } = useSidebarActions()
-
-  // "Rename" in the context menu asks this row to enter inline editing.
-  useEffect(() => {
-    if (renameSessionId !== session.id) return
-    setEditing(true)
-    clearRenameRequest()
-  }, [renameSessionId, session.id, clearRenameRequest])
+  const [copied, setCopied] = useState('')
   const ownRunState = useAppSelector(state => state.runStates[session.id])
+  const projectNames = useAppSelector(selectProjectNames)
   const runState = ownRunState || (session.status === 'running' ? 'running' : null)
+
+  useEffect(() => {
+    if (renameRequested) { setEditing(true); onRenameDone?.() }
+  }, [renameRequested, onRenameDone])
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(''), 1500)
+    return () => clearTimeout(timer)
+  }, [copied])
 
   function handleKeyDown(e) {
     if (editing) return
@@ -27,21 +33,26 @@ export default function SessionItem({ session, isActive, onSelect, onRename, onM
       setEditing(true)
       return
     }
-    if (openContextMenu && (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) {
-      e.preventDefault()
-      const rect = e.currentTarget.getBoundingClientRect()
-      openContextMenu(session, rect.left + 16, rect.bottom)
-      return
-    }
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault()
       onSelect(session.id)
     }
+    if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+      e.preventDefault()
+      const rect = e.currentTarget.getBoundingClientRect()
+      onContextMenu?.(session, rect.left + 24, rect.bottom)
+    }
+  }
+
+  async function copyReference(e) {
+    e.stopPropagation()
+    try { await copyText(sessionReference(session, projectNames)); setCopied('Copied') }
+    catch { setCopied('Copy failed') }
   }
 
   return (
     <div
-      className={`group relative grid grid-cols-[1fr_auto_auto] items-center gap-1 px-2 py-1.5 rounded-md cursor-pointer text-[13px] transition-[background-color,color,box-shadow,transform] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70 ${
+      className={`group relative grid grid-cols-[1fr_auto] items-center gap-x-1 px-2 py-1.5 rounded-md cursor-pointer text-[13px] transition-[background-color,color,box-shadow,transform] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70 ${
         isActive
           ? 'bg-accent-soft text-accent shadow-[inset_2px_0_0_var(--color-accent),0_0_0_1px_rgba(245,158,11,0.16)]'
           : 'text-muted hover:bg-surface hover:text-text-default hover:translate-x-0.5'
@@ -56,9 +67,9 @@ export default function SessionItem({ session, isActive, onSelect, onRename, onM
       aria-current={isActive ? 'page' : undefined}
       onClick={() => !editing && onSelect(session.id)}
       onContextMenu={e => {
-        if (editing || !openContextMenu) return
+        if (editing || !onContextMenu) return
         e.preventDefault()
-        openContextMenu(session, e.clientX, e.clientY)
+        onContextMenu(session, e.clientX, e.clientY)
       }}
       onKeyDown={handleKeyDown}
     >
@@ -80,65 +91,34 @@ export default function SessionItem({ session, isActive, onSelect, onRename, onM
               title={runStateBadge(runState).label}
             />
           )}
-          <span className="min-w-0 flex flex-col">
-            <span className="truncate">{session.title || session.id.slice(0, 8)}</span>
-            {subtitle && <span className="truncate text-[11px] text-faint">{subtitle}</span>}
-          </span>
+          <span className="truncate">{session.title || session.id.slice(0, 8)}</span>
         </span>
       )}
-      <span className={`text-[11px] ${isActive ? 'text-accent/80' : 'text-faint'}`}>{relativeTime(session.updated_at)}</span>
-      <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            downloadSessionExport(session.id, 'md').catch((err) => {
-              dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: err.detail || err.message } })
-            })
-          }}
-          className="text-faint hover:text-accent text-[11px] px-0.5"
-          title="Export as Markdown"
-        >↓</button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            downloadSessionBackup(session.id).catch((err) => {
-              dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: err.detail || err.message } })
-            })
-          }}
-          className="text-faint hover:text-accent text-[11px] px-0.5"
-          title="Download portable backup (.zip)"
-        >⇩</button>
-        <button
-          onClick={(e) => { e.stopPropagation(); setEditing(true) }}
-          className="text-faint hover:text-accent text-[11px] px-0.5"
-          title="Rename"
-        >✎</button>
-        {onMove && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onMove(session) }}
-            className="text-faint hover:text-accent text-[11px] px-0.5"
-            title="Move to another label or project"
-          >↷</button>
-        )}
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            dispatch({
-              type: 'OPEN_CONFIRM',
-              payload: {
-                title: 'Delete thread?',
-                message: 'This deletes the thread event stream and attachments.',
-                detail: session.title || session.id,
-                confirmLabel: 'Delete',
-                tone: 'danger',
-                onConfirm: () => onDelete(session.id),
-              },
-            })
-          }}
-          className="text-faint hover:text-danger text-[11px] px-0.5"
-          title="Delete"
-        >✕</button>
-      </div>
+      <span className="relative flex items-center justify-end">
+        <span className={`text-[11px] transition-opacity group-hover:opacity-0 group-focus-within:opacity-0 ${copied ? 'opacity-0' : ''} ${isActive ? 'text-accent/80' : 'text-faint'}`}>
+          {relativeTime(session.updated_at)}
+        </span>
+        <span className={`absolute right-0 flex gap-0.5 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 ${copied ? 'opacity-100' : 'opacity-0'}`}>
+          {copied ? (
+            <span className={`text-[11px] ${copied === 'Copied' ? 'text-ok' : 'text-danger'}`} role="status">{copied}</span>
+          ) : (
+            <>
+              <button onClick={(e) => { e.stopPropagation(); setEditing(true) }} className="text-faint hover:text-accent text-[11px] px-0.5" title="Rename (F2)">✎</button>
+              <button onClick={copyReference} className="text-faint hover:text-accent text-[11px] px-0.5" title="Copy thread reference">⧉</button>
+            </>
+          )}
+        </span>
+      </span>
+      {(labels.length > 0 || subtitle) && !editing && (
+        <span className="col-span-2 mt-0.5 flex flex-wrap items-center gap-1 min-w-0 text-[10px] leading-4">
+          {subtitle && <span className="truncate text-faint max-w-full">{subtitle}</span>}
+          {labels.map(label => (
+            <span key={label} className="rounded px-1 border border-line text-faint truncate max-w-[10rem]" title={label}>{label}</span>
+          ))}
+        </span>
+      )}
     </div>
   )
 }
+
+export default memo(SessionItem)

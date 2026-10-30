@@ -78,6 +78,10 @@ class SessionMeta(BaseModel):
     # Archived sessions leave the project tree and Activity view but keep
     # their history; the sidebar lists them in a separate group.
     archived: bool = False
+    # Display names of the session's labels, primary first. Read-only here:
+    # the store derives it from session_labels, and placeholder buckets
+    # ("General", "Chats") are left out.
+    labels: list[str] = Field(default_factory=list)
     # Per-session overrides for run behavior. Absent keys inherit the process
     # defaults from agent config. Known keys: approval_mode, verbose_tools,
     # max_iterations, model, reasoning_effort.
@@ -172,6 +176,8 @@ class RenameTaskRequest(BaseModel):
 
 class RenameSessionRequest(BaseModel):
     title: str | None = None
+    # Label names; unknown names become new labels in the session's project.
+    labels: list[str] | None = None
     archived: bool | None = None
 
 
@@ -182,7 +188,9 @@ class UpdateRunSettingsRequest(BaseModel):
 
 class MoveSessionRequest(BaseModel):
     project_id: str
-    task_id: str
+    # Empty files the session under the target's unlabeled bucket and carries
+    # its label names over to the target project.
+    task_id: str = ""
 
 
 class DeleteSessionRequest(BaseModel):

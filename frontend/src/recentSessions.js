@@ -2,18 +2,20 @@
 // component so they can be unit-tested with node:test like the other frontend modules.
 
 import { CHATS_PROJECT_ID } from './constants.js'
+import { sessionLabels } from './sessionLabels.js'
 
 export const RECENT_SESSION_LIMIT = 5
 
 // Human label for where a session lives: chats are project-less, so they get a flat
-// "Chat" label while project sessions show "<project> / <task>". Falls back to the raw
-// ids when the tree has not caught up with a session's project/task yet.
+// "Chat" label while project sessions show "<project> · <labels>". Falls back to the
+// raw project id when the tree has not caught up with a session's project yet.
 function contextLabel(session, projects) {
   if (session.kind === 'chat' || session.project_id === CHATS_PROJECT_ID) return 'Chat'
   const project = (projects || []).find(p => p.id === session.project_id)
   if (!project) return session.project_id || ''
-  const task = (project.tasks || []).find(t => t.id === session.task_id)
-  return task ? `${project.name} / ${task.name}` : project.name
+  const taskNames = Object.fromEntries((project.tasks || []).map(t => [t.id, t.name]))
+  const labels = sessionLabels(session, taskNames)
+  return labels.length ? `${project.name} · ${labels.join(', ')}` : project.name
 }
 
 // The most recently touched sessions across every project plus chats, newest first.

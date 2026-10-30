@@ -51,7 +51,7 @@ test('respects an explicit limit and handles empty input', () => {
   assert.deepEqual(recentSessions(undefined, undefined), [])
 })
 
-test('labels chats flatly and project sessions as project / task', () => {
+test('labels chats flatly and project sessions as project · labels', () => {
   const sessionsById = {
     chat: session('chat', '2026-07-26T10:00:00Z', {
       project_id: '__chats__',
@@ -63,7 +63,7 @@ test('labels chats flatly and project sessions as project / task', () => {
   const [chat, proj] = recentSessions(sessionsById, projects)
   assert.equal(chat.contextLabel, 'Chat')
   assert.equal(chat.kind, 'chat')
-  assert.equal(proj.contextLabel, 'MyHarness / Splash')
+  assert.equal(proj.contextLabel, 'MyHarness · Splash')
   assert.equal(proj.kind, 'project')
 })
 

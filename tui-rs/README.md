@@ -5,8 +5,9 @@ ratatui and tokio. It talks to the backend only over the documented REST and
 WebSocket API — it never imports the agent — so it works equally well against a
 local backend or one on another machine.
 
-It shows backend health and the project/task/session tree, creates and deletes
-projects/tasks/sessions, sends or queues prompts, resolves approvals, cancels
+It shows backend health and the project → session tree (newest session first,
+archived sessions hidden, like the web sidebar), creates and deletes
+projects/sessions, sends or queues prompts, resolves approvals, cancels
 runs, answers agent questions, shows live task plans, and renders replay plus
 live events over WebSocket.
 
@@ -45,8 +46,7 @@ newline support; classic `cmd.exe` windows need `Alt+Enter` instead.
 - `j` / `Down`, `k` / `Up`: move through sessions while the navigator is focused
 - `Enter`: open the highlighted session
 - `p`: create a project from an allowed workspace root
-- `t`: create a task in the selected project
-- `n`: create and open a session in the selected task
+- `n`: create and open a session in the selected project (or a chat on the Chats row)
 - Type directly in the right-pane composer; `Enter` sends
 - `Shift+Enter`: insert a newline in the composer; pasted text keeps its
   newlines. The TUI enables the kitty keyboard protocol when the terminal
@@ -74,7 +74,7 @@ newline support; classic `cmd.exe` windows need `Alt+Enter` instead.
   `Esc` closes
 - `i`: optional shortcut to focus the conversation pane
 - `c`: cancel the open session's active run (navigator focus)
-- `d`: delete the selected project, task, or session after confirmation
+- `d`: delete the selected project or session after confirmation
 - `PageUp` / `PageDown`, `Home` / `End`: scroll the transcript
 - `r`: reconnect the selected session and refresh backend health and the tree
 - `q`: quit from navigator focus
@@ -82,7 +82,7 @@ newline support; classic `cmd.exe` windows need `Alt+Enter` instead.
 
 A dropped session stream reconnects automatically with 1s/2s/5s backoff until
 the connection succeeds; `r` still forces an immediate reconnect. The
-project/task/session tree also refreshes every 30 seconds so sessions created
+project/session tree also refreshes every 30 seconds so sessions created
 in the web UI appear without restarting. Unsent drafts are kept per session
 when switching between sessions.
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useApp } from '../context/AppContext'
 import useApi from '../hooks/useApi'
 import { copyText } from '../clipboard'
-import { sessionReference } from '../sessionList'
+import { sessionReference } from '../sessionLabels'
 import { shortcutLabel } from '../constants'
 import SessionBreadcrumb from './SessionBreadcrumb'
 import { SidebarIcon } from './Sidebar/Sidebar'
@@ -69,7 +69,7 @@ export default function TopBar() {
           <button type="button" className={`shrink-0 inline-flex items-center justify-center rounded p-1.5 focus-visible:ring-1 focus-visible:ring-accent ${copyState === 'Copy failed' ? 'text-danger' : copyState === 'Copied' ? 'text-ok' : 'text-muted hover:text-accent'}`}
             aria-label="Copy session reference" title={copyState || 'Copy session reference'}
             onClick={async () => {
-              try { await copyText(sessionReference(meta, state.projectNames, state.taskNames)); setCopyState('Copied') }
+              try { await copyText(sessionReference(meta, state.projectNames)); setCopyState('Copied') }
               catch { setCopyState('Copy failed') }
             }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
