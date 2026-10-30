@@ -13,6 +13,16 @@ export function baseName(path = '') {
 // Codex runs its own tools; present them in the same shape as native ones so
 // the notes read the same whichever provider did the work.
 function codexTool(item) {
+  if (item.type === 'codex_command' && item.tool) {
+    // A provider reporting its own call in native shape (Claude's Read, Grep, ...).
+    const done = item.status === 'done' || item.status === 'completed'
+    return {
+      name: item.tool,
+      statusLine: item.label || item.command,
+      status: item.status === 'failed' ? 'failed' : done ? 'done' : 'running',
+      callId: item.callId || '',
+    }
+  }
   if (item.type === 'codex_command') {
     return {
       name: 'shell_run',
@@ -46,10 +56,21 @@ export function buildTurns(items) {
         if (turn.startTime == null && item.startTime) turn.startTime = item.startTime
         break
       case 'codex_command':
-      case 'codex_file_change':
-        turn.tools.push(codexTool(item))
+      case 'codex_file_change': {
+        const tool = codexTool(item)
+        // The same call reports again as it starts, gets its input and ends:
+        // that updates one entry rather than adding three.
+        const existing = tool.callId ? turn.tools.find(entry => entry.callId === tool.callId) : null
+        if (existing) {
+          existing.status = tool.status
+          existing.statusLine = tool.statusLine
+          existing.name = tool.name
+          break
+        }
+        turn.tools.push(tool)
         turn.anchors.push(item)
         break
+      }
       case 'thinking':
       case 'thinking_stream':
         turn.thinking.push(item)

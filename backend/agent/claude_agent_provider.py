@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
 import re
 import threading
 import time
@@ -181,6 +182,41 @@ def _emit_stream_delta(ui, event: dict[str, Any]) -> None:
         thought = delta.get("thinking")
         if isinstance(thought, str) and thought:
             _stream(ui, "show_thinking_delta", thought)
+
+
+def _tool_activity(name: str, tool_input: Any) -> tuple[str, str] | None:
+    """(native-style tool name, one-line label) for a Claude tool call, or None.
+
+    The labels feed the same live line and margin notes native tools use, so
+    "Reading index.html" shows while Claude works. Calls whose own surfaces
+    already cover them (subagents, the todo list, the ask tool) are skipped.
+    """
+    data = tool_input if isinstance(tool_input, Mapping) else {}
+
+    def base(key: str, fallback: str) -> str:
+        value = str(data.get(key) or "").rstrip("/\\")
+        return os.path.basename(value) or fallback
+
+    if name in ("Task", "TodoWrite", "ExitPlanMode") or name == ASK_TOOL_QUALIFIED:
+        return None
+    if name == "Bash":
+        command = " ".join(str(data.get("command") or "").split())
+        return "shell_run", f"Run: {command or 'a command'}"
+    if name in ("Read", "NotebookRead"):
+        return "file_read", f"Read {base('file_path', 'a file')}"
+    if name == "Write":
+        return "file_write", f"Write {base('file_path', 'a file')}"
+    if name in ("Edit", "MultiEdit", "NotebookEdit"):
+        return "file_replace", f"Update {base('file_path', 'a file')}"
+    if name == "Grep":
+        return "content_search", f"Search {data.get('pattern') or 'the code'}"
+    if name in ("Glob", "LS"):
+        return "file_list", f"List {data.get('pattern') or data.get('path') or 'files'}"
+    if name == "WebFetch":
+        return "web_fetch", f"Fetch {data.get('url') or 'a page'}"
+    if name == "WebSearch":
+        return "WebSearch", f"Search the web: {data.get('query') or ''}".rstrip(": ")
+    return name, name
 
 
 def _permission_mode_for(approval_mode: str) -> str:
@@ -600,6 +636,20 @@ class ClaudeAgentProvider:
 
                     cancel_task = asyncio.create_task(watch_cancel())
                     try:
+                        announced: dict[str, tuple[str, str, str]] = {}
+
+                        def announce(call_id, name, tool_input, status):
+                            """Show one tool call on the live line, once per change."""
+                            info = _tool_activity(str(name or ""), tool_input)
+                            hook = getattr(ui, "show_provider_tool", None)
+                            if info is None or not callable(hook) or not call_id:
+                                return False
+                            entry = (info[0], info[1], status)
+                            if announced.get(call_id) != entry:
+                                announced[call_id] = entry
+                                hook(info[0], info[1], status, str(call_id))
+                            return True
+
                         await client.query(prompt)
                         async for message in client.receive_response():
                             if isinstance(message, AssistantMessage):
@@ -613,7 +663,14 @@ class ClaudeAgentProvider:
                                         thought = getattr(block, "thinking", "") or ""
                                         if thought.strip():
                                             ui.show_thinking(thought)
-                                    elif isinstance(block, ToolUseBlock) and verbose:
+                                    elif isinstance(block, ToolUseBlock):
+                                        shown = announce(
+                                            _field(block, "id", ""), block.name, block.input, "running"
+                                        )
+                                        if not verbose or (
+                                            shown and block.name in ("Bash", "Write", "Edit", "MultiEdit", "NotebookEdit")
+                                        ):
+                                            continue
                                         if block.name == "Bash":
                                             ui.show_codex_command(
                                                 str((block.input or {}).get("command", "")), "running"
@@ -633,8 +690,26 @@ class ClaudeAgentProvider:
                                     _field(message, "parent_tool_use_id", None),
                                 )
                                 _emit_stream_delta(ui, message.event)
+                                started = message.event if isinstance(message.event, dict) else {}
+                                started_block = started.get("content_block")
+                                if (
+                                    started.get("type") == "content_block_start"
+                                    and isinstance(started_block, dict)
+                                    and started_block.get("type") == "tool_use"
+                                ):
+                                    # The call is announced as soon as Claude starts it,
+                                    # before its input (and any long file) is complete.
+                                    announce(started_block.get("id"), started_block.get("name"), {}, "running")
                             elif message.__class__.__name__ == "UserMessage":
                                 agent_tree.observe_message(message)
+                                content = _field(message, "content", None)
+                                for block in content if isinstance(content, (list, tuple)) else []:
+                                    call_id = _field(block, "tool_use_id", "")
+                                    if call_id in announced:
+                                        tool, label, _status = announced[call_id]
+                                        status = "failed" if _field(block, "is_error", False) else "completed"
+                                        announced[call_id] = (tool, label, status)
+                                        ui.show_provider_tool(tool, label, status, str(call_id))
                             elif isinstance(message, SystemMessage):
                                 if message.subtype == "init":
                                     session_id = (message.data or {}).get("session_id")

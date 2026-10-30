@@ -337,7 +337,7 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
     }
 
     case 'codex_command':
-      dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'codex_command', command: data.command, status: data.status } })
+      dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'codex_command', command: data.command, status: data.status, tool: data.tool, label: data.label, callId: data.call_id } })
       break
 
     case 'codex_file_change':

@@ -25,6 +25,7 @@ class FakeUI:
         self.thinking_deltas = []
         self.assistant_deltas = []
         self.agent_events = []
+        self.tools = []
         self.run_settings = run_settings or {}
 
     def show_user_message(self, *_args):
@@ -56,6 +57,9 @@ class FakeUI:
 
     def show_codex_command(self, *_args):
         pass
+
+    def show_provider_tool(self, tool, label, status, call_id=""):
+        self.tools.append((tool, label, status, call_id))
 
     def show_codex_file_change(self, *_args):
         pass
@@ -169,6 +173,8 @@ def fake_sdk(captured):
             for event in captured.get("stream_events", []):
                 yield StreamEvent(event)
             yield AssistantMessage(captured.get("blocks") or [TextBlock("Completed work.")])
+            for extra in captured.get("extra_messages", []):
+                yield extra
             yield ResultMessage()
 
     for value in (
@@ -291,6 +297,85 @@ class ClaudeAgentProviderTests(unittest.TestCase):
         self.assertEqual(ui.finished, ["completed"])
         self.assertEqual(store.summary["provider"], provider_module.CLAUDE_PROVIDER_ID)
         self.assertTrue(options["include_partial_messages"])
+
+    def _run_with(self, captured, ui, tmp):
+        store = FakeStore()
+        meta = SimpleNamespace(
+            id="ses_claude", project_id="project", task_id="task", kind="project",
+            message_count=1, claude_state={},
+        )
+        with (
+            patch.dict(sys.modules, {"claude_agent_sdk": captured["sdk"]}),
+            patch.object(provider_module.utils, "CLAUDE_AGENT_PERMISSION_MODE", ""),
+        ):
+            provider = provider_module.ClaudeAgentProvider(
+                timeout_seconds=30, allowed_roots=[tmp], approval_mode="always_ask",
+            )
+            asyncio.run(provider.run(
+                meta=meta, user_prompt="Continue", workspace=tmp, ui=ui,
+                cancel_event=threading.Event(), store=store,
+            ))
+
+    def test_tool_calls_show_on_the_live_line_even_when_not_verbose(self):
+        captured = {}
+        sdk = captured["sdk"] = fake_sdk(captured)
+
+        def use(call_id, name, tool_input):
+            block = sdk.ToolUseBlock()
+            block.id, block.name, block.input = call_id, name, tool_input
+            return block
+
+        class UserMessage:
+            def __init__(self, *results):
+                self.content = [SimpleNamespace(tool_use_id=i, is_error=bad) for i, bad in results]
+
+        captured["stream_events"] = [
+            {"type": "content_block_start", "content_block": {"type": "tool_use", "id": "w1", "name": "Write", "input": {}}},
+        ]
+        captured["blocks"] = [
+            use("r1", "Read", {"file_path": "/archive/app/index.html"}),
+            use("w1", "Write", {"file_path": "/archive/app/index.html"}),
+            use("t1", "Task", {"description": "helper"}),
+            sdk.TextBlock("Done."),
+        ]
+        captured["extra_messages"] = [UserMessage(("r1", False), ("w1", True), ("t1", False))]
+        ui = FakeUI({"verbose_tools": False})
+        with tempfile.TemporaryDirectory() as tmp:
+            self._run_with(captured, ui, tmp)
+
+        self.assertEqual(ui.tools, [
+            ("file_write", "Write a file", "running", "w1"),
+            ("file_read", "Read index.html", "running", "r1"),
+            ("file_write", "Write index.html", "running", "w1"),
+            ("file_read", "Read index.html", "completed", "r1"),
+            ("file_write", "Write index.html", "failed", "w1"),
+        ])
+
+    def test_the_web_ui_emits_a_command_event_the_margin_notes_can_read(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+        from unittest.mock import Mock
+        from web_ui_adapter import WebUI
+        from web_models import EventType
+        ui = WebUI("ses_x", Mock(), Mock(), Mock())
+        emitted = []
+        ui._emit = lambda event_type, data: emitted.append((event_type, data))
+        ui.show_provider_tool("file_read", "Read a.py", "running", "toolu_1")
+        self.assertEqual(emitted, [(EventType.CODEX_COMMAND, {
+            "command": "Read a.py", "status": "running", "tool": "file_read",
+            "label": "Read a.py", "call_id": "toolu_1",
+        })])
+
+    def test_tool_labels_read_like_native_ones(self):
+        activity = provider_module._tool_activity
+        self.assertEqual(activity("Bash", {"command": "ls   -la\n"}), ("shell_run", "Run: ls -la"))
+        self.assertEqual(activity("Edit", {"file_path": "/a/b/c.py"}), ("file_replace", "Update c.py"))
+        self.assertEqual(activity("Grep", {"pattern": "TODO"}), ("content_search", "Search TODO"))
+        self.assertEqual(activity("Glob", {"pattern": "**/*.py"}), ("file_list", "List **/*.py"))
+        self.assertEqual(activity("WebFetch", {"url": "https://x.dev"}), ("web_fetch", "Fetch https://x.dev"))
+        self.assertEqual(activity("Read", {}), ("file_read", "Read a file"))
+        self.assertEqual(activity("mcp__thing__go", {}), ("mcp__thing__go", "mcp__thing__go"))
+        for skipped in ("Task", "TodoWrite", provider_module.ASK_TOOL_QUALIFIED):
+            self.assertIsNone(activity(skipped, {}))
 
     def test_reasoning_and_answer_stream_to_their_own_surfaces(self):
         captured = {

@@ -167,3 +167,41 @@ test('an answered, streaming, empty or prompt-less last turn offers nothing', ()
   assert.equal(unansweredLastTurn(buildTurns([{ type: 'status', text: 'only a status' }]), false), null)
   assert.equal(unansweredLastTurn([], false), null)
 })
+
+test("a provider's own tool call updates one entry through start, input and end", () => {
+  const user = { type: 'user_message', text: 'redo the UI' }
+  const call = (status, label) => ({ type: 'codex_command', command: label, label, tool: 'file_write', callId: 'toolu_1', status })
+  const running = buildTurns([user, call('running', 'Write a file')])[0]
+  assert.equal(running.tools.length, 1)
+  assert.equal(nowLine(running.tools).verb, 'Writing')
+  assert.equal(nowLine(running.tools).rest, 'a file')
+
+  const named = buildTurns([user, call('running', 'Write a file'), call('running', 'Write index.html')])[0]
+  assert.equal(named.tools.length, 1)
+  assert.equal(nowLine(named.tools).rest, 'index.html')
+
+  const done = buildTurns([user, call('running', 'Write a file'), call('running', 'Write index.html'), call('completed', 'Write index.html')])[0]
+  assert.equal(done.tools.length, 1)
+  assert.equal(done.tools[0].status, 'done')
+  assert.equal(nowLine(done.tools), null)
+  assert.deepEqual(summarizeTools(done.tools).map(note => note.text), ['Changed index.html.'])
+})
+
+test("Claude's reads and failed calls read like native ones in the notes", () => {
+  const user = { type: 'user_message', text: 'go' }
+  const turn = buildTurns([
+    user,
+    { type: 'codex_command', command: 'Read a.py', label: 'Read a.py', tool: 'file_read', callId: 'r1', status: 'completed' },
+    { type: 'codex_command', command: 'Run: make', label: 'Run: make', tool: 'shell_run', callId: 'b1', status: 'failed' },
+  ])[0]
+  assert.deepEqual(summarizeTools(turn.tools).map(note => note.text), ['Read a.py.', 'make exited with an error.'])
+})
+
+test('Codex commands without a call id still add an entry each', () => {
+  const turn = buildTurns([
+    { type: 'user_message', text: 'go' },
+    { type: 'codex_command', command: 'ls', status: 'running' },
+    { type: 'codex_command', command: 'ls', status: 'completed' },
+  ])[0]
+  assert.equal(turn.tools.length, 2)
+})

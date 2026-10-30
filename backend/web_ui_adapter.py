@@ -469,6 +469,18 @@ class WebUI:
     def show_codex_command(self, command: str, status: str) -> None:
         self._emit(EventType.CODEX_COMMAND, {"command": command, "status": status})
 
+    def show_provider_tool(self, tool: str, label: str, status: str, call_id: str = "") -> None:
+        """A provider's own tool call, in the shape the margin notes already read.
+
+        `tool` is the native-style tool name (file_read, shell_run, ...), `label`
+        the one-line description ("Read index.html"), `status` running,
+        completed or failed. The same `call_id` updates one entry as the call
+        progresses."""
+        self._emit(
+            EventType.CODEX_COMMAND,
+            {"command": label, "status": status, "tool": tool, "label": label, "call_id": call_id},
+        )
+
     def show_codex_file_change(self, path: str, status: str) -> None:
         self._emit(
             EventType.CODEX_FILE_CHANGE,
