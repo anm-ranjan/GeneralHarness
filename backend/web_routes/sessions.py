@@ -423,7 +423,7 @@ def get_session_model_options(session_id: str):
             "display_name": effective["model"] or "Native default",
             "description": "Configured API model",
             "is_default": True,
-            "default_effort": "",
+            "default_effort": utils.NATIVE_REASONING_DEFAULT,
             "supported_efforts": list(utils.NATIVE_REASONING_EFFORTS),
         }],
     }

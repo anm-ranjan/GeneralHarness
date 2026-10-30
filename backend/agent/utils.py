@@ -362,6 +362,10 @@ CHART_GUIDANCE = (
 )
 MANAGED_TOOLS = str(nested_get(CONFIG, ["agent", "managed_tools"], "false")).lower() in ("true", "1", "yes")
 DEFAULT_PROVIDER = str(nested_get(CONFIG, ["agent", "default_provider"], "native") or "native").strip()
+# Thinking level native sessions use until one is chosen. Blank (or an unknown
+# value) sends nothing, leaving the model on its own default.
+_native_effort = str(nested_get(CONFIG, ["agent", "native_reasoning_effort"], "high") or "").strip().lower()
+NATIVE_REASONING_DEFAULT = _native_effort if _native_effort in NATIVE_REASONING_EFFORTS else ""
 RG_PATH = str(nested_get(CONFIG, ["search", "rg_path"], "")).strip()
 UI_USE_RICH = str(nested_get(CONFIG, ["ui", "rich"], "auto")).lower()
 _verbose_env = os.environ.get("MYHARNESS_VERBOSE_TOOLS", "").strip()

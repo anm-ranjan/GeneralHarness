@@ -70,14 +70,13 @@ def _effective_run_settings(meta) -> dict:
         if meta.provider == "codex-app-server"
         else utils.CLAUDE_AGENT_MODEL if meta.provider == CLAUDE_PROVIDER_ID else utils.MODEL
     )
-    # Native sends a level only when the user picks one; the model otherwise
-    # keeps its own default.
+    # Native starts at agent.native_reasoning_effort (high unless configured).
     default_effort = (
         "high"
         if meta.provider == CLAUDE_PROVIDER_ID
         else utils.CODEX_APP_SERVER_REASONING_EFFORT
         if meta.provider == "codex-app-server"
-        else ""
+        else utils.NATIVE_REASONING_DEFAULT
     )
     return {
         "approval_mode": rs.get("approval_mode") or utils.APPROVAL_MODE,

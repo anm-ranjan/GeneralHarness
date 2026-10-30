@@ -73,9 +73,14 @@ class CallApiPayloadTests(unittest.TestCase):
         payload = self._payload(_Ui({"reasoning_effort": "high"}))
         self.assertEqual(payload["reasoning"], {"effort": "high"})
 
-    def test_no_level_means_no_field(self):
-        self.assertNotIn("reasoning", self._payload(_Ui({})))
-        self.assertNotIn("reasoning", self._payload(None))
+    def test_without_a_session_level_the_configured_default_applies(self):
+        self.assertEqual(utils.NATIVE_REASONING_DEFAULT, "high")
+        self.assertEqual(self._payload(_Ui({}))["reasoning"], {"effort": "high"})
+        self.assertEqual(self._payload(None)["reasoning"], {"effort": "high"})
+
+    def test_a_blank_default_sends_nothing(self):
+        with mock.patch.object(utils, "NATIVE_REASONING_DEFAULT", ""):
+            self.assertNotIn("reasoning", self._payload(_Ui({})))
 
     def test_calls_that_choose_their_own_model_do_not_get_it(self):
         # History compaction names the summary model and carries no UI.
@@ -105,7 +110,8 @@ class SettingsEndpointTests(unittest.TestCase):
         options = sessions.get_session_model_options(self.meta.id)
         self.assertEqual(options["provider"], "native")
         self.assertEqual(options["models"][0]["supported_efforts"], ["low", "medium", "high"])
-        self.assertEqual(options["current_effort"], "")
+        self.assertEqual(options["current_effort"], "high")
+        self.assertEqual(options["models"][0]["default_effort"], "high")
 
     def test_a_chosen_level_is_saved_without_pinning_the_default_model(self):
         sessions.update_session_run_settings(

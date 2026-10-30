@@ -331,8 +331,8 @@ The native provider needs `api.base_url` and a Native key in this host's encrypt
 credential file. `MYHARNESS_API_KEY` remains a higher-priority environment override.
 The native provider also has per-session thinking levels (`low`, `medium`, `high`),
 set from the model menu or with `/thinking`. They are sent as OpenRouter's unified
-`reasoning.effort` (to OpenRouter endpoints only); with no level chosen nothing is
-sent and the model keeps its own default.
+`reasoning.effort` (to OpenRouter endpoints only); a session starts at `high`
+(`agent.native_reasoning_effort`; blank sends nothing and leaves each model on its own default).
 The CLI providers need no key when the CLI is already logged in:
 
 ```bash

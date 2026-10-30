@@ -467,7 +467,7 @@ def call_api(
     # Thinking level applies to the agent's own turns, not to calls that pick a
     # specific model (history compaction).
     if model is None:
-        reasoning = utils.build_openrouter_reasoning(_run_setting(ui, "reasoning_effort", ""))
+        reasoning = utils.build_openrouter_reasoning(_run_setting(ui, "reasoning_effort", utils.NATIVE_REASONING_DEFAULT))
         if reasoning:
             payload["reasoning"] = reasoning
     if tools:
