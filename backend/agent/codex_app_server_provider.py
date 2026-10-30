@@ -472,6 +472,15 @@ def _allowed_paths_block() -> str:
     return "Allowed filesystem roots:\n" + "\n".join(f"- {root}" for root in roots)
 
 
+def _web_output_block() -> str:
+    return (
+        "Showing results: this is a web UI. Never open GUI apps, browsers, or Computer Use tools to "
+        "display something. Save images as PNG and embed them with Markdown image syntax and an "
+        "absolute path. "
+        + utils.CHART_GUIDANCE
+    )
+
+
 def build_developer_instructions() -> str:
     return f"""Filesystem access policy:
 - You may read, write, modify, create, delete, list, or search files only inside the allowed filesystem roots below.
@@ -479,6 +488,8 @@ def build_developer_instructions() -> str:
 - Treat paths outside those roots as unavailable. Ask the user to add the path to permissions.allowed_paths if needed.
 
 {_allowed_paths_block()}
+
+{_web_output_block()}
 {skill_registry.prompt_fragment()}
 """
 
@@ -496,6 +507,8 @@ Rules:
 - Read, write, modify, list, and search only inside the allowed filesystem roots above.
 - Be concise: no verbose tool narration, no risk disclaimers, no unnecessary explanation.
 - Only describe what you did or why when the user asks.
+
+{_web_output_block()}
 
 Task:
 {user_prompt}
@@ -515,6 +528,8 @@ Rules:
 - Only describe what you did or why when the user asks.
 - End with a short summary: files changed, commands run, test result.
 
+{_web_output_block()}
+
 Task:
 {user_prompt}
 """
@@ -532,6 +547,7 @@ Context from prior provider session (summarised):
 {_allowed_paths_block()}
 Same rules: read/write/list/search only inside the allowed roots, stay in workspace, be concise, no verbose narration. Don't redo completed work.
 Modify existing files; do NOT create new files unless the task explicitly requires them. Skip verification runs that would produce new files.
+{_web_output_block()}
 {summary_block}
 {user_prompt}
 """
