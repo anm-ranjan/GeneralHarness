@@ -195,7 +195,12 @@ const Turn = memo(function Turn({ turn, renderItem, live, isLast }) {
         })}
       </div>
       <div className="min-w-0 @3xl:border-l @3xl:border-line @3xl:pl-5">
-        <TurnNotes turn={turn} live={live} isLast={isLast} />
+        {/* Pinned while this turn is on screen, so the plan, Stop and the live
+            line stay in view next to a long reply. A notes list taller than the
+            window scrolls inside itself; the notes still leave with their turn. */}
+        <div className="@3xl:sticky @3xl:top-2 @3xl:max-h-[70vh] @3xl:overflow-y-auto">
+          <TurnNotes turn={turn} live={live} isLast={isLast} />
+        </div>
       </div>
     </section>
   )
