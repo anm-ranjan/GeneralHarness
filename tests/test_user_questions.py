@@ -198,6 +198,16 @@ class CodexQuestionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(transport.responses, [(11, {"action": "decline", "content": None})])
 
+    async def test_a_permission_prompt_is_declined_unless_explicitly_allowed(self):
+        prompt = 'Allow Computer Use to use "Google Chrome"?'
+        for answer, action in [("No", "decline"), ("No you can plot it here", "decline"), ("Allow", "accept")]:
+            provider, transport = self._provider()
+            await provider._handle_server_request(
+                {"id": 12, "method": "mcpServer/elicitation/request", "params": {"message": prompt}},
+                FakeAskUI([answer]),
+            )
+            self.assertEqual(transport.responses[0][1]["action"], action, answer)
+
 
 class RecordingManager:
     def __init__(self):

@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import threading
 import time
 from collections import deque
@@ -583,6 +584,18 @@ def _stream(ui, method_name: str, text: str) -> None:
         hook(text)
 
 
+_PERMISSION_PROMPT = re.compile(r"^\s*(allow|let|grant|permit)\b.*\b(use|access|control)\b", re.I)
+
+
+def _is_allow(answer: str) -> bool:
+    """Whether a reply to a permission prompt is an explicit yes.
+
+    Anything else, including a free-text instruction like "no, plot it
+    inline", is a refusal: only a clear yes may unlock the tool.
+    """
+    return answer.strip().lower().rstrip(".!") in {"allow", "yes", "y", "ok", "okay", "approve", "sure"}
+
+
 def _is_server_request(msg: dict[str, Any]) -> bool:
     return "id" in msg and "method" in msg and "result" not in msg and "error" not in msg
 
@@ -1019,12 +1032,12 @@ class CodexAppServerProvider:
             await self.transport.respond(msg["id"], {"answers": answers})
             return
         if method == "mcpServer/elicitation/request":
+            message = str(params.get("message") or params.get("prompt") or "").strip()
+            is_permission = bool(_PERMISSION_PROMPT.match(message))
             answer = await self._ask_one(
-                ui,
-                str(params.get("message") or params.get("prompt") or "").strip(),
-                [],
+                ui, message, ["Allow", "Deny"] if is_permission else []
             )
-            if answer is None:
+            if answer is None or (is_permission and not _is_allow(answer)):
                 await self.transport.respond(
                     msg["id"], {"action": "decline", "content": None}
                 )
