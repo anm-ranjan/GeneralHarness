@@ -42,7 +42,7 @@ export default function ProviderPicker() {
       className="fixed inset-0 glass-overlay z-50 flex items-center justify-center"
       onClick={handleOverlayClick}
     >
-      <div className="glass-surface border border-line rounded-lg p-6 w-[320px]">
+      <div className="solid-surface border border-line rounded-lg p-6 w-[320px]">
         <h3 className="text-[15px] font-semibold text-text-bright mb-4">Choose Provider</h3>
         <div className="space-y-2">
           {state.nativeEnabled && (

@@ -35,7 +35,7 @@ export default function MoveSessionModal({ moveRequest, projects, onClose, onMov
     >
       <form
         onSubmit={submit}
-        className="glass-surface border border-line rounded-lg w-full max-w-[360px] overflow-hidden"
+        className="solid-surface border border-line rounded-lg w-full max-w-[360px] overflow-hidden"
       >
         <div className="px-5 py-4 border-b border-line">
           <h3 className="text-[15px] font-semibold text-text-bright">Move Session</h3>

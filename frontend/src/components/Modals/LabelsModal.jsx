@@ -43,7 +43,7 @@ export default function LabelsModal({ session, taskLabel = '', suggestions = [],
       onClick={e => { if (e.target === e.currentTarget && !busy) onClose() }}
       onKeyDown={e => { if (e.key === 'Escape' && !busy) onClose() }}
     >
-      <form onSubmit={submit} className="glass-surface border border-line rounded-lg w-full max-w-[400px] overflow-hidden">
+      <form onSubmit={submit} className="solid-surface border border-line rounded-lg w-full max-w-[400px] overflow-hidden">
         <div className="px-5 py-4 border-b border-line">
           <h3 className="text-[15px] font-semibold text-text-bright">Labels</h3>
           <p className="mt-1.5 text-[13px] text-muted truncate" title={session.title || session.id}>{session.title || session.id}</p>
