@@ -74,14 +74,17 @@ export default function SessionBreadcrumb({ meta }) {
   }
 
   return (
+    // Both labels truncate inside their wrappers (a button only truncates as a
+    // block bounded by its parent); the project gives way first, the title
+    // keeps a few words. Not overflow-hidden: the pickers drop down from here.
     <nav className="flex items-baseline gap-1.5 min-w-0" aria-label="Session location">
-      <div className="relative min-w-0 shrink">
+      <div className="relative min-w-[5rem] max-w-[32rem] shrink">
         <button
           type="button"
           onClick={() => setOpen(v => v === 'session' ? null : 'session')}
           aria-haspopup="listbox"
           aria-expanded={open === 'session'}
-          className={`max-w-[32rem] truncate rounded px-1 -mx-1 font-display text-[20px] font-bold leading-tight text-text-bright hover:bg-surface-hover transition-colors ${open === 'session' ? 'bg-surface-hover' : ''}`}
+          className={`block max-w-full truncate rounded px-1 -mx-1 font-display text-[20px] font-bold leading-tight text-text-bright hover:bg-surface-hover transition-colors ${open === 'session' ? 'bg-surface-hover' : ''}`}
           title={`${sessionTitle} — switch thread`}
         >
           {sessionTitle}
@@ -90,14 +93,14 @@ export default function SessionBreadcrumb({ meta }) {
           <BreadcrumbMenu items={sessionItems} onChoose={chooseSession} onClose={() => setOpen(null)} filterPlaceholder="Find thread" />
         )}
       </div>
-      <span className="text-[13px] text-faint select-none">in</span>
-      <div className="relative min-w-0 shrink">
+      <span className="shrink-0 text-[13px] text-faint select-none">in</span>
+      <div className="relative min-w-[2.5rem] max-w-[16rem] shrink-[4]">
         <button
           type="button"
           onClick={() => setOpen(v => v === 'project' ? null : 'project')}
           aria-haspopup="listbox"
           aria-expanded={open === 'project'}
-          className={`max-w-[16rem] truncate rounded px-1 -mx-1 text-[13px] text-muted hover:text-text-bright hover:bg-surface-hover transition-colors ${open === 'project' ? 'bg-surface-hover text-text-bright' : ''}`}
+          className={`block max-w-full truncate rounded px-1 -mx-1 text-[13px] text-muted hover:text-text-bright hover:bg-surface-hover transition-colors ${open === 'project' ? 'bg-surface-hover text-text-bright' : ''}`}
           title={`${projectName} — switch project`}
         >
           {projectName}

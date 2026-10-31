@@ -63,7 +63,7 @@ export default function TopBar() {
         <h2 className="font-display text-[20px] font-bold text-text-bright">{state.appName}</h2>
       )}
 
-      <div className="ml-auto flex items-center gap-4">
+      <div className="ml-auto flex shrink-0 items-center gap-4 whitespace-nowrap">
         {state.hostFallbackFrom && (
           <span
             className="text-[13px] text-warn"
