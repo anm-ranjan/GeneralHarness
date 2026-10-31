@@ -8,6 +8,7 @@ Code login (subscription) or ANTHROPIC_API_KEY — no key is stored here.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import os
@@ -27,6 +28,47 @@ CLAUDE_PROVIDER_ID = "claude-agent"
 
 class ClaudeAgentRunError(RuntimeError):
     pass
+
+
+class IdleClock:
+    """Inactivity limit for a run, on top of an ``asyncio.timeout`` context.
+
+    Every message from Claude restarts the countdown, and it is suspended
+    while the user is answering a question or an approval, so a long
+    interview never times out but a stalled run still does.
+    """
+
+    def __init__(self, seconds: float):
+        self.seconds = seconds
+        self._timeout: asyncio.Timeout | None = None
+        self._waiting = 0
+
+    def bind(self, timeout: asyncio.Timeout) -> None:
+        self._timeout = timeout
+        self.touch()
+
+    def _reschedule(self, when: float | None) -> None:
+        if self._timeout is None:
+            return
+        try:
+            self._timeout.reschedule(when)
+        except RuntimeError:
+            # The run's timeout context has already finished.
+            self._timeout = None
+
+    def touch(self) -> None:
+        if not self._waiting:
+            self._reschedule(asyncio.get_running_loop().time() + self.seconds)
+
+    @contextlib.contextmanager
+    def waiting_for_user(self):
+        self._waiting += 1
+        self._reschedule(None)
+        try:
+            yield
+        finally:
+            self._waiting -= 1
+            self.touch()
 
 
 # Account, login source and latest rate-limit state, as the SDK last reported
@@ -270,7 +312,7 @@ async def answer_builtin_questions(tool_input: Any, ui) -> dict[str, Any] | None
     return {**dict(tool_input), "answers": answers}
 
 
-def _build_ask_server(ui, sdk):
+def _build_ask_server(ui, sdk, clock: IdleClock | None = None):
     """In-process MCP server exposing the harness question round-trip.
 
     Returns None for UIs that cannot ask questions, in which case the tool is
@@ -291,7 +333,8 @@ def _build_ask_server(ui, sdk):
             return {"content": [{"type": "text", "text": "ERROR: a question is required."}]}
         raw_options = args.get("options")
         options = [str(o) for o in raw_options if str(o).strip()] if isinstance(raw_options, list) else []
-        answer = await asyncio.to_thread(ask, question, options, True)
+        with clock.waiting_for_user() if clock else contextlib.nullcontext():
+            answer = await asyncio.to_thread(ask, question, options, True)
         text = (
             f"The user answered: {answer}"
             if answer is not None and str(answer).strip()
@@ -717,7 +760,8 @@ class ClaudeAgentProvider:
         verbose = _verbose(ui)
         permission_mode = _permission_mode_for(self.approval_mode)
         agent_tree = _ClaudeAgentTree(ui)
-        ask_server = _build_ask_server(ui, sdk)
+        clock = IdleClock(self.timeout_seconds)
+        ask_server = _build_ask_server(ui, sdk, clock)
         # Registering the server is enough to make the tool callable; it is
         # auto-approved in can_use_tool below rather than through allowed_tools,
         # which would shadow that callback for every tool it names.
@@ -735,7 +779,8 @@ class ClaudeAgentProvider:
             if tool_name == BUILTIN_ASK_TOOL:
                 # Its own confirmation, like ask_user: put the questions to the
                 # user and hand their answers back instead of an approval prompt.
-                answered = await answer_builtin_questions(tool_input, ui)
+                with clock.waiting_for_user():
+                    answered = await answer_builtin_questions(tool_input, ui)
                 return PermissionResultAllow(updated_input=answered) if answered else PermissionResultAllow()
             if tool_name in _READ_ONLY_TOOLS or tool_name == ASK_TOOL_QUALIFIED:
                 # Asking the user a question is its own confirmation; gating it
@@ -745,16 +790,18 @@ class ClaudeAgentProvider:
                 return PermissionResultAllow()
             detail = json.dumps(tool_input, indent=2, ensure_ascii=False)
             source = agent_tree.source_for(context)
-            approved = await asyncio.to_thread(
-                _request_approval, ui, tool_name, detail, source
-            )
+            with clock.waiting_for_user():
+                approved = await asyncio.to_thread(
+                    _request_approval, ui, tool_name, detail, source
+                )
             if approved:
                 return PermissionResultAllow()
             return PermissionResultDeny(message="The user declined this tool call.")
 
         async def answer_questions_only(tool_name: str, tool_input: dict[str, Any], context):
             if tool_name == BUILTIN_ASK_TOOL:
-                answered = await answer_builtin_questions(tool_input, ui)
+                with clock.waiting_for_user():
+                    answered = await answer_builtin_questions(tool_input, ui)
                 if answered:
                     return PermissionResultAllow(updated_input=answered)
             return PermissionResultAllow()
@@ -789,7 +836,8 @@ class ClaudeAgentProvider:
         interrupt_requested = False
 
         try:
-            async with asyncio.timeout(self.timeout_seconds):
+            async with asyncio.timeout(self.timeout_seconds) as run_timeout:
+                clock.bind(run_timeout)
                 async with ClaudeSDKClient(options=options) as client:
                     async def watch_cancel():
                         nonlocal interrupt_requested
@@ -825,6 +873,7 @@ class ClaudeAgentProvider:
                             pass
                         await client.query(prompt)
                         async for message in client.receive_response():
+                            clock.touch()
                             if isinstance(message, AssistantMessage):
                                 parent_tool_use_id = _field(message, "parent_tool_use_id", None)
                                 for block in message.content:
@@ -902,7 +951,11 @@ class ClaudeAgentProvider:
                         cancel_task.cancel()
         except asyncio.TimeoutError:
             agent_tree.interrupt_all()
-            ui.show_error(f"Claude run timed out after {self.timeout_seconds}s.")
+            minutes = max(1, round(self.timeout_seconds / 60))
+            ui.show_error(
+                f"Claude made no progress for {minutes} minutes, so the run was stopped. "
+                "Send a message in this thread to continue where it left off."
+            )
             return
         except Exception as exc:
             if interrupt_requested or cancel_event.is_set():

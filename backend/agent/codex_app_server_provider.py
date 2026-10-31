@@ -26,6 +26,10 @@ class CodexAppServerRunError(RuntimeError):
     pass
 
 
+class CodexIdleTimeout(CodexAppServerRunError):
+    pass
+
+
 class CodexThreadResumeError(CodexAppServerRunError):
     pass
 
@@ -206,6 +210,16 @@ class AppServerTransport:
                 owner_thread_id = parent_owner
         params = msg.get("params")
         item = params.get("item") if isinstance(params, dict) else None
+        if isinstance(item, dict) and item.get("type") == "subAgentActivity":
+            # Codex 0.166+: a subagent is announced on its parent's thread
+            # with the subagent's own thread id. Without this link its
+            # approvals are refused and its events dropped.
+            child_thread_id = item.get("agentThreadId")
+            sender_owner = self._thread_owners.get(thread_id or "")
+            if sender_owner is None and thread_id in self._thread_queues:
+                sender_owner = thread_id
+            if child_thread_id and sender_owner:
+                self._register_thread_owner(child_thread_id, sender_owner)
         if isinstance(item, dict) and item.get("type") == "collabAgentToolCall":
             sender_thread_id = item.get("senderThreadId")
             sender_owner = self._thread_owners.get(sender_thread_id or "")
@@ -1062,79 +1076,95 @@ class CodexAppServerProvider:
                 await asyncio.sleep(0.1)
 
         steering_task = asyncio.create_task(deliver_steering())
+        # An inactivity limit, not a total one: it restarts on every Codex
+        # event and after every question or approval the user answers, so a
+        # long interview never times out but a stalled turn still does.
+        idle_deadline = time.monotonic() + self.timeout_seconds
         try:
-            async with asyncio.timeout(self.timeout_seconds):
-                while completed_params is None:
+            while completed_params is None:
+                if message_task is None:
                     message_wait = notification_queue.get()
                     if cancellation_requested:
                         message_wait = asyncio.wait_for(message_wait, timeout=30)
                     message_task = asyncio.create_task(message_wait)
-                    wait_tasks: set[asyncio.Task[Any]] = {message_task}
-                    if not cancellation_requested:
-                        wait_tasks.add(cancel_task)
-                    done, _ = await asyncio.wait(
-                        wait_tasks,
-                        return_when=asyncio.FIRST_COMPLETED,
+                wait_tasks: set[asyncio.Task[Any]] = {message_task}
+                if not cancellation_requested:
+                    wait_tasks.add(cancel_task)
+                done, _ = await asyncio.wait(
+                    wait_tasks,
+                    timeout=max(0.0, idle_deadline - time.monotonic()),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not done:
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(self.client.turn_interrupt(thread_id, turn_id), 10)
+                    minutes = max(1, round(self.timeout_seconds / 60))
+                    raise CodexIdleTimeout(
+                        f"Codex made no progress for {minutes} minutes, so the turn was stopped. "
+                        "Send a message in this thread to continue where it left off."
                     )
-                    if cancel_task in done and not cancellation_requested:
-                        cancellation_requested = True
-                        await self.client.turn_interrupt(thread_id, turn_id)
-                        self._show_verbose_status(ui, "Interrupting Codex turn…")
-                        if message_task not in done:
-                            message_task.cancel()
-                            with contextlib.suppress(asyncio.CancelledError):
-                                await message_task
-                            message_task = None
-                            continue
+                if cancel_task in done and not cancellation_requested:
+                    cancellation_requested = True
+                    await self.client.turn_interrupt(thread_id, turn_id)
+                    self._show_verbose_status(ui, "Interrupting Codex turn…")
                     if message_task not in done:
+                        message_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await message_task
+                        message_task = None
                         continue
-                    try:
-                        queued = message_task.result()
-                    except asyncio.TimeoutError:
-                        ui.show_agent_finished("interrupted")
-                        return
-                    message_task = None
-                    if isinstance(queued, BaseException):
-                        raise queued
-                    msg = queued
-                    if _is_server_request(msg):
-                        await self._handle_server_request(msg, ui)
-                        continue
+                if message_task not in done:
+                    continue
+                try:
+                    queued = message_task.result()
+                except asyncio.TimeoutError:
+                    ui.show_agent_finished("interrupted")
+                    return
+                message_task = None
+                idle_deadline = time.monotonic() + self.timeout_seconds
+                if isinstance(queued, BaseException):
+                    raise queued
+                msg = queued
+                if _is_server_request(msg):
+                    await self._handle_server_request(msg, ui)
+                    # Time spent waiting for the user's answer is not inactivity.
+                    idle_deadline = time.monotonic() + self.timeout_seconds
+                    continue
 
-                    received_at = time.perf_counter()
-                    persisted_msg = {
-                        **msg,
-                        "_myharness_received_at": _utc_now_iso(),
-                        "_myharness_elapsed_ms": round(
-                            (received_at - run_started_at) * 1000
-                        ),
-                    }
-                    before_delta_count = len(deltas)
-                    before_final_count = len(final_messages)
-                    store.append_codex_raw_event(meta.id, persisted_msg)
-                    self._emit_ui_event(
-                        msg, ui, final_messages, deltas, agent_message_phases, pending_deltas
+                received_at = time.perf_counter()
+                persisted_msg = {
+                    **msg,
+                    "_myharness_received_at": _utc_now_iso(),
+                    "_myharness_elapsed_ms": round(
+                        (received_at - run_started_at) * 1000
+                    ),
+                }
+                before_delta_count = len(deltas)
+                before_final_count = len(final_messages)
+                store.append_codex_raw_event(meta.id, persisted_msg)
+                self._emit_ui_event(
+                    msg, ui, final_messages, deltas, agent_message_phases, pending_deltas
+                )
+                if (
+                    not first_response_seen
+                    and (
+                        len(deltas) > before_delta_count
+                        or len(final_messages) > before_final_count
                     )
-                    if (
-                        not first_response_seen
-                        and (
-                            len(deltas) > before_delta_count
-                            or len(final_messages) > before_final_count
-                        )
-                    ):
-                        first_response_seen = True
-                        self._show_verbose_status(
-                            ui,
-                            f"Codex first response after {_elapsed(stream_started_at)}.",
-                        )
+                ):
+                    first_response_seen = True
+                    self._show_verbose_status(
+                        ui,
+                        f"Codex first response after {_elapsed(stream_started_at)}.",
+                    )
 
-                    if msg.get("method") == "turn/completed":
-                        params = msg.get("params") or {}
-                        if (
-                            params.get("turnId") in (None, turn_id)
-                            or params.get("turn_id") == turn_id
-                        ):
-                            completed_params = params
+                if msg.get("method") == "turn/completed":
+                    params = msg.get("params") or {}
+                    if (
+                        params.get("turnId") in (None, turn_id)
+                        or params.get("turn_id") == turn_id
+                    ):
+                        completed_params = params
         finally:
             if active_run is not None:
                 active_run.steering_open = False

@@ -496,3 +496,24 @@ class ClaudeAgentProviderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IdleClockTests(unittest.IsolatedAsyncioTestCase):
+    async def test_activity_restarts_the_countdown_and_user_waits_pause_it(self):
+        clock = provider_module.IdleClock(0.2)
+        async with asyncio.timeout(0.2) as timeout:
+            clock.bind(timeout)
+            for _ in range(4):  # 0.4s in total, but active every 0.1s
+                await asyncio.sleep(0.1)
+                clock.touch()
+            with clock.waiting_for_user():  # longer than the limit
+                await asyncio.sleep(0.4)
+                clock.touch()  # activity while waiting does not restart a paused clock
+                await asyncio.sleep(0.1)
+
+    async def test_a_stalled_run_still_times_out(self):
+        clock = provider_module.IdleClock(0.1)
+        with self.assertRaises(TimeoutError):
+            async with asyncio.timeout(0.1) as timeout:
+                clock.bind(timeout)
+                await asyncio.sleep(0.5)

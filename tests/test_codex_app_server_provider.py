@@ -2,6 +2,7 @@ import asyncio
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -633,6 +634,93 @@ class CodexAppServerProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(errors, [])
         self.assertEqual(len(instances), 1)
         self.assertCountEqual(instances[0].calls, [1, 2])
+
+
+class SubagentAndInactivityTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    async def asyncTearDown(self):
+        self.tmp.cleanup()
+
+    async def test_a_subagent_announced_by_subagent_activity_is_routed_to_the_run(self):
+        import json
+
+        class Stdout:
+            def __init__(self, messages):
+                self.messages = iter(messages)
+
+            async def readline(self):
+                try:
+                    return (json.dumps(next(self.messages)) + "\n").encode()
+                except StopIteration:
+                    return b""
+
+        transport = provider_module.AppServerTransport()
+        errors = []
+
+        async def respond_error(request_id, code, message):
+            errors.append((request_id, message))
+
+        transport.respond_error = respond_error
+        root_queue = transport.subscribe_thread("root")
+        announced = {"method": "item/started", "params": {"threadId": "root", "turnId": "t", "item": {
+            "type": "subAgentActivity", "id": "call_1", "kind": "started",
+            "agentThreadId": "child", "agentPath": "/root/retrieve_design_context"}}}
+        child_request = {"id": 3, "method": "item/commandExecution/requestApproval",
+                         "params": {"threadId": "child", "command": "rg --files"}}
+        transport.process = SimpleNamespace(stdout=Stdout([announced, child_request]))
+
+        await transport._read_loop()
+
+        self.assertEqual(errors, [])
+        self.assertEqual((await root_queue.get())["method"], "item/started")
+        self.assertEqual((await root_queue.get())["id"], 3)
+
+    async def run_once(self, provider, ui):
+        await provider.run(meta=make_meta(), user_prompt="Continue", workspace=self.tmp.name,
+                           ui=ui, cancel_event=threading.Event(), store=FakeStore())
+
+    async def test_a_turn_with_no_progress_is_stopped_with_a_clear_message(self):
+        provider, _transport, client = make_provider()
+        provider.timeout_seconds = 0.2
+
+        async def silent_turn(thread_id, text, **kwargs):
+            client.turn_calls.append((thread_id, text, kwargs))
+            return {"turn": {"id": "turn_1"}}
+
+        client.turn_start = silent_turn
+        with self.assertRaises(provider_module.CodexIdleTimeout) as ctx:
+            await self.run_once(provider, FakeUI())
+        self.assertIn("no progress", str(ctx.exception))
+        self.assertEqual(client.interrupt_calls, [("thr_existing", "turn_1")])
+
+    async def test_time_waiting_for_the_user_is_not_inactivity(self):
+        provider, transport, client = make_provider()
+        provider.timeout_seconds = 0.3
+
+        class SlowApprover(FakeUI):
+            def request_approval(self, *_args):
+                time.sleep(0.6)  # the user takes longer than the limit to answer
+                return True
+
+        async def turn_with_approval(thread_id, text, **kwargs):
+            client.turn_calls.append((thread_id, text, kwargs))
+            await transport.queues[thread_id].put({"id": 5, "method": "item/commandExecution/requestApproval",
+                                                   "params": {"threadId": thread_id, "command": "ls"}})
+            return {"turn": {"id": "turn_1"}}
+
+        async def respond(request_id, result):
+            transport.responses.append((request_id, result))
+            await transport.queues["thr_existing"].put({"method": "turn/completed", "params": {
+                "threadId": "thr_existing", "turn": {"id": "turn_1", "status": "completed", "error": None}}})
+
+        client.turn_start = turn_with_approval
+        transport.respond = respond
+        ui = SlowApprover()
+        await self.run_once(provider, ui)
+        self.assertEqual(transport.responses, [(5, {"decision": "accept"})])
+        self.assertEqual(ui.finished, ["completed"])
 
 
 class LongLineTests(unittest.IsolatedAsyncioTestCase):
