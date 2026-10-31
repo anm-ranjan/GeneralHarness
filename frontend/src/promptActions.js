@@ -1,4 +1,4 @@
-// Helpers for Resend / Retry / Delete on a prompt: the stored attachments are
+// Helpers for Copy / Resend / Edit on a prompt: the stored attachments are
 // fetched back from the server and turned into the same { data, mime, name }
 // payloads the composer builds, so a restored prompt sends exactly like a new one.
 

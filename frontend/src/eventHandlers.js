@@ -405,6 +405,8 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       dispatch({ type: 'CLEAR_THINKING_STREAM' })
       dispatch({ type: 'FINALIZE_WORK_GROUP' })
       if (Object.keys(stateRef.current.agentsById || {}).length) dispatch({ type: 'FINALIZE_AGENTS' })
+      // Slash commands also finish a run; only a prompt's own run says how it ended.
+      if (data.reason && data.reason !== 'command') dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'run_end', reason: data.reason } })
       if (data.reason === 'max iterations reached') {
         dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: 'Max iterations were reached and no response was generated. Increase the limit with /maxiters n and try again.' } })
       } else if (data.reason === 'interrupted') {

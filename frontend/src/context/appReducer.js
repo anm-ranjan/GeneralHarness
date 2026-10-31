@@ -84,7 +84,7 @@ export const initialState = {
   eventWindowOffset: 0,
   eventTotal: null,
 
-  // A prompt to put back into the composer (Resend, Retry, Delete): { sessionId,
+  // A prompt to put back into the composer (Copy, Resend, Edit): { sessionId,
   // text, attachments, send }. The composer consumes it and clears it.
   draftRestore: null,
 

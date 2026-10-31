@@ -1,50 +1,45 @@
 import { memo } from 'react'
 import { useApp } from '../../context/AppContext'
 import usePromptActions from '../../hooks/usePromptActions'
-import { canRemovePrompt } from '../../promptActions'
 
 const linkClass = 'underline decoration-line underline-offset-4 hover:text-accent transition-colors'
 
-// Quiet text actions under one of your prompts. Nothing is offered while a run
-// is going (sending again then would only queue another copy).
-//  - Resend: any prompt; sends the same text again and keeps the original.
-//  - Retry / Delete: only the latest prompt when it got no answer, and only on
-//    native sessions, whose context the server rolls back for a failed turn.
-//    Codex and Claude keep their own history, so a failed turn there stays
-//    remembered and only Resend is offered. Retry removes the failed attempt and
-//    sends it again; Delete removes it and puts the text back in the composer,
-//    e.g. to switch the model first.
+// Quiet actions under one of your prompts. Nothing is offered while a run is
+// going (sending again then would only queue another copy).
+//  - Finished prompt: a copy icon, shown on hover, that puts the text (and
+//    attachments) back in the message box.
+//  - Unfinished prompt (the latest one, stopped or failed before a final
+//    answer): Resend and Edit, always visible. Both replace the attempt in the
+//    transcript; Resend sends the same text at once, Edit loads it into the
+//    message box first, e.g. after a mistaken Enter.
 function PromptActions({ item, unanswered }) {
-  const { state, dispatch } = useApp()
-  const { resend, retryLast, deleteLast } = usePromptActions()
+  const { state } = useApp()
+  const { copyToComposer, resendLast, editLast } = usePromptActions()
   if (state.isRunning) return null
 
-  const canRemove = unanswered && canRemovePrompt(state.currentProvider)
-
-  function confirmDelete() {
-    dispatch({
-      type: 'OPEN_CONFIRM',
-      payload: {
-        title: 'Delete this prompt?',
-        message: 'It never got a reply, so it is not part of the conversation the model sees. The text goes back into the message box so you can send it again.',
-        detail: 'Files it already changed are not reverted. The original is kept in the database.',
-        confirmLabel: 'Delete',
-        tone: 'danger',
-        onConfirm: () => deleteLast(item),
-      },
-    })
+  if (unanswered) {
+    return (
+      <div className="mb-3 -mt-2 flex gap-4 text-[12px] text-faint">
+        <button type="button" className={linkClass} onClick={() => resendLast(item)} title="Replace this attempt and send the same prompt again">Resend</button>
+        <button type="button" className={linkClass} onClick={() => editLast(item)} title="Replace this attempt and edit the prompt in the message box">Edit</button>
+      </div>
+    )
   }
 
   return (
-    <div className={`mb-3 -mt-2 flex gap-4 text-[12px] text-faint transition-opacity ${unanswered ? '' : 'opacity-0 group-hover/prompt:opacity-100 focus-within:opacity-100'}`}>
-      {canRemove ? (
-        <>
-          <button type="button" className={linkClass} onClick={() => retryLast(item)} title="Delete this attempt and send the same prompt again">Retry</button>
-          <button type="button" className={linkClass} onClick={confirmDelete} title="Delete this attempt and put the text back in the message box">Delete</button>
-        </>
-      ) : (
-        <button type="button" className={linkClass} onClick={() => resend(item)} title="Send this prompt again">Resend</button>
-      )}
+    <div className="mb-3 -mt-2 flex text-faint opacity-0 transition-opacity group-hover/prompt:opacity-100 focus-within:opacity-100">
+      <button
+        type="button"
+        onClick={() => copyToComposer(item)}
+        title="Copy this prompt into the message box"
+        aria-label="Copy prompt into the message box"
+        className="p-1 -ml-1 hover:text-accent transition-colors"
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+          <path d="M10.5 5.5V3.5a1.5 1.5 0 0 0-1.5-1.5H3.5A1.5 1.5 0 0 0 2 3.5V9a1.5 1.5 0 0 0 1.5 1.5h2" />
+        </svg>
+      </button>
     </div>
   )
 }

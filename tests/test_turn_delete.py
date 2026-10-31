@@ -42,10 +42,20 @@ class AssessLastPromptTests(unittest.TestCase):
     def test_a_run_that_never_finished_is_deletable(self):
         self.assertEqual(turn_delete.assess_last_prompt([ev("user_message", text="x"), ev("tool_call", name="file_read")]), "")
 
-    def test_an_answered_prompt_is_refused_even_if_the_run_later_failed(self):
-        for reason in ("completed", "error"):
-            events = [ev("user_message", text="x"), ev("assistant_message", markdown="partial"), ev("run_finished", reason=reason)]
+    def test_a_completed_prompt_with_a_reply_is_refused(self):
+        for reason in ("completed", "max iterations reached"):
+            events = [ev("user_message", text="x"), ev("assistant_message", markdown="answer"), ev("run_finished", reason=reason)]
             self.assertIn("already has a reply", turn_delete.assess_last_prompt(events))
+
+    def test_a_stopped_or_failed_run_is_deletable_despite_interim_text(self):
+        # The run loop rolls the turn out of the context, so interim text is not a final reply.
+        for reason in ("interrupted", "error", "api timeout"):
+            events = [ev("user_message", text="x"), ev("assistant_message", markdown="let me look"), ev("run_finished", reason=reason)]
+            self.assertEqual(turn_delete.assess_last_prompt(events), "", reason)
+
+    def test_a_run_that_never_finished_but_wrote_text_is_refused(self):
+        events = [ev("user_message", text="x"), ev("assistant_message", markdown="partial")]
+        self.assertIn("already has a reply", turn_delete.assess_last_prompt(events))
 
     def test_an_empty_reply_does_not_count_as_a_reply(self):
         events = [ev("user_message", text="x"), ev("assistant_message", markdown="  "), ev("run_finished", reason="interrupted")]

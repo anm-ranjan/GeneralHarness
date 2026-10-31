@@ -43,7 +43,7 @@ export function buildTurns(items) {
   const turns = []
   let turn = null
   const open = user => {
-    turn = { id: user?._id || `turn_${turns.length}`, user, talk: [], thinking: [], modelNotes: [], tools: [], anchors: [], startTime: null }
+    turn = { id: user?._id || `turn_${turns.length}`, user, talk: [], thinking: [], modelNotes: [], tools: [], anchors: [], startTime: null, endReason: null }
     turns.push(turn)
   }
   for (const item of items) {
@@ -77,6 +77,10 @@ export function buildTurns(items) {
         break
       case 'turn_note':
         turn.modelNotes.push(item)
+        break
+      // How the run ended: bookkeeping for the prompt actions, never drawn.
+      case 'run_end':
+        turn.endReason = item.reason
         break
       default:
         turn.talk.push(item)
@@ -272,16 +276,23 @@ export function notesForTurn(turn) {
   return [...written, ...rules.filter(note => FACT_KINDS.has(note.kind) || note.tone === 'bad')]
 }
 
+// Mirrors UNANSWERED_REASONS in backend/turn_delete.py: runs that were stopped
+// or failed, whose turn the run loop rolls back out of the model context.
+const UNFINISHED_REASONS = new Set(['interrupted', 'error', 'api timeout'])
+
 /**
- * The latest turn when its prompt went unanswered: nothing running, and no
- * assistant text in it. The server makes the real decision (it checks how the
- * run finished and refuses answered prompts); this only decides whether to
- * offer the action.
+ * The latest turn when its prompt never got a final answer: nothing running,
+ * and either the run was stopped/failed (interim text does not count) or it
+ * produced no assistant text at all. A run that ended normally without a reply
+ * (max iterations, no content) stays in the model's context and is excluded.
+ * The server makes the real decision; this only decides whether to offer the action.
  */
 export function unansweredLastTurn(turns, running) {
   if (running || !turns.length) return null
   const last = turns[turns.length - 1]
   if (!last.user) return null
+  if (UNFINISHED_REASONS.has(last.endReason)) return last
+  if (last.endReason) return null
   const replied = last.talk.some(item => (
     (item.type === 'assistant_message' && String(item.markdown || '').trim())
     || item.type === 'assistant_stream'
@@ -296,6 +307,7 @@ function sameItems(a, b) {
 /** Memo comparator: stage items are immutable once appended, so identity is enough. */
 export function sameTurn(a, b) {
   return a.user === b.user
+    && a.endReason === b.endReason
     && sameItems(a.talk, b.talk)
     && sameItems(a.thinking, b.thinking)
     && sameItems(a.modelNotes, b.modelNotes)

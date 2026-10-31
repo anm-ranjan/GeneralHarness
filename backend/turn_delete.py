@@ -56,8 +56,6 @@ def assess_last_prompt(events) -> str:
     """
     if not events or not is_real_prompt(events[0]):
         return "There is no prompt to delete."
-    if _has_reply(events):
-        return "This prompt already has a reply, so it is part of the conversation and cannot be deleted."
     # Slash commands that ran after the prompt end with reason "command"; they
     # say nothing about how the prompt's own run finished.
     reasons = [
@@ -68,7 +66,13 @@ def assess_last_prompt(events) -> str:
     # No run_finished at all means the server stopped mid-run; the caller has
     # already checked that nothing is running now.
     finished = reasons[-1] if reasons else None
-    if finished is None or finished in UNANSWERED_REASONS:
+    # A stopped or failed run is rolled back out of the model context even when
+    # it had already written interim text, so that text does not make it final.
+    if finished in UNANSWERED_REASONS:
+        return ""
+    if _has_reply(events):
+        return "This prompt already has a reply, so it is part of the conversation and cannot be deleted."
+    if finished is None:
         return ""
     return (
         "This prompt's run finished without a reply but is part of the model's context, "

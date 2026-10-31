@@ -57,10 +57,10 @@ export default function Composer() {
     localStorage.setItem(draftKey(state.activeHostId, state.currentSessionId), input)
   }, [state.currentSessionId, input])
 
-  // Resend / Retry / Delete hand a prompt back through the store. Delete only
-  // fills the box. Resend and Retry then send it through handleSend, so every
-  // normal guard applies (provider checks, queueing); a draft that was being
-  // typed is put back once the send went through.
+  // Copy / Resend / Edit hand a prompt back through the store. Copy and Edit only
+  // fill the box (after a draft already being typed, which is kept). Resend then
+  // sends it through handleSend, so every normal guard applies (provider checks,
+  // queueing); a draft that was being typed is put back once the send went through.
   const restoreRequest = state.draftRestore
   useEffect(() => {
     if (!restoreRequest || restoreRequest.sessionId !== state.currentSessionId) return
@@ -69,8 +69,9 @@ export default function Composer() {
       previousDraftRef.current = { input, attachments }
       sendRestoredRef.current = true
     }
-    setInput(restoreRequest.text || '')
-    setAttachments(restoreRequest.attachments || [])
+    const keepDraft = !restoreRequest.send && (input.trim() || attachments.length)
+    setInput(keepDraft && input.trim() ? `${input.trimEnd()}\n\n${restoreRequest.text || ''}` : (restoreRequest.text || ''))
+    setAttachments(keepDraft ? [...attachments, ...(restoreRequest.attachments || [])] : (restoreRequest.attachments || []))
     setAttachmentError('')
     setSendTick(tick => tick + 1)
   }, [restoreRequest])

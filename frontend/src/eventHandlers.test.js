@@ -257,9 +257,16 @@ test('run_finished clears running indicators and silent command state', () => {
     'CLEAR_THINKING_STREAM',
     'FINALIZE_WORK_GROUP',
     'APPEND_STAGE_ITEM',
+    'APPEND_STAGE_ITEM',
     'SET_IDLE',
     'SET_SILENT_COMMAND',
   ])
+  // The first appended item records how the run ended, for the prompt actions.
+  assert.ok(ctx.actions.some(a => a.payload?.type === 'run_end' && a.payload.reason === 'interrupted'))
+
+  const command = collect()
+  handleSessionEvent({ type: 'run_finished', data: { reason: 'command' } }, command.dispatch, command.stateRef)
+  assert.ok(!command.actions.some(a => a.payload?.type === 'run_end'))
 })
 
 test('generated artifacts render as replayable assistant images', () => {

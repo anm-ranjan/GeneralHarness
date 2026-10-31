@@ -160,6 +160,20 @@ test('the latest prompt is unanswered when it has no assistant text and nothing 
   assert.equal(unansweredLastTurn(failed, true), null)
 })
 
+test('a stopped or failed run is unfinished even with interim text; a normal end is not', () => {
+  const u = { type: 'user_message', text: 'q' }
+  const interim = { type: 'assistant_message', markdown: 'let me look' }
+  for (const reason of ['interrupted', 'error', 'api timeout']) {
+    const turns = buildTurns([u, interim, { type: 'run_end', reason }])
+    assert.equal(unansweredLastTurn(turns, false), turns[0], reason)
+  }
+  for (const reason of ['completed', 'max iterations reached', 'no content returned']) {
+    assert.equal(unansweredLastTurn(buildTurns([u, { type: 'run_end', reason }]), false), null, reason)
+  }
+  // The marker is bookkeeping: it is not drawn as conversation.
+  assert.deepEqual(buildTurns([u, { type: 'run_end', reason: 'interrupted' }])[0].talk, [])
+})
+
 test('an answered, streaming, empty or prompt-less last turn offers nothing', () => {
   assert.equal(unansweredLastTurn(buildTurns([{ type: 'user_message', text: 'q' }, { type: 'assistant_message', markdown: 'a' }]), false), null)
   assert.equal(unansweredLastTurn(buildTurns([{ type: 'user_message', text: 'q' }, { type: 'assistant_stream', text: 'par' }]), false), null)

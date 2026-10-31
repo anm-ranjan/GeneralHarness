@@ -1,9 +1,9 @@
 import { useCallback } from 'react'
 import { api } from '../api'
 import { useAppDispatch, useAppStateRef } from '../context/AppContext'
-import { attachmentPayloads, promptAttachments } from '../promptActions'
+import { attachmentPayloads, canRemovePrompt, promptAttachments } from '../promptActions'
 
-// Resend, Retry and Delete for a prompt. None of them sends anything itself:
+// Copy, Resend and Edit for a prompt. None of them sends anything itself:
 // they hand the prompt to the composer (RESTORE_DRAFT), whose own send path
 // applies every existing guard (FhGenie readiness, queueing, provider checks).
 export default function usePromptActions() {
@@ -14,37 +14,45 @@ export default function usePromptActions() {
     dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: err.detail || err.message || String(err) } })
   }, [dispatch])
 
-  // Send the same prompt again, keeping the original in the transcript.
-  const resend = useCallback(async (item) => {
+  // Put a finished prompt back in the message box. The transcript is untouched.
+  const copyToComposer = useCallback(async (item) => {
     const sid = stateRef.current.currentSessionId
-    if (!sid || stateRef.current.isRunning) return
+    if (!sid) return
     try {
       const attachments = await attachmentPayloads(promptAttachments(item))
-      dispatch({ type: 'RESTORE_DRAFT', payload: { sessionId: sid, text: item.text || '', attachments, send: true } })
+      dispatch({ type: 'RESTORE_DRAFT', payload: { sessionId: sid, text: item.text || '', attachments, send: false } })
     } catch (err) {
       fail(err)
     }
   }, [dispatch, stateRef, fail])
 
-  // Delete the latest unanswered prompt on the server. With `thenSend` it goes
-  // straight back out (Retry); otherwise it lands in the composer so the model
-  // can be changed first (Delete).
-  const removeLast = useCallback(async (item, thenSend) => {
-    const sid = stateRef.current.currentSessionId
-    if (!sid || stateRef.current.isRunning) return
+  // Replace the latest unfinished prompt: it leaves the transcript and its text
+  // goes back out (Resend) or into the message box to be changed first (Edit).
+  // Where the server can roll the turn back it removes it for good. Otherwise the
+  // provider keeps its own history, so the attempt is only hidden from this view.
+  const replaceLast = useCallback(async (item, thenSend) => {
+    const state = stateRef.current
+    const sid = state.currentSessionId
+    if (!sid || state.isRunning) return
     try {
-      // Fetched before deleting, so a failed download cannot lose the prompt.
+      // Fetched before removing, so a failed download cannot lose the prompt.
       const attachments = await attachmentPayloads(promptAttachments(item))
-      const result = await api('DELETE', `/api/sessions/${encodeURIComponent(sid)}/last-prompt`)
-      dispatch({ type: 'DROP_LAST_TURN', payload: { removedEvents: result?.removed_events } })
-      dispatch({ type: 'RESTORE_DRAFT', payload: { sessionId: sid, text: result?.text ?? item.text ?? '', attachments, send: thenSend } })
+      let text = item.text || ''
+      let removedEvents = 0
+      if (canRemovePrompt(state.currentProvider)) {
+        const result = await api('DELETE', `/api/sessions/${encodeURIComponent(sid)}/last-prompt`)
+        removedEvents = result?.removed_events
+        text = result?.text ?? text
+      }
+      dispatch({ type: 'DROP_LAST_TURN', payload: { removedEvents } })
+      dispatch({ type: 'RESTORE_DRAFT', payload: { sessionId: sid, text, attachments, send: thenSend } })
     } catch (err) {
       fail(err)
     }
   }, [dispatch, stateRef, fail])
 
-  const retryLast = useCallback(item => removeLast(item, true), [removeLast])
-  const deleteLast = useCallback(item => removeLast(item, false), [removeLast])
+  const resendLast = useCallback(item => replaceLast(item, true), [replaceLast])
+  const editLast = useCallback(item => replaceLast(item, false), [replaceLast])
 
-  return { resend, retryLast, deleteLast }
+  return { copyToComposer, resendLast, editLast }
 }
