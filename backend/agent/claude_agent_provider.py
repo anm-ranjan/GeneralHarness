@@ -986,7 +986,8 @@ class ClaudeAgentProvider:
                 ui.show_api_metrics(metrics)
 
         self._update_summary(meta, user_prompt, final_text, store)
-        ui.show_status(f"Claude run completed in {time.perf_counter() - run_started_at:.1f}s.")
+        if _verbose(ui):
+            ui.show_status(f"Claude run completed in {time.perf_counter() - run_started_at:.1f}s.")
         ui.show_agent_finished("completed")
 
     def _update_summary(self, meta, user_prompt: str, final_text: str, store) -> None:
