@@ -94,14 +94,30 @@ def _path_is_inside(path: str, root: str) -> bool:
         return False
 
 
+def _looks_like_local_path(path: str) -> bool:
+    """Whether text starting with / or ~ names a place on this machine.
+
+    Messages are full of slash-led text that is not a file path: API routes
+    (/api/sessions), URL paths (/cdn-cgi/access/), "a/b" alternatives written
+    in backticks. Only text whose first folder exists here counts as a path.
+    """
+    if "`" in path or "{" in path:
+        return False
+    if path.startswith("~"):
+        return path == "~" or path.startswith("~/")
+    first = path.lstrip("/").split("/", 1)[0]
+    return bool(first) and os.path.exists(os.path.join(os.sep, first))
+
+
 def _codex_external_path_refs(text: str, workspace_root: str) -> list[str]:
+    """Paths in a message that Codex is not allowed to touch (outside the workspace and allowed roots)."""
     roots = [workspace_root] + list(utils.ALLOWED_PATHS or [])
     refs = []
     quoted = re.findall(r"[\"']((?:/|~)[^\"']+)[\"']", text)
-    unquoted = re.findall(r"(?<![\w:/.-])((?:/|~)[^\s,;:)\]}]+)", text)
+    unquoted = re.findall(r"(?<![\w:/.`-])((?:/|~)[^\s,;:)\]}`]+)", text)
     for raw in [*quoted, *unquoted]:
-        path = raw.rstrip(".,")
-        if path.startswith("//"):
+        path = raw.rstrip(".,'\"")
+        if path.startswith("//") or not _looks_like_local_path(path):
             continue
         if not any(_path_is_inside(path, root) for root in roots):
             refs.append(path)
