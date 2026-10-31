@@ -1,4 +1,5 @@
 import { memo, useEffect, useState } from 'react'
+import { endSessionDrag, startSessionDrag } from '../../sidebarDrag'
 import { useAppSelector } from '../../context/AppContext'
 import InlineEdit from './InlineEdit'
 import { relativeTime } from '../../utils'
@@ -63,7 +64,9 @@ function SessionItem({ session, labels = [], subtitle = '', isActive, onSelect, 
         if (editing || runState) { e.preventDefault(); return }
         e.dataTransfer.setData('application/x-myharness-session', session.id)
         e.dataTransfer.effectAllowed = 'move'
+        startSessionDrag(session.id, session.project_id)
       }}
+      onDragEnd={endSessionDrag}
       aria-current={isActive ? 'page' : undefined}
       onClick={() => !editing && onSelect(session.id)}
       onContextMenu={e => {

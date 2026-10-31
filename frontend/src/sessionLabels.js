@@ -50,11 +50,28 @@ export function projectSessionIds(project) {
   return (project?.tasks || []).flatMap(task => task.sessions || [])
 }
 
+// A project's threads, newest activity first, or in the order the user dragged
+// them into (project.session_order). Threads not in that order yet, such as new
+// ones, go on top, newest first.
 export function projectSessions(project, sessionsById, { archived = false } = {}) {
-  return projectSessionIds(project)
+  const sessions = projectSessionIds(project)
     .map(id => sessionsById?.[id])
     .filter(s => s && !!s.archived === archived)
     .sort(byRecency)
+  const order = Array.isArray(project?.session_order) ? project.session_order : []
+  if (archived || order.length === 0) return sessions
+  const rank = new Map(order.map((id, index) => [id, index]))
+  const unplaced = sessions.filter(s => !rank.has(s.id))
+  const placed = sessions.filter(s => rank.has(s.id)).sort((a, b) => rank.get(a.id) - rank.get(b.id))
+  return [...unplaced, ...placed]
+}
+
+/** `ids` with `movedId` placed before/after `targetId`, or at the end when no target. */
+export function reorderIds(ids, movedId, targetId = null, place = 'after') {
+  const rest = ids.filter(id => id !== movedId)
+  if (!targetId || !rest.includes(targetId)) return [...rest, movedId]
+  const index = rest.indexOf(targetId) + (place === 'before' ? 0 : 1)
+  return [...rest.slice(0, index), movedId, ...rest.slice(index)]
 }
 
 // Every non-archived session across projects and chats, newest first.

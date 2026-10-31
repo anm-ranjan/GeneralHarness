@@ -50,3 +50,23 @@ test('session reference names project and session only', () => {
   assert.equal(sessionReference(sessions.b, { p1: 'Crash' }), 'Crash / Second — session_id: b')
   assert.equal(sessionReference({ id: 'x', kind: 'chat', title: 'Hi' }), 'Chat / Hi — session_id: x')
 })
+
+test('a project with a saved order keeps it, with unplaced threads on top', async () => {
+  const { projectSessions, reorderIds } = await import('./sessionLabels.js')
+  const sessionsById = {
+    a: { id: 'a', updated_at: '2026-10-31T10:00:00Z' },
+    b: { id: 'b', updated_at: '2026-10-31T12:00:00Z' },
+    c: { id: 'c', updated_at: '2026-10-31T11:00:00Z' },
+    n: { id: 'n', updated_at: '2026-10-31T09:00:00Z' },
+    x: { id: 'x', updated_at: '2026-10-31T13:00:00Z', archived: true },
+  }
+  const project = { id: 'p', tasks: [{ sessions: ['a', 'b', 'c', 'n', 'x'] }] }
+  assert.deepEqual(projectSessions(project, sessionsById).map(s => s.id), ['b', 'c', 'a', 'n'])
+  const ordered = { ...project, session_order: ['c', 'a', 'b'] }
+  assert.deepEqual(projectSessions(ordered, sessionsById).map(s => s.id), ['n', 'c', 'a', 'b'])
+  assert.deepEqual(projectSessions(ordered, sessionsById, { archived: true }).map(s => s.id), ['x'])
+
+  assert.deepEqual(reorderIds(['a', 'b', 'c'], 'a'), ['b', 'c', 'a'])
+  assert.deepEqual(reorderIds(['a', 'b', 'c'], 'c', 'a', 'before'), ['c', 'a', 'b'])
+  assert.deepEqual(reorderIds(['a', 'b', 'c'], 'a', 'b', 'after'), ['b', 'a', 'c'])
+})

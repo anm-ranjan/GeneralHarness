@@ -3,17 +3,41 @@ import { useAppDispatch } from '../../context/AppContext'
 import InlineEdit from './InlineEdit'
 import SessionItem from './SessionItem'
 import { lastSessionId, isRowAction } from '../../sidebarState'
+import { draggedSession, endSessionDrag } from '../../sidebarDrag'
+import { reorderIds } from '../../sessionLabels'
 
-// A project and its threads, newest first. Labels are not a level here: they
-// show as chips on each thread row.
+const SESSION_TYPE = 'application/x-myharness-session'
+
+// A project and its threads: newest first, or in the order the user dragged
+// them into. Labels are not a level here: they show as chips on each thread row.
+// Dragging a thread within its project reorders it (onto a row: above or below
+// it; onto empty space: to the bottom); dragging one from another project moves it here.
 function ProjectNode({
   project, sessions, totalCount, labelsById, currentSessionId, filtering = false,
   onSelectSession, onRenameSession, onSessionContextMenu, renameSessionId, onRenameHandled,
-  onRenameProject, onDeleteProject, onCreateSession, onImportSession, onDropSession,
+  onRenameProject, onDeleteProject, onCreateSession, onImportSession, onDropSession, onReorderSessions,
 }) {
   const dispatch = useAppDispatch()
   const [editing, setEditing] = useState(false)
   const [dragOver, setDragOver] = useState(false)
+  // Where a thread of this project would land: { id, place } on a row, or 'end'.
+  const [dropMark, setDropMark] = useState(null)
+  const manualOrder = (project.session_order || []).length > 0
+
+  function ownDrag() {
+    const drag = draggedSession()
+    return drag && drag.projectId === project.id && !filtering && onReorderSessions ? drag : null
+  }
+
+  function reorder(movedId, targetId, place) {
+    const ids = reorderIds(sessions.map(s => s.id), movedId, targetId, place)
+    if (ids.join() !== sessions.map(s => s.id).join()) onReorderSessions(project.id, ids)
+  }
+
+  function clearDrag() {
+    setDragOver(false)
+    setDropMark(null)
+  }
   const containsActiveSession = sessions.some(s => s.id === currentSessionId)
   const [collapsed, setCollapsed] = useState(() => !sessions.some(s => s.id === (currentSessionId || lastSessionId())))
 
@@ -35,17 +59,24 @@ function ProjectNode({
     <div
       className={`mb-4 rounded-md transition-colors ${dragOver ? 'bg-accent-soft ring-1 ring-accent/40' : ''}`}
       onDragOver={e => {
-        if (e.dataTransfer.types.includes('application/x-myharness-session')) {
-          e.preventDefault(); setDragOver(true); e.dataTransfer.dropEffect = 'move'
-        }
+        if (!e.dataTransfer.types.includes(SESSION_TYPE)) return
+        const own = draggedSession()?.projectId === project.id
+        if (own && !ownDrag()) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        if (own) setDropMark('end')
+        else setDragOver(true)
       }}
-      onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false) }}
+      onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) clearDrag() }}
       onDrop={e => {
-        const id = e.dataTransfer.getData('application/x-myharness-session')
-        setDragOver(false)
+        const id = e.dataTransfer.getData(SESSION_TYPE)
+        const own = ownDrag()
+        clearDrag()
+        endSessionDrag()
         if (!id) return
         e.preventDefault()
-        onDropSession?.(id, project.id)
+        if (own) reorder(id, null)
+        else onDropSession?.(id, project.id)
       }}
     >
       <div
@@ -114,6 +145,14 @@ function ProjectNode({
             className="text-faint hover:text-ok text-[11px] px-0.5"
             title="Import thread backup (.zip)"
           >⇪</button>
+          {manualOrder && onReorderSessions && (
+            <button
+              onClick={() => onReorderSessions(project.id, [])}
+              className="text-faint hover:text-accent text-[11px] px-0.5"
+              title="Sort threads by latest activity again"
+              aria-label={`Sort ${project.name} by latest activity`}
+            >⇅</button>
+          )}
         </div>
       </div>
 
@@ -122,18 +161,51 @@ function ProjectNode({
           {sessions.length === 0 ? (
             <p className="text-[12px] text-faint italic py-1 px-2">{filtering ? 'No matching threads.' : 'No threads yet.'}</p>
           ) : sessions.map(s => (
-            <SessionItem
+            <div
               key={s.id}
-              session={s}
-              labels={labelsById[s.id]}
-              isActive={s.id === currentSessionId}
-              onSelect={onSelectSession}
-              onRename={onRenameSession}
-              onContextMenu={onSessionContextMenu}
-              renameRequested={renameSessionId === s.id}
-              onRenameDone={onRenameHandled}
-            />
+              className="relative"
+              onDragOver={e => {
+                const drag = ownDrag()
+                if (!drag) return
+                e.preventDefault()
+                e.stopPropagation()
+                e.dataTransfer.dropEffect = 'move'
+                const rect = e.currentTarget.getBoundingClientRect()
+                const place = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+                setDropMark(drag.sessionId === s.id ? null : { id: s.id, place })
+              }}
+              onDrop={e => {
+                const drag = ownDrag()
+                if (!drag) return
+                e.preventDefault()
+                e.stopPropagation()
+                const mark = dropMark
+                clearDrag()
+                endSessionDrag()
+                if (mark && mark.id === s.id) reorder(drag.sessionId, s.id, mark.place)
+              }}
+            >
+              {dropMark?.id === s.id && (
+                <span
+                  aria-hidden="true"
+                  className={`pointer-events-none absolute inset-x-2 h-0.5 rounded-full bg-accent ${dropMark.place === 'before' ? '-top-px' : '-bottom-px'}`}
+                />
+              )}
+              <SessionItem
+                session={s}
+                labels={labelsById[s.id]}
+                isActive={s.id === currentSessionId}
+                onSelect={onSelectSession}
+                onRename={onRenameSession}
+                onContextMenu={onSessionContextMenu}
+                renameRequested={renameSessionId === s.id}
+                onRenameDone={onRenameHandled}
+              />
+            </div>
           ))}
+          {dropMark === 'end' && sessions.length > 0 && (
+            <span aria-hidden="true" className="pointer-events-none mx-2 block h-0.5 rounded-full bg-accent" />
+          )}
         </div>
       </div>
     </div>

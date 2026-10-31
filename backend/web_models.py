@@ -109,6 +109,12 @@ class ProjectInfo(BaseModel):
     name: str
     root: str
     tasks: list[TaskInfo] = Field(default_factory=list)
+    # Thread ids in the user's sidebar order; empty means "by latest activity".
+    session_order: list[str] = Field(default_factory=list)
+
+
+class SessionOrderRequest(BaseModel):
+    session_ids: list[str] = Field(default_factory=list, max_length=5000)
 
 
 class CreateProjectRequest(BaseModel):

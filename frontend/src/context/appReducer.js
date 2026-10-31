@@ -288,6 +288,14 @@ export function reducer(state, action) {
     case 'CLEAR_HOST_FALLBACK':
       return patched(state, { hostFallbackFrom: '' })
 
+    case 'SET_PROJECT_SESSION_ORDER': {
+      const { projectId, order } = action.payload
+      return {
+        ...state,
+        projects: state.projects.map(project => project.id === projectId ? { ...project, session_order: order } : project),
+      }
+    }
+
     case 'SET_TREE': {
       const { projects, sessions } = action.payload
       const maps = buildNameMaps(projects)

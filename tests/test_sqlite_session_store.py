@@ -183,6 +183,25 @@ class SQLiteSessionStoreContractTests(unittest.TestCase):
 
             self.assertTrue(created.title.startswith("Thread "))
 
+    def test_a_projects_thread_order_is_saved_and_filtered_to_its_threads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(tmp)
+            store.ensure_project("project", "Project", "")
+            store.ensure_task("project", "task", "Task")
+            first = store.create_session("project", "task", "First")
+            second = store.create_session("project", "task", "Second")
+            self.assertEqual(store.get_project("project").session_order, [])
+
+            saved = store.set_session_order("project", [second.id, "elsewhere", first.id, second.id])
+            self.assertEqual(saved.session_order, [second.id, first.id])
+            store.close()
+            reopened = SessionStore(tmp)
+            self.assertEqual(reopened.get_project("project").session_order, [second.id, first.id])
+            self.assertEqual(reopened.set_session_order("project", []).session_order, [])
+            with self.assertRaises(ValueError):
+                reopened.set_session_order("missing", [])
+            reopened.close()
+
     def test_the_replay_window_reaches_back_to_the_turns_prompt(self):
         from web_models import EventEnvelope, EventType
         with tempfile.TemporaryDirectory() as tmp:

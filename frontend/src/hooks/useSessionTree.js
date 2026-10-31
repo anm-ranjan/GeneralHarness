@@ -75,6 +75,17 @@ export default function useSessionTree() {
     return session
   }, [loadTree])
 
+  // Shown at once, then saved; a failed save reloads the stored order.
+  const setSessionOrder = useCallback(async (projectId, sessionIds) => {
+    dispatch({ type: 'SET_PROJECT_SESSION_ORDER', payload: { projectId, order: sessionIds } })
+    try {
+      await api('PUT', `/api/projects/${encodeURIComponent(projectId)}/session-order`, { session_ids: sessionIds })
+    } catch (err) {
+      await loadTree().catch(() => {})
+      throw err
+    }
+  }, [dispatch, loadTree])
+
   const deleteSession = useCallback(async (sessionId, projectId, taskId) => {
     await api('DELETE', `/api/sessions/${encodeURIComponent(sessionId)}`)
     await loadTree()
@@ -84,6 +95,6 @@ export default function useSessionTree() {
     loadTree,
     createProject, renameProject, deleteProject,
     createSession, renameSession, updateSession, moveSession, deleteSession,
-    createChat,
+    createChat, setSessionOrder,
   }
 }

@@ -159,6 +159,10 @@ export default function Sidebar() {
     moveSession(sessionId, projectId).catch(reportError)
   }, [stateRef, moveSession, reportError])
 
+  const reorderSessions = useCallback((projectId, sessionIds) => {
+    tree.setSessionOrder(projectId, sessionIds).catch(reportError)
+  }, [tree, reportError])
+
   const renameSession = useCallback((sessionId, title) => {
     tree.renameSession(sessionId, title).catch(reportError)
   }, [tree, reportError])
@@ -337,6 +341,7 @@ export default function Sidebar() {
                   onCreateSession={createSession}
                   onImportSession={importSession}
                   onDropSession={dropSession}
+                  onReorderSessions={reorderSessions}
                   {...rowProps}
                 />
               ))

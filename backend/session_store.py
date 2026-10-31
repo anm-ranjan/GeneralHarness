@@ -410,6 +410,9 @@ class SessionStore:
             SessionStore._backfill_native_usage(conn)
         # Additive column: older builds name their columns explicitly and
         # leave it at its default, so the schema version stays unchanged.
+        project_columns = {row[1] for row in conn.execute("PRAGMA table_info(projects)")}
+        if "session_order" not in project_columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN session_order TEXT NOT NULL DEFAULT '[]'")
         session_columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
         if "archived" not in session_columns:
             conn.execute("ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
@@ -681,7 +684,11 @@ class SessionStore:
                         id=task_row["id"], name=task_row["name"],
                         color=task_row["color"], sessions=sessions,
                     ))
-                projects.append(ProjectInfo(id=row["id"], name=row["name"], root=row["root"], tasks=tasks))
+                order = _from_json(row["session_order"], []) if "session_order" in row.keys() else []
+                projects.append(ProjectInfo(
+                    id=row["id"], name=row["name"], root=row["root"], tasks=tasks,
+                    session_order=[str(item) for item in order if isinstance(item, str)] if isinstance(order, list) else [],
+                ))
             return projects
 
     def ensure_project(self, project_id: str, name: str, root: str) -> ProjectInfo:
@@ -1088,6 +1095,24 @@ class SessionStore:
             prompt_stash=prompt_lists["stash"], steering_queue=prompt_lists["steering"],
             archived=bool(row["archived"]), labels=labels,
         )
+
+    def set_session_order(self, project_id: str, session_ids: list[str]) -> ProjectInfo:
+        """Save the sidebar order of a project's threads; [] returns it to activity order.
+
+        Ids that are not threads of this project are dropped, duplicates kept once.
+        """
+        with self._lock, self._conn:
+            if self._conn.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone() is None:
+                raise ValueError(f"Project {project_id} not found")
+            owned = {
+                row[0] for row in self._conn.execute("SELECT id FROM sessions WHERE project_id=?", (project_id,))
+            }
+            order: list[str] = []
+            for session_id in session_ids:
+                if session_id in owned and session_id not in order:
+                    order.append(session_id)
+            self._conn.execute("UPDATE projects SET session_order=? WHERE id=?", (_json(order), project_id))
+        return self.get_project(project_id)
 
     def get_project(self, project_id: str) -> ProjectInfo | None:
         return next((p for p in self.load_project_index() if p.id == project_id), None)

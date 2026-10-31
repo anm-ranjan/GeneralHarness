@@ -26,6 +26,7 @@ from web_models import (
     EventType,
     MoveSessionRequest,
     RenameProjectRequest,
+    SessionOrderRequest,
     RenameSessionRequest,
     RenameTaskRequest,
     UpdateRunSettingsRequest,
@@ -159,6 +160,16 @@ def rename_project(project_id: str, req: RenameProjectRequest):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return proj.model_dump(mode="json")
+
+
+@router.put("/api/projects/{project_id}/session-order")
+def set_project_session_order(project_id: str, req: SessionOrderRequest):
+    """Save a project's thread order in the sidebar ([] means by latest activity)."""
+    try:
+        project = web_app._store.set_session_order(project_id, req.session_ids)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return project.model_dump(mode="json")
 
 
 @router.patch("/api/projects/{project_id}/tasks/{task_id}")
