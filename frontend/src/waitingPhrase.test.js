@@ -20,3 +20,10 @@ test('bad idle values fall back to Thinking', () => {
   assert.equal(waitingPhrase(NaN), 'Thinking…')
   assert.equal(waitingPhrase(undefined), 'Thinking…')
 })
+
+test('the first phrase names Claude or Codex; native just thinks', () => {
+  assert.equal(waitingPhrase(0, 'claude-agent'), 'Thinking with Claude…')
+  assert.equal(waitingPhrase(1000, 'codex-app-server'), 'Thinking with Codex…')
+  assert.equal(waitingPhrase(0, 'native'), 'Thinking…')
+  assert.equal(waitingPhrase(4000, 'claude-agent'), 'Computing…')
+})

@@ -38,11 +38,7 @@ function LiveLine({ turn }) {
     0,
   )
   const idleMs = now - Math.max(lastToolEnd, state.lastActivityTime || 0)
-  const label = state.showCodexRunning && !current
-    ? 'Codex is working…'
-    : current
-      ? null
-      : waitingPhrase(idleMs)
+  const label = current ? null : waitingPhrase(idleMs, state.currentProvider)
 
   return (
     <div aria-live="polite">

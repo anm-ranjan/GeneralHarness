@@ -829,7 +829,9 @@ class ClaudeAgentProvider:
         )
 
         ui.show_user_message(display_prompt if display_prompt is not None else user_prompt, display_images)
-        ui.show_status("Starting Claude run…" if not resume_session_id else "Resuming Claude session…")
+        if _verbose(ui):
+            # The live line already says "Thinking with Claude…" while it starts.
+            ui.show_status("Starting Claude run…" if not resume_session_id else "Resuming Claude session…")
 
         final_texts: list[str] = []
         result_msg = None
