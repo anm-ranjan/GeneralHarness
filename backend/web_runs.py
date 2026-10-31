@@ -361,17 +361,24 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
                 if utils.MULTI_AGENT_ENABLED:
                     def run_child(node):
                         child_ui = SubagentUI(web_ui, node.path)
-                        child_messages = [
-                            agent.build_system_message(
-                                workspace_root,
-                                getattr(meta, "kind", "project"),
-                                session_identity=session_identity,
+                        if node.messages:
+                            # Follow-up or late messages: continue the agent's own
+                            # conversation so it keeps what it already found.
+                            child_messages = node.messages
+                            child_prompt = node.prompt or f"Task: {node.task}"
+                        else:
+                            child_messages = [
+                                agent.build_system_message(
+                                    workspace_root,
+                                    getattr(meta, "kind", "project"),
+                                    session_identity=session_identity,
+                                )
+                            ]
+                            child_prompt = (
+                                f"You are {node.path}, a {node.role} child agent. Complete only this task and return a concise result to your parent.\n\n"
+                                f"Task: {node.task}"
                             )
-                        ]
-                        child_prompt = (
-                            f"You are {node.path}, a {node.role} child agent. Complete only this task and return a concise result to your parent.\n\n"
-                            f"Task: {node.task}"
-                        )
+                        node.prompt = ""
                         agent.run_agent(
                             child_prompt,
                             child_messages,
@@ -382,6 +389,7 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
                             tool_policy=node.tool_policy,
                             show_user=False,
                         )
+                        node.messages = child_messages
                         return child_ui.result
 
                     orchestrator = NativeOrchestrator(

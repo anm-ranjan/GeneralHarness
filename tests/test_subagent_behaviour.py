@@ -12,7 +12,7 @@ for path in (ROOT / "backend", ROOT / "backend" / "agent"):
 
 import harness_agent as agent
 import utils
-from orchestration import NativeOrchestrator, followup_task_text
+from orchestration import NativeOrchestrator
 
 
 def _tool_names(tools):
@@ -32,29 +32,63 @@ class FileListSizeTests(unittest.TestCase):
 
 
 class FollowupTaskTests(unittest.TestCase):
-    def test_followup_keeps_the_original_task_and_result(self):
-        tasks = []
+    def test_followup_continues_the_agents_own_conversation(self):
+        calls = []
         done = threading.Event()
 
         def runner(node):
-            tasks.append(node.task)
-            if len(tasks) == 2:
+            # Mimic run_child: keep the conversation, continue it with node.prompt.
+            prompt = node.prompt or f"Task: {node.task}"
+            node.prompt = ""
+            node.messages = node.messages + [{"role": "user", "content": prompt}]
+            calls.append([message["content"] for message in node.messages])
+            if len(calls) == 2:
                 done.set()
-            return "could not read it" if len(tasks) == 1 else "first line"
+            return "could not read it" if len(calls) == 1 else "first line"
 
         scheduler = NativeOrchestrator(runner, lambda *_: None)
         child = scheduler.spawn_agent("/root", "Read the first line of Tetra_Template/README.md", "reader")
         scheduler.wait_agent("/root", [child["agent_id"]], 2)
-        scheduler.followup_task("/root", child["agent_id"], "Use file_read with read_mode=head lines=1.")
+        info = scheduler.followup_task("/root", child["agent_id"], "Use file_read with read_mode=head lines=1.")
+        self.assertEqual(info["generation"], 2)
         self.assertTrue(done.wait(2))
-        self.assertIn("Tetra_Template/README.md", tasks[1])
-        self.assertIn("could not read it", tasks[1])
-        self.assertIn("read_mode=head", tasks[1])
+        self.assertEqual(calls[1][0], "Task: Read the first line of Tetra_Template/README.md")
+        self.assertIn("read_mode=head", calls[1][1])
+        self.assertEqual(scheduler.wait_agent("/root", [child["agent_id"]], 2)["agents"][0]["result"], "first line")
 
-    def test_followup_text_is_bounded(self):
-        text = followup_task_text("t" * 10000, "r" * 10000, "", "next")
-        self.assertLess(len(text), 9000)
-        self.assertTrue(text.endswith("next"))
+    def test_messages_arriving_as_it_finishes_get_another_round(self):
+        prompts = []
+
+        def runner(node):
+            prompts.append(node.prompt)
+            node.prompt = ""
+            if len(prompts) == 1:
+                scheduler.send_message("/root", node.path, "Also check the tests folder")
+            return f"round {len(prompts)}"
+
+        scheduler = NativeOrchestrator(runner, lambda *_: None)
+        child = scheduler.spawn_agent("/root", "List files", "lister")
+        result = scheduler.wait_agent("/root", [child["agent_id"]], 2)["agents"][0]
+        self.assertEqual(result["result"], "round 2")
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("Also check the tests folder", prompts[1])
+
+    def test_a_stale_thread_cannot_overwrite_a_newer_run(self):
+        release = threading.Event()
+
+        def runner(node):
+            release.wait(2)
+            return "stale"
+
+        scheduler = NativeOrchestrator(runner, lambda *_: None)
+        child = scheduler.spawn_agent("/root", "Slow task", "slow")
+        node = scheduler._nodes[child["agent_id"]]
+        original = node.thread
+        node.thread = threading.Thread(target=lambda: None)  # a newer run took over
+        release.set()
+        original.join(2)
+        self.assertEqual(node.result, "")
+        self.assertNotEqual(node.status, "completed")
 
 
 class SubagentAskUserTests(unittest.TestCase):
