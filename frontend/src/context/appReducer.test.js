@@ -432,3 +432,25 @@ test('FINALIZE_AGENTS stops what was still going, CLEAR_AGENTS empties, and sess
   assert.deepEqual(selected.agentsById, {})
   assert.deepEqual(reducer({ ...initialState, agentsById: agents }, { type: 'CLEAR_SESSION' }).agentsById, {})
 })
+
+test('the reply linking a created file replaces the automatic View link', () => {
+  const path = '/archive/App/DECISIONS.md'
+  const append = (state, payload) => reducer(state, { type: 'APPEND_STAGE_ITEM', payload })
+  const view = { type: 'assistant_message', markdown: `[View DECISIONS.md](${path})`, autoPreviewPath: path }
+
+  let state = append(initialState, { type: 'user_message', text: 'Write it' })
+  state = append(state, view)
+  state = append(state, { type: 'assistant_message', markdown: `Created [DECISIONS.md](${path}).` })
+  assert.deepEqual(state.stageItems.map(item => item.markdown || item.text), ['Write it', `Created [DECISIONS.md](${path}).`])
+
+  // A reply that does not link the file keeps the automatic link.
+  state = append(state, { type: 'user_message', text: 'Another' })
+  state = append(state, view)
+  state = append(state, { type: 'assistant_message', markdown: 'Done.' })
+  assert.equal(state.stageItems.filter(item => item.autoPreviewPath).length, 1)
+
+  // A later turn's reply never removes an earlier turn's link.
+  state = append(state, { type: 'user_message', text: 'Third' })
+  state = append(state, { type: 'assistant_message', markdown: `See [it](${path}).` })
+  assert.equal(state.stageItems.filter(item => item.autoPreviewPath).length, 1)
+})

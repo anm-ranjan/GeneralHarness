@@ -320,14 +320,16 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
         payload: { path: data.path, action: data.action, tool: data.tool, timestamp: evt.created_at || new Date().toISOString() },
       })
       if (data.action === 'created' && artifactPath(data.path)) {
-        dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'assistant_message', markdown: previewLink(data.path) } })
+        // Shown at once in case the reply never mentions the file; dropped if
+        // the reply links it itself (see APPEND_STAGE_ITEM).
+        dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'assistant_message', markdown: previewLink(data.path), autoPreviewPath: data.path } })
       }
       break
 
     case 'generated_artifact': {
       const name = data.name || String(data.path || '').split('/').pop() || 'generated image'
       if (data.media_type?.startsWith('text/')) {
-        dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'assistant_message', markdown: previewLink(data.path, name) } })
+        dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'assistant_message', markdown: previewLink(data.path, name), autoPreviewPath: data.path } })
         dispatch({ type: 'APPEND_FILE_CHANGE', payload: { path: data.path, action: 'generated', tool: 'shell_run', timestamp: evt.created_at } })
         break
       }

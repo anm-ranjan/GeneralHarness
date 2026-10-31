@@ -41,3 +41,13 @@ test('the preview frame loads from the host being viewed, not the one serving th
     setActiveHost({ id: '', url: '' })
   }
 })
+
+test('linksToPath recognises absolute, encoded, file:// and relative links', async () => {
+  const { linksToPath } = await import('./artifacts.js')
+  const path = '/archive/My App/DECISIONS.md'
+  assert.equal(linksToPath('[a](/archive/My%20App/DECISIONS.md)', path), true)
+  assert.equal(linksToPath('[a](<file:///archive/My App/DECISIONS.md>)', path), true)
+  assert.equal(linksToPath('[a](./DECISIONS.md)', path), true)
+  assert.equal(linksToPath('Mentions DECISIONS.md without a link', path), false)
+  assert.equal(linksToPath('[a](/archive/Other/DECISIONS.md)', path), false)
+})

@@ -3,6 +3,7 @@
 import { effectiveWorkspaceRoot } from '../sessionWorkspace.js'
 import { applyRunState, snapshotRunStates } from '../runStates.js'
 import { sidebarPrefs } from '../sidebarState.js'
+import { linksToPath } from '../artifacts.js'
 
 export const initialState = {
   currentSessionId: null,
@@ -137,6 +138,20 @@ function appendStageItem(items, item) {
       ? items.slice(0, -1)
       : items
   return [...base, { ...item, _id: item._id || `si_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }]
+}
+
+// MyHarness adds a "View <file>" message when a run creates a previewable file.
+// Once the turn's reply links that file itself, the added one is a duplicate
+// shown ahead of the reply, so it is dropped. Only the current turn is searched.
+function dropLinkedAutoPreviews(items, markdown) {
+  let start = items.length
+  while (start > 0) {
+    const item = items[start - 1]
+    if (item.type === 'user_message' && !item.steering) break
+    start -= 1
+  }
+  const kept = items.filter((item, index) => index < start || !item.autoPreviewPath || !linksToPath(markdown, item.autoPreviewPath))
+  return kept.length === items.length ? items : kept
 }
 
 function finalizeLastWorkGroup(items) {
@@ -504,8 +519,13 @@ export function reducer(state, action) {
     case 'INCREMENT_WS_RECONNECTS':
       return { ...state, wsReconnects: state.wsReconnects + 1 }
 
-    case 'APPEND_STAGE_ITEM':
-      return { ...state, stageItems: appendStageItem(state.stageItems, action.payload) }
+    case 'APPEND_STAGE_ITEM': {
+      const item = action.payload
+      const items = item.type === 'assistant_message' && !item.autoPreviewPath && item.markdown
+        ? dropLinkedAutoPreviews(state.stageItems, item.markdown)
+        : state.stageItems
+      return { ...state, stageItems: appendStageItem(items, item) }
+    }
 
     case 'APPEND_ASSISTANT_DELTA': {
       const items = state.stageItems
