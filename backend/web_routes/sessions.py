@@ -341,7 +341,7 @@ def get_session(session_id: str, events: int = 200):
     if meta is None:
         raise HTTPException(status_code=404, detail="Session not found")
     count = max(0, min(events, 1000))
-    events = web_app._store.load_recent_events(session_id, count=count) if count else []
+    events = web_app._store.load_recent_turn_events(session_id, count=count) if count else []
     return {
         "meta": meta.model_dump(mode="json"),
         "events": [e.model_dump(mode="json") for e in events],

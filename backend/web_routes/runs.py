@@ -113,7 +113,7 @@ async def session_events(websocket: WebSocket, session_id: str):
 
     await web_app._manager.connections.connect(session_id, websocket)
     try:
-        recent = web_app._store.load_recent_events(session_id, count=200)
+        recent = web_app._store.load_recent_turn_events(session_id, count=200)
         total = web_app._store.event_count(session_id)
         loaded_event = EventEnvelope(
             session_id=session_id,

@@ -1323,6 +1323,42 @@ class SessionStore:
             ).fetchall()
         return [self._row_to_event(row) for row in reversed(rows)]
 
+    def load_recent_turn_events(self, session_id: str, count: int = 200, reach: int = 1000) -> list[EventEnvelope]:
+        """The newest ``count`` events, widened back to the prompt that opened
+        the oldest turn in that window (by at most ``reach`` more events).
+
+        A turn of many questions and answers can outgrow the window; without
+        its prompt the reloaded transcript starts mid-turn.
+        """
+        recent = self.load_recent_events(session_id, count)
+        if not recent or recent[0].type.value == "user_message":
+            return recent
+        with self._lock:
+            first = self._conn.execute(
+                "SELECT sequence FROM events WHERE session_id=? ORDER BY sequence DESC LIMIT 1 OFFSET ?",
+                (session_id, len(recent) - 1),
+            ).fetchone()
+            if first is None:
+                return recent
+            rows = self._conn.execute(
+                """SELECT sequence, data_json FROM events
+                   WHERE session_id=? AND type='user_message' AND sequence < ? AND sequence >= ?
+                   ORDER BY sequence DESC""",
+                (session_id, first[0], first[0] - reach),
+            ).fetchall()
+        start = next(
+            (row[0] for row in rows if not (_from_json(row[1], {}) or {}).get("steering")),
+            None,
+        )
+        if start is None:
+            return recent
+        with self._lock:
+            older = self._conn.execute(
+                "SELECT * FROM events WHERE session_id=? AND sequence >= ? AND sequence < ? ORDER BY sequence",
+                (session_id, start, first[0]),
+            ).fetchall()
+        return [self._row_to_event(row) for row in older] + recent
+
     def last_prompt_events(self, session_id: str) -> tuple[int, list[EventEnvelope]]:
         """(sequence, events) from the latest real prompt to the end of the log.
 

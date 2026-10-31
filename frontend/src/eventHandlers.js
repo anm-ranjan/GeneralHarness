@@ -42,9 +42,14 @@ export function isCodexProtocolStatus(text) {
 
 // Wraps dispatch so stage items appended while replaying a stored event carry
 // the event's absolute index in the session log, used for search deep-linking.
+// What a finished turn keeps when a transcript is reloaded: the exchange itself.
+// Answered questions are part of it (an interview may be nothing but questions
+// and answers), and an error says why the turn ended without a reply.
+const HISTORICAL_ITEM_TYPES = new Set(['user_message', 'assistant_message', 'question', 'error'])
+
 function indexedDispatch(dispatch, eventIndex, historical = false) {
   return (action) => {
-    if (historical && (action.type === 'APPEND_TOOL_CALL' || (action.type === 'APPEND_STAGE_ITEM' && !['user_message', 'assistant_message'].includes(action.payload.type)))) return
+    if (historical && (action.type === 'APPEND_TOOL_CALL' || (action.type === 'APPEND_STAGE_ITEM' && !HISTORICAL_ITEM_TYPES.has(action.payload.type)))) return
     if (action.type === 'UPDATE_TOOL_RESULT' && historical) return
     if (action.type === 'APPEND_STAGE_ITEM' || action.type === 'APPEND_TOOL_CALL') {
       dispatch({ ...action, payload: { ...action.payload, eventIndex, historical } })

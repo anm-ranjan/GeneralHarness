@@ -544,3 +544,26 @@ test('turn_note events become transcript items, empty ones are ignored', () => {
   assert.equal(ctx.actions.length, 1)
   assert.deepEqual(ctx.actions[0], { type: 'APPEND_STAGE_ITEM', payload: { type: 'turn_note', text: 'Found the cause.' } })
 })
+
+test('a reloaded finished turn keeps its answered questions and its error', () => {
+  const ctx = collect()
+  handleSessionEvent({
+    type: 'session_loaded',
+    data: {
+      meta: { status: 'idle' },
+      events: [
+        { type: 'user_message', data: { text: 'Interview me' } },
+        { type: 'thinking', data: { markdown: 'planning' } },
+        { type: 'question_required', data: { question_id: 'q1', question: 'Where should it run?', options: ['Phone', 'Server'] } },
+        { type: 'question_resolved', data: { question_id: 'q1', answer: 'Server', answered: true } },
+        { type: 'error', data: { text: 'Codex made no progress for 30 minutes' } },
+        { type: 'run_finished', data: { reason: 'error' } },
+      ],
+    },
+  }, ctx.dispatch, ctx.stateRef)
+
+  const kept = flatten(ctx.actions).filter(a => a.type === 'APPEND_STAGE_ITEM').map(a => a.payload.type)
+  assert.deepEqual(kept, ['user_message', 'question', 'error'])
+  const resolved = flatten(ctx.actions).find(a => a.type === 'RESOLVE_QUESTION')
+  assert.deepEqual(resolved.payload, { questionId: 'q1', answer: 'Server', answered: true })
+})

@@ -183,6 +183,29 @@ class SQLiteSessionStoreContractTests(unittest.TestCase):
 
             self.assertTrue(created.title.startswith("Thread "))
 
+    def test_the_replay_window_reaches_back_to_the_turns_prompt(self):
+        from web_models import EventEnvelope, EventType
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(tmp)
+            store.ensure_project("project", "Project", "")
+            store.ensure_task("project", "task", "Task")
+            session = store.create_session("project", "task", "Interview")
+
+            def add(kind, data):
+                store.append_event(EventEnvelope(session_id=session.id, type=kind, data=data))
+
+            add(EventType.USER_MESSAGE, {"text": "Interview me"})
+            add(EventType.USER_MESSAGE, {"text": "steer", "steering": True})
+            for index in range(10):
+                add(EventType.STATUS, {"text": f"s{index}"})
+
+            window = store.load_recent_turn_events(session.id, count=4)
+            self.assertEqual(len(window), 12)
+            self.assertEqual(window[0].data["text"], "Interview me")  # not the steering message
+            self.assertEqual(len(store.load_recent_turn_events(session.id, count=4, reach=5)), 4)
+            self.assertEqual(len(store.load_recent_turn_events(session.id, count=50)), 12)
+            store.close()
+
     def test_event_sequence_is_stable_across_pagination_append_and_reopen(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = SessionStore(tmp)
