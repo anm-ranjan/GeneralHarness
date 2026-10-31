@@ -10,6 +10,24 @@ from typing import Callable
 
 FINAL_STATES = {"completed", "failed", "interrupted"}
 
+_FOLLOWUP_CONTEXT_CHARS = 4000
+
+
+def followup_task_text(previous_task: str, previous_result: str, previous_error: str, followup: str) -> str:
+    """A follow-up restarts an agent from scratch, so carry its earlier task
+    and outcome into the new task; without them it loses paths and scope."""
+    def clip(text: str) -> str:
+        text = str(text or "").strip()
+        return text if len(text) <= _FOLLOWUP_CONTEXT_CHARS else text[:_FOLLOWUP_CONTEXT_CHARS] + " …[truncated]"
+
+    outcome = clip(previous_result) or (f"Failed: {clip(previous_error)}" if previous_error else "(no result)")
+    return (
+        "This continues your earlier task.\n\n"
+        f"Earlier task:\n{clip(previous_task)}\n\n"
+        f"Your earlier result:\n{outcome}\n\n"
+        f"Follow-up from the parent agent:\n{str(followup or '').strip()}"
+    )
+
 
 class CombinedCancelEvent:
     def __init__(self, *events: threading.Event):
@@ -169,7 +187,7 @@ class NativeOrchestrator:
             if node.status not in FINAL_STATES:
                 node.mailbox.append(task)
                 return node.as_dict()
-            node.task = task
+            node.task = followup_task_text(node.task, node.result, node.error, task)
             node.result = ""
             node.error = ""
             node.cancel_event = threading.Event()

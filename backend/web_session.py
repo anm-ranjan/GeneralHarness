@@ -242,6 +242,14 @@ class SessionManager:
                 self._loop,
             )
 
+    def notify_global(self, payload: dict) -> None:
+        """Broadcast an app-level message to every connected window."""
+        if self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self.connections.broadcast_global(payload),
+                self._loop,
+            )
+
     def notify_session_renamed(self, session_id: str, title: str) -> None:
         """Broadcast a title change so sidebars update without a refetch."""
         if self._loop and self._loop.is_running():

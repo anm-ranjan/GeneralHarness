@@ -62,7 +62,7 @@ READ_ONLY_TOOLS = [
         "type": "function",
         "function": {
             "name": "file_list",
-            "description": "List files under a directory. Uses ripgrep when available, with a Python fallback.",
+            "description": "List files under a directory, with each file's size. Uses ripgrep when available, with a Python fallback.",
             "parameters": {
                 "type": "object",
                 "properties": {

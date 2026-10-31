@@ -29,6 +29,115 @@ class ClaudeAgentRunError(RuntimeError):
     pass
 
 
+# Account, login source and latest rate-limit state, as the SDK last reported
+# them. Only SDK-exposed data: get_server_info(), the init message's
+# apiKeySource, and RateLimitEvent messages.
+_account_lock = threading.Lock()
+_account_state: dict[str, Any] = {}
+
+
+def account_snapshot() -> dict[str, Any]:
+    with _account_lock:
+        state = dict(_account_state)
+        state["rate_limits"] = dict(_account_state.get("rate_limits") or {})
+        return state
+
+
+def _remember_account(**changes: Any) -> None:
+    with _account_lock:
+        _account_state.update({key: value for key, value in changes.items() if value is not None})
+        _account_state["updated_at"] = time.time()
+
+
+def _remember_rate_limit(message: Any) -> None:
+    info = _field(message, "rate_limit_info", None)
+    raw = _field(info, "raw", None) if info is not None else None
+    if not isinstance(raw, dict) or not raw:
+        return
+    window = str(raw.get("rateLimitType") or "unknown")
+    with _account_lock:
+        limits = dict(_account_state.get("rate_limits") or {})
+        limits[window] = {**raw, "observed_at": time.time()}
+        _account_state["rate_limits"] = limits
+        _account_state["updated_at"] = time.time()
+
+
+def _public_account(info: Any) -> dict[str, Any] | None:
+    """Plan and provider from get_server_info(); identity fields are dropped."""
+    account = info.get("account") if isinstance(info, dict) else None
+    if not isinstance(account, dict):
+        return None
+    keep = ("subscriptionType", "apiProvider", "tokenSource", "apiKeySource")
+    return {key: account[key] for key in keep if account.get(key) is not None}
+
+
+def probe_account(cli_path: str | None = None, timeout: float = 45.0) -> dict[str, Any]:
+    """Read plan and provider without sending a prompt.
+
+    Connects an SDK client (which initialises the CLI but makes no model
+    call), reads get_server_info(), and disconnects. Updates the shared
+    snapshot and returns it.
+    """
+    from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+
+    async def read() -> Any:
+        options = ClaudeAgentOptions(
+            cwd=str(Path.home()),
+            cli_path=cli_path or None,
+            setting_sources=[],
+            allowed_tools=[],
+            max_turns=1,
+        )
+        async with ClaudeSDKClient(options=options) as client:
+            return await client.get_server_info()
+
+    info = asyncio.run(asyncio.wait_for(read(), timeout))
+    account = _public_account(info)
+    if account:
+        _remember_account(account=account)
+    return account_snapshot()
+
+
+def claude_usage_metrics(result_msg: Any) -> list[dict[str, Any]]:
+    """One record per model from ResultMessage.model_usage, else the run total."""
+    records: list[dict[str, Any]] = []
+    model_usage = _field(result_msg, "model_usage", None)
+    if isinstance(model_usage, Mapping):
+        for model, entry in model_usage.items():
+            if not isinstance(entry, Mapping):
+                continue
+
+            def count(key: str) -> int:
+                value = entry.get(key)
+                return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+            read = count("cacheReadInputTokens")
+            write = count("cacheCreationInputTokens")
+            record = {
+                "provider": CLAUDE_PROVIDER_ID,
+                "model": str(model),
+                # Anthropic counts cache reads/writes outside input_tokens.
+                "input_tokens": count("inputTokens") + read + write,
+                "cache_read_tokens": read,
+                "cache_write_tokens": write,
+                "output_tokens": count("outputTokens"),
+            }
+            cost = entry.get("costUSD")
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
+                record["cost_usd"] = float(cost)
+            records.append(record)
+    if records:
+        return records
+    usage = _field(result_msg, "usage", None)
+    if not isinstance(usage, Mapping):
+        return []
+    record = {"provider": CLAUDE_PROVIDER_ID, "model": "", "usage": dict(usage)}
+    cost = _field(result_msg, "total_cost_usd", None)
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
+        record["cost_usd"] = float(cost)
+    return [record]
+
+
 def _canonical_allowed_roots(allowed_roots: list[str]) -> list[str]:
     roots: list[str] = []
     for root in allowed_roots:
@@ -650,6 +759,12 @@ class ClaudeAgentProvider:
                                 hook(info[0], info[1], status, str(call_id))
                             return True
 
+                        try:
+                            account = _public_account(await client.get_server_info())
+                            if account:
+                                _remember_account(account=account)
+                        except Exception:
+                            pass
                         await client.query(prompt)
                         async for message in client.receive_response():
                             if isinstance(message, AssistantMessage):
@@ -712,6 +827,7 @@ class ClaudeAgentProvider:
                                         ui.show_provider_tool(tool, label, status, str(call_id))
                             elif isinstance(message, SystemMessage):
                                 if message.subtype == "init":
+                                    _remember_account(api_key_source=(message.data or {}).get("apiKeySource"))
                                     session_id = (message.data or {}).get("session_id")
                                     if session_id:
                                         claude_state.update({"session_id": session_id})
@@ -719,6 +835,8 @@ class ClaudeAgentProvider:
                                         store.update_session(meta)
                                 elif verbose:
                                     ui.show_codex_item(f"claude_system:{message.subtype}", message.data or {})
+                            elif message.__class__.__name__ == "RateLimitEvent":
+                                _remember_rate_limit(message)
                             elif isinstance(message, ResultMessage):
                                 agent_tree.observe_result(message)
                                 result_msg = message
@@ -751,8 +869,8 @@ class ClaudeAgentProvider:
             if not final_text and result_msg.result:
                 final_text = str(result_msg.result)
                 ui.show_assistant_markdown(final_text)
-            if result_msg.usage:
-                ui.show_api_metrics({"usage": result_msg.usage, "provider": CLAUDE_PROVIDER_ID})
+            for metrics in claude_usage_metrics(result_msg):
+                ui.show_api_metrics(metrics)
 
         self._update_summary(meta, user_prompt, final_text, store)
         ui.show_status(f"Claude run completed in {time.perf_counter() - run_started_at:.1f}s.")

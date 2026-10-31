@@ -260,6 +260,13 @@ html, body, #root {
     background-image: linear-gradient(var(--color-surface), var(--color-surface));
   }
 
+  /* Vendor logos whose glyph is drawn in one colour ship a light-theme and
+     a dark-theme image; show the one that fits the current appearance. */
+  :root[data-theme='dark'] .logo-light,
+  :root:not([data-theme='dark']) .logo-dark {
+    display: none;
+  }
+
   .glass-overlay {
     background: var(--color-overlay);
     backdrop-filter: blur(6px);

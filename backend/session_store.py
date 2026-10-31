@@ -35,6 +35,43 @@ def _session_id() -> str:
     return f"ses_{ts}_{uuid.uuid4().hex[:4]}"
 
 
+_USAGE_INSERT = (
+    "INSERT INTO usage_records(created_at,session_id,provider,model,auth,input_tokens,cache_read_tokens,"
+    "cache_write_tokens,output_tokens,reasoning_tokens,cost_usd,cost_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
+)
+
+
+def usage_record_values(session_id: str, created_at: str, metrics: dict, auth: str = "") -> tuple | None:
+    """Row for usage_records from one api_metrics payload, or None if empty.
+
+    Payloads are already normalized: input_tokens includes cached tokens,
+    output_tokens includes reasoning. ``cost_usd`` is what the provider
+    reported (OpenRouter's charge, the Claude SDK's estimate); Codex reports
+    none and is priced when totals are read.
+    """
+    if not isinstance(metrics, dict):
+        return None
+
+    def count(key: str) -> int:
+        value = metrics.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value or value < 0:
+            return 0
+        return int(value)
+
+    tokens = [count(key) for key in ("input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens", "reasoning_tokens")]
+    if not tokens[0] and not tokens[3]:
+        return None
+    cost = metrics.get("cost_usd")
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)) or cost != cost or cost < 0:
+        cost = None
+    provider = str(metrics.get("provider") or "native")
+    source = ("reported" if provider == "native" else "estimated") if cost is not None else ""
+    return (
+        created_at, session_id or "", provider, str(metrics.get("model") or ""), auth or "",
+        *tokens, cost, source,
+    )
+
+
 def _json(value) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
 
@@ -344,6 +381,33 @@ class SessionStore:
             CREATE INDEX IF NOT EXISTS attachments_blob_id ON attachments(blob_id);
             """
         )
+        # Additive table: older builds ignore it. Rows are not tied to
+        # sessions, so usage totals survive deleting a thread.
+        usage_table_existed = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='usage_records'"
+        ).fetchone() is not None
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS usage_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                session_id TEXT NOT NULL DEFAULT '',
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL DEFAULT '',
+                auth TEXT NOT NULL DEFAULT '',
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+                cost_usd REAL,
+                cost_source TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS usage_records_created_at ON usage_records(created_at);
+            """
+        )
+        if not usage_table_existed:
+            SessionStore._backfill_native_usage(conn)
         # Additive column: older builds name their columns explicitly and
         # leave it at its default, so the schema version stays unchanged.
         session_columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
@@ -355,6 +419,55 @@ class SessionStore:
         )
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
+
+    @staticmethod
+    def _backfill_native_usage(conn: sqlite3.Connection) -> None:
+        """Seed the usage ledger from native api_metrics events already stored.
+
+        Codex and Claude events from earlier builds carried no usable totals,
+        so only native requests (OpenRouter-normalized) are imported.
+        """
+        rows = conn.execute(
+            """SELECT e.session_id, e.created_at, e.data_json FROM events e
+               JOIN sessions s ON s.id = e.session_id
+               WHERE e.type = 'api_metrics'
+                 AND COALESCE(s.provider, 'native') NOT IN ('codex-app-server', 'claude-agent', 'codex-cli')"""
+        ).fetchall()
+        for row in rows:
+            data = _from_json(row[2], {})
+            if not isinstance(data, dict) or "input_tokens" not in data:
+                continue
+            record = usage_record_values(row[0], row[1], {**data, "provider": "native"}, auth="api")
+            if record:
+                conn.execute(_USAGE_INSERT, record)
+
+    def record_usage(self, session_id: str, metrics: dict, auth: str = "") -> None:
+        record = usage_record_values(session_id, _now().isoformat(), metrics, auth)
+        if not record:
+            return
+        with self._lock, self._conn:
+            self._conn.execute(_USAGE_INSERT, record)
+
+    def usage_totals(self, since_iso: str | None = None) -> list[dict]:
+        """Sums per provider, model and login type since a UTC ISO time."""
+        sql = """SELECT provider, model, auth, count(*) AS requests,
+                        sum(input_tokens) AS input_tokens, sum(cache_read_tokens) AS cache_read_tokens,
+                        sum(cache_write_tokens) AS cache_write_tokens, sum(output_tokens) AS output_tokens,
+                        sum(reasoning_tokens) AS reasoning_tokens,
+                        sum(cost_usd) AS cost_usd, sum(cost_usd IS NULL) AS unpriced,
+                        max(cost_source) AS cost_source
+                 FROM usage_records {where} GROUP BY provider, model, auth"""
+        with self._lock:
+            if since_iso:
+                rows = self._conn.execute(sql.format(where="WHERE created_at >= ?"), (since_iso,)).fetchall()
+            else:
+                rows = self._conn.execute(sql.format(where="")).fetchall()
+        return [dict(row) for row in rows]
+
+    def usage_first_record(self) -> str | None:
+        with self._lock:
+            row = self._conn.execute("SELECT min(created_at) FROM usage_records").fetchone()
+        return row[0] if row else None
 
     # -- legacy migration -------------------------------------------------
 

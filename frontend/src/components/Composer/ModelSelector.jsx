@@ -49,7 +49,7 @@ export default function ModelSelector() {
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [sid, provider, state.activeHostId])
+  }, [sid, provider, state.activeHostId, state.nativeSettingsVersion])
 
   useEffect(() => {
     if (!open) return

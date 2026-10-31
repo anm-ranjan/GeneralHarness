@@ -430,6 +430,8 @@ def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int, head
         "total_tokens": total_tokens,
         **prompt_cache.normalize_usage(usage),
         "estimated_input": estimate_input_categories(payload["messages"], payload.get("tools")),
+        "provider": "native",
+        "model": model_name or payload.get("model") or "",
     }
     _set_api_metrics(metrics)
     if ui and hasattr(ui, "show_api_metrics"):
@@ -454,7 +456,7 @@ def call_api(
 ) -> dict:
     _set_api_failure(None)
     _set_api_metrics({})
-    selected_model = choose_model_for_tools(tools, model)
+    selected_model = choose_model_for_tools(tools, model or _thread_model(ui))
     payload = {
         "model": selected_model,
         "messages": history_tokens.wire_messages(messages),
@@ -551,6 +553,8 @@ def call_api(
         "total_tokens": total_tokens,
         **prompt_cache.normalize_usage(usage),
         "estimated_input": estimate_input_categories(payload["messages"], payload.get("tools")),
+        "provider": "native",
+        "model": data.get("model") or payload.get("model") or "",
     }
     _set_api_metrics(metrics)
 
@@ -1229,6 +1233,18 @@ def build_initial_messages(
 # Approval
 # ---------------------------------------------------------------------------
 
+def _thread_model(ui) -> str | None:
+    """A model this thread chose, if it differs from the native default.
+
+    The run snapshot always carries a resolved model; one equal to the
+    default means "follow the configuration", which keeps its read/write split.
+    """
+    model = _run_setting(ui, "model", None)
+    if isinstance(model, str) and model.strip() and model.strip() != utils.MODEL:
+        return model.strip()
+    return None
+
+
 def _run_setting(ui, key: str, default):
     """Per-run setting snapshotted onto the UI adapter, falling back to the
     process-wide default for UIs without per-session settings (CLI/TUI)."""
@@ -1366,6 +1382,11 @@ def execute_tool(
             ui.show_turn_note(utils.normalize_turn_note(text))
         return result
     if name == "ask_user":
+        if agent_path != "/root":
+            return (
+                "ERROR: Subagents cannot ask the user. If something is missing or ambiguous, "
+                "finish and say so in your result; the parent agent will follow up."
+            )
         return _ask_user(arguments, ui)
     if not request_approval(name, arguments, ui=ui):
         return "ERROR: Tool call denied by user."
@@ -1699,6 +1720,9 @@ def run_agent(
         active_tools = select_tools(messages) if tools_enabled else []
         if tool_policy == "read_only":
             active_tools = READ_ONLY_TOOLS
+        if agent_path != "/root":
+            # Subagents report problems to their parent; only the root talks to the user.
+            active_tools = [tool for tool in active_tools if tool.get("function", {}).get("name") != "ask_user"]
         if orchestrator is not None:
             active_tools = active_tools + COLLABORATION_TOOLS
         result = model_call(messages, tools=active_tools, ui=ui)

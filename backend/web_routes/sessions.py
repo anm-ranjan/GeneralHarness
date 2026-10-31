@@ -414,18 +414,23 @@ def get_session_model_options(session_id: str):
             ],
         }
 
+    # The native default (Settings → Native Settings), plus this thread's own
+    # model when it pinned a different one, so it can switch back.
+    native_models = [utils.MODEL]
+    if effective["model"] and effective["model"] != utils.MODEL:
+        native_models.append(effective["model"])
     return {
         "provider": "native",
-        "current_model": effective["model"] or "",
+        "current_model": effective["model"] or utils.MODEL,
         "current_effort": effective["reasoning_effort"],
         "models": [{
-            "id": effective["model"] or "",
-            "display_name": effective["model"] or "Native default",
-            "description": "Configured API model",
-            "is_default": True,
+            "id": model_id,
+            "display_name": model_id,
+            "description": "Native default" if model_id == utils.MODEL else "This thread's model",
+            "is_default": model_id == utils.MODEL,
             "default_effort": utils.NATIVE_REASONING_DEFAULT,
             "supported_efforts": list(utils.NATIVE_REASONING_EFFORTS),
-        }],
+        } for model_id in native_models],
     }
 
 

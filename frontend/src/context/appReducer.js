@@ -20,6 +20,8 @@ export const initialState = {
   appName: 'MyHarness',
   splashAscii: '',
   model: '',
+  // Bumped when Native Settings change, so model pickers refetch.
+  nativeSettingsVersion: 0,
   approvalMode: '',
   verbose: false,
   serverOnline: false,
@@ -179,6 +181,8 @@ function queueItemView(item) {
 
 export function reducer(state, action) {
   switch (action.type) {
+    case 'SET_NATIVE_MODEL':
+      return { ...state, model: action.payload, nativeSettingsVersion: state.nativeSettingsVersion + 1 }
     case 'SET_HEALTH': {
       return patched(state, {
         serverOnline: true,

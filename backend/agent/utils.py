@@ -810,7 +810,23 @@ def get_rg_path() -> str:
     return shutil.which("rg") or ""
 
 
+def _human_size(path: str) -> str:
+    """" (3.2 KB)" for a file, or "" when its size cannot be read."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return ""
+    if size < 1024:
+        return f"  ({size} B)"
+    for unit in ("KB", "MB", "GB"):
+        size /= 1024
+        if size < 1024 or unit == "GB":
+            return f"  ({size:.1f} {unit})"
+    return ""
+
+
 def _format_file_list(directory: str, matches: list, source: str) -> str:
+    """Grouped listing with each file's size, so callers can decide how to read it."""
     if not matches:
         return f"No files found in '{directory}'."
 
@@ -819,11 +835,12 @@ def _format_file_list(directory: str, matches: list, source: str) -> str:
     for full_path in matches:
         rel = os.path.relpath(full_path, directory)
         parts = rel.replace("\\", "/").split("/")
+        size = _human_size(full_path)
         if len(parts) == 1:
-            top_files.append(parts[0])
+            top_files.append(parts[0] + size)
         else:
             sub_dir = parts[0]
-            sub_groups.setdefault(sub_dir, []).append("/".join(parts[1:]))
+            sub_groups.setdefault(sub_dir, []).append("/".join(parts[1:]) + size)
 
     lines = [f"Found {len(matches)} file(s) in '{directory}' ({source}):"]
     if top_files:

@@ -39,6 +39,7 @@ from session_store import SessionStore
 from web_session import SessionManager
 
 import utils
+import native_settings
 import audio_transcription
 from web_desktop import (
     DesktopAwareStaticFiles,
@@ -242,11 +243,16 @@ import web_routes.system
 import web_routes.sessions
 import web_routes.runs
 import web_routes.workspace
+import web_routes.usage
+
+# Settings saved from the Native Settings tab override agent_config.yaml.
+native_settings.apply_saved()
 
 app.include_router(web_routes.system.router)
 app.include_router(web_routes.sessions.router)
 app.include_router(web_routes.runs.router)
 app.include_router(web_routes.workspace.router)
+app.include_router(web_routes.usage.router)
 
 
 # ── static frontend ───────────────────────────────────────────────

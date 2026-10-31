@@ -92,6 +92,9 @@ class AppServerTransport:
         self._stderr_chunks: deque[str] = deque(maxlen=200)
         self._connection_closed = True
         self.generation = 0
+        # Latest params of account-level notifications (rate limits, plan
+        # changes). They carry no thread id, so no run queue would see them.
+        self.account_notifications: dict[str, dict[str, Any]] = {}
 
     async def start(self) -> None:
         async with self._lifecycle_lock:
@@ -169,6 +172,26 @@ class AppServerTransport:
     def _register_thread_owner(self, thread_id: str | None, owner_thread_id: str | None) -> None:
         if thread_id and owner_thread_id:
             self._thread_owners.setdefault(thread_id, owner_thread_id)
+
+    def _remember_account_notification(self, msg: dict[str, Any]) -> None:
+        method = str(msg.get("method") or "")
+        params = msg.get("params")
+        if not isinstance(params, dict):
+            return
+        previous = self.account_notifications.get(method) or {}
+        merged = dict(previous)
+        if method == "account/rateLimits/updated":
+            # Sparse updates may omit account metadata; never clear a value
+            # an earlier snapshot already supplied.
+            limits = dict((previous.get("rateLimits") or {}))
+            for key, value in (params.get("rateLimits") or {}).items():
+                if value is not None or key not in limits:
+                    limits[key] = value
+            merged["rateLimits"] = limits
+        else:
+            merged.update({key: value for key, value in params.items() if value is not None})
+        merged["_received_at"] = time.time()
+        self.account_notifications[method] = merged
 
     def _owner_for_message(self, msg: dict[str, Any]) -> str | None:
         thread_id = _thread_id_from_message(msg)
@@ -271,6 +294,8 @@ class AppServerTransport:
                     else:
                         future.set_result(msg.get("result") or {})
                     continue
+                if str(msg.get("method") or "").startswith("account/") and "id" not in msg:
+                    self._remember_account_notification(msg)
                 owner_thread_id = self._owner_for_message(msg)
                 thread_queue = self._thread_queues.get(owner_thread_id or "")
                 if thread_queue is not None:
@@ -363,6 +388,14 @@ class CodexAppServerClient:
             cursor = result.get("nextCursor")
             if not cursor:
                 return {"data": models}
+
+    async def account_read(self) -> dict[str, Any]:
+        await self.initialize(utils.CODEX_APP_SERVER_EXPERIMENTAL_API)
+        return await self.transport.request("account/read", {}, timeout=30)
+
+    async def rate_limits_read(self) -> dict[str, Any]:
+        await self.initialize(utils.CODEX_APP_SERVER_EXPERIMENTAL_API)
+        return await self.transport.request("account/rateLimits/read", {}, timeout=30)
 
     async def thread_resume(
         self,
@@ -648,6 +681,37 @@ def _auto_approves(ui, method: str) -> bool:
     return False
 
 
+def codex_usage_metrics(params: dict[str, Any], thread_models: dict[str, str] | None = None) -> dict[str, Any]:
+    """Per-call usage from ``thread/tokenUsage/updated``.
+
+    ``last`` is the latest model call; ``total`` is the thread's running sum,
+    so only ``last`` is recorded. Cached input is a subset of input and
+    reasoning a subset of output, matching OpenAI's accounting.
+    """
+    usage = params.get("tokenUsage") if isinstance(params, dict) else None
+    last = usage.get("last") if isinstance(usage, dict) else None
+    if not isinstance(last, dict):
+        return {}
+
+    def count(key: str) -> int:
+        value = last.get(key)
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+    thread_id = params.get("threadId") or ""
+    metrics: dict[str, Any] = {
+        "provider": "codex-app-server",
+        "model": (thread_models or {}).get(thread_id) or "",
+        "input_tokens": count("inputTokens"),
+        "cache_read_tokens": count("cachedInputTokens"),
+        "cache_write_tokens": count("cacheWriteInputTokens"),
+        "output_tokens": count("outputTokens"),
+        "reasoning_tokens": count("reasoningOutputTokens"),
+    }
+    if not any(metrics[key] for key in ("input_tokens", "output_tokens")):
+        return {}
+    return metrics
+
+
 def _is_server_request(msg: dict[str, Any]) -> bool:
     return "id" in msg and "method" in msg and "result" not in msg and "error" not in msg
 
@@ -698,6 +762,8 @@ class CodexAppServerProvider:
         )
         self.client = CodexAppServerClient(self.transport, timeout_seconds=timeout_seconds)
         self._loaded_threads: dict[str, int] = {}
+        # Model each thread resolved to, for pricing its token usage.
+        self._thread_models: dict[str, str] = {}
 
     async def run(
         self,
@@ -806,7 +872,7 @@ class CodexAppServerProvider:
                 if self._loaded_threads.get(thread_id) != self.transport.generation:
                     self._show_verbose_status(ui, "Resuming Codex thread…")
                     try:
-                        await self.client.thread_resume(
+                        resumed = await self.client.thread_resume(
                             thread_id=thread_id,
                             cwd=str(workspace),
                             approval_policy=self.approval_policy,
@@ -817,6 +883,7 @@ class CodexAppServerProvider:
                         detail = f"{exc}\n{stderr}" if stderr else str(exc)
                         raise CodexThreadResumeError(detail) from exc
                     self._loaded_threads[thread_id] = self.transport.generation
+                    self._remember_thread_model(thread_id, resumed)
             else:
                 self._show_verbose_status(ui, "Starting Codex thread…")
                 result = await self.client.thread_start(
@@ -830,6 +897,7 @@ class CodexAppServerProvider:
                 if not thread_id:
                     raise CodexAppServerRunError(f"Could not extract thread id from thread/start: {result}")
                 self._loaded_threads[thread_id] = self.transport.generation
+                self._remember_thread_model(thread_id, result)
                 codex_state.update({"mode": "app-server", "thread_id": thread_id, "transport": "stdio"})
                 meta.codex_state = codex_state
                 store.update_session(meta)
@@ -837,6 +905,8 @@ class CodexAppServerProvider:
                 ui, f"Codex thread ready in {_elapsed(phase_started_at)}."
             )
 
+            if model:
+                self._thread_models[thread_id] = model
             phase_started_at = time.perf_counter()
             self._show_verbose_status(ui, "Starting Codex turn…")
             notification_queue = self.transport.subscribe_thread(thread_id)
@@ -1400,10 +1470,13 @@ class CodexAppServerProvider:
             ui.show_codex_item(item_type or method, msg)
             return
 
+        if method == "thread/tokenUsage/updated":
+            metrics = codex_usage_metrics(params, self._thread_models)
+            if metrics:
+                ui.show_api_metrics(metrics)
+            return
+
         if method == "turn/completed":
-            usage = params.get("usage") if isinstance(params, dict) else None
-            if usage:
-                ui.show_api_metrics({"usage": usage, "provider": "codex-app-server"})
             return
 
         if method.endswith("/failed") or method == "error":
@@ -1412,6 +1485,14 @@ class CodexAppServerProvider:
 
         if verbose and method and not method.startswith("harness/"):
             ui.show_codex_item(method, msg)
+
+    def _remember_thread_model(self, thread_id: str, result: Any) -> None:
+        if not isinstance(result, dict):
+            return
+        thread = result.get("thread") if isinstance(result.get("thread"), dict) else {}
+        model = result.get("model") or thread.get("model")
+        if isinstance(model, str) and model:
+            self._thread_models[thread_id] = model
 
     def _build_env(self) -> dict[str, str]:
         env = os.environ.copy()
@@ -1482,6 +1563,21 @@ class CodexAppServerRuntime:
             self._provider.client.model_list(), self._loop
         )
         return future.result(timeout=60)
+
+    def account_status(self) -> dict[str, Any]:
+        """Login type, plan and rate-limit windows, as the app-server reports them."""
+        self.start()
+        if self._loop is None or self._provider is None:
+            raise CodexAppServerRunError("Codex runtime did not initialize.")
+        client = self._provider.client
+        account = asyncio.run_coroutine_threadsafe(client.account_read(), self._loop).result(timeout=40)
+        try:
+            limits = asyncio.run_coroutine_threadsafe(client.rate_limits_read(), self._loop).result(timeout=40)
+        except Exception:
+            # API-key logins have no subscription windows to report.
+            limits = None
+        updated = dict(self._provider.transport.account_notifications.get("account/rateLimits/updated") or {})
+        return {"account": account, "rate_limits": limits, "rate_limits_update": updated or None}
 
     def stop(self) -> None:
         with self._start_lock:

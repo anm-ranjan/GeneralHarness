@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 import utils
 import session_context
+import usage_ledger
 from prompt_cache import UsageTotals
 from session_store import SessionStore
 from web_models import EventEnvelope, EventType
@@ -267,6 +268,7 @@ class WebUI:
 
     def show_api_metrics(self, metrics: dict) -> None:
         self.api_usage.add(metrics)
+        usage_ledger.record(self._store, self._sid, metrics)
         self._emit(EventType.API_METRICS, metrics)
 
     def show_run_metrics(self, metrics: dict) -> None:
@@ -580,6 +582,7 @@ class SubagentUI:
 
     def show_api_metrics(self, metrics: dict) -> None:
         self.parent.api_usage.add(metrics)
+        usage_ledger.record(self.parent._store, self.parent._sid, metrics)
 
     def show_agent_finished(self, reason: str) -> None:
         pass

@@ -110,6 +110,9 @@ def normalize_usage(usage) -> dict:
     details = usage.get("prompt_tokens_details") or usage.get("input_tokens_details") or {}
     if not isinstance(details, dict):
         details = {}
+    completion_details = usage.get("completion_tokens_details") or usage.get("output_tokens_details") or {}
+    if not isinstance(completion_details, dict):
+        completion_details = {}
 
     def number(*values):
         for value in values:
@@ -131,6 +134,7 @@ def normalize_usage(usage) -> dict:
         "cache_read_tokens": read,
         "cache_write_tokens": write,
         "cost_usd": number(usage.get("cost")),
+        "reasoning_tokens": number(completion_details.get("reasoning_tokens"), usage.get("reasoning_tokens")),
     }.items():
         if value is not None:
             result[key] = value

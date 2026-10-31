@@ -3,6 +3,8 @@ import { useApp } from '../../context/AppContext'
 import ThemeSwatch from './ThemeSwatch'
 import CredentialSettings from './CredentialSettings'
 import AppSettings from './AppSettings'
+import UsageSettings from './UsageSettings'
+import NativeSettings from './NativeSettings'
 import {
   DEFAULT_SPEC, FONT_PRESETS, GLASS_PRESETS, PALETTES, RADIUS_PRESETS,
   applySpec, auditTokens, completePalette, exportPalette, findPalette,
@@ -177,6 +179,8 @@ export default function SettingsModal() {
             {[
               ['appearance', 'Appearance'],
               ['credentials', 'Credentials'],
+              ['usage', 'Usage'],
+              ['native', 'Native Settings'],
               ['app', 'App'],
             ].map(([id, label]) => (
               <button
@@ -191,7 +195,13 @@ export default function SettingsModal() {
             ))}
           </div>
           <span className="text-[12px] text-faint">
-            {section === 'appearance' ? 'Applies to this browser or desktop app' : section === 'credentials' ? 'Host-local encrypted values' : 'Connection and quit'}
+            {{
+              appearance: 'Applies to this browser or desktop app',
+              credentials: 'Host-local encrypted values',
+              usage: 'Cost, tokens and plan limits on this host',
+              native: 'OpenRouter model and provider for Native',
+              app: 'Connection and quit',
+            }[section]}
           </span>
           <button
             onClick={() => close(false)}
@@ -203,7 +213,8 @@ export default function SettingsModal() {
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
-          {section === 'credentials' ? <CredentialSettings /> : section === 'app' ? <AppSettings /> : <>
+          {section === 'credentials' ? <CredentialSettings /> : section === 'app' ? <AppSettings />
+            : section === 'usage' ? <UsageSettings /> : section === 'native' ? <NativeSettings /> : <>
           {/* ── Theme grid ── */}
           <div className="flex items-center gap-2">
             <input
