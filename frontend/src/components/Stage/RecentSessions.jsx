@@ -15,7 +15,7 @@ function RecentSessionRow({ session, onSelect }) {
     <button
       onClick={() => onSelect(session.id)}
       title={session.title}
-      className="group flex w-full items-baseline gap-1.5 rounded px-2 py-1 text-left transition-colors hover:bg-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70"
+      className="group flex w-full items-baseline gap-2 rounded px-2 py-1.5 text-left transition-colors hover:bg-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/70"
     >
       {runState && (
         <span
@@ -23,7 +23,7 @@ function RecentSessionRow({ session, onSelect }) {
           title={runStateBadge(runState).label}
         />
       )}
-      <span className="max-w-[55%] truncate text-[13px] text-text-default group-hover:text-accent">
+      <span className="max-w-[55%] truncate text-[14px] text-text-default group-hover:text-accent">
         {session.title}
       </span>
       {/* Always rendered, empty label included, so it also spaces the timestamp right. */}
@@ -52,9 +52,9 @@ export default function RecentSessions() {
   if (!recent.length) return null
 
   return (
-    <div className="mx-auto mb-6 w-full max-w-[460px] text-left">
-      <div className="mb-1.5 px-2 text-[10px] uppercase tracking-[0.16em] text-faint">Recent</div>
-      <div className="rounded-md border border-line bg-bg/35 p-1">
+    <div className="w-full text-left">
+      <h3 className="mb-1 font-display text-[15px] font-bold text-text-bright">Pick up where you left off</h3>
+      <div className="-mx-2">
         {recent.map(session => (
           <RecentSessionRow key={session.id} session={session} onSelect={handleSelect} />
         ))}

@@ -1,81 +1,141 @@
+import { useMemo } from 'react'
 import { CHATS_PROJECT_ID } from '../../constants'
-import { useApp } from '../../context/AppContext'
+import { useApp, useSwitchHost } from '../../context/AppContext'
+import useHostRoster from '../../hooks/useHostRoster'
+import useSelectSession from '../../hooks/useSelectSession'
 import useStartChat from '../../hooks/useStartChat'
+import { runStateBadge } from '../../runStates'
+import HostTag from '../Fleet/HostTag'
 import RecentSessions from './RecentSessions'
+
+const quietButton = 'underline decoration-line underline-offset-4 hover:text-accent transition-colors'
+
+// Every machine in the fleet with its one tag and what you can do with it.
+function Machines() {
+  const { rows, error, act } = useHostRoster()
+  const switchHost = useSwitchHost()
+  if (rows.length < 2) return null
+
+  return (
+    <section>
+      <h3 className="mb-2 font-display text-[14px] font-bold text-text-bright">Machines</h3>
+      <ul className="space-y-2">
+        {rows.map(row => (
+          <li key={row.id}>
+            <div className="flex items-baseline gap-2">
+              <span className="text-text-default">{row.label}</span>
+              <span className="text-[12px]"><HostTag tag={row.tag} busy={row.busy} /></span>
+            </div>
+            <div className="mt-0.5 flex gap-3 text-[12px] text-faint">
+              {row.active
+                ? <span>Working here</span>
+                : row.tag === 'serving' && <button type="button" className={quietButton} onClick={() => switchHost(row.id)}>Switch</button>}
+              {row.action && <button type="button" className={quietButton} onClick={() => act(row)}>{row.action.label}</button>}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {error && <p className="mt-2 text-[12px] text-danger" role="alert">{error}</p>}
+    </section>
+  )
+}
+
+// Threads with a run in progress or waiting on you, so nothing stalls unseen.
+function RunningNow() {
+  const { state } = useApp()
+  const selectSession = useSelectSession()
+  const running = useMemo(
+    () => Object.entries(state.runStates || {})
+      .map(([id, runState]) => ({ id, runState, session: state.sessionsById[id] }))
+      .filter(entry => entry.session),
+    [state.runStates, state.sessionsById],
+  )
+  if (!running.length) return null
+
+  return (
+    <section>
+      <h3 className="mb-2 font-display text-[14px] font-bold text-text-bright">Running now</h3>
+      <ul className="space-y-1.5">
+        {running.map(({ id, runState, session }) => (
+          <li key={id}>
+            <button
+              type="button"
+              onClick={() => selectSession(id).catch(err => console.error('Failed to select session:', err))}
+              className="group flex w-full items-baseline gap-2 text-left"
+              title={runStateBadge(runState).label}
+            >
+              <span className={`h-1.5 w-1.5 shrink-0 self-center rounded-full ${runStateBadge(runState).dotClass}`} />
+              <span className="min-w-0 truncate text-text-default group-hover:text-accent">{session.title || id.slice(0, 8)}</span>
+            </button>
+            <p className="pl-3.5 text-[12px] text-faint">{runStateBadge(runState).label}</p>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
 
 export default function SplashScreen() {
   const { state, dispatch } = useApp()
   const startChat = useStartChat()
-  const approvalLabel = state.approvalMode || '—'
-  const verboseLabel = state.approvalMode ? (state.verbose ? 'on' : 'off') : '—'
-  const logo = state.splashAscii
-  const title = state.appName
   const projectCount = state.projects.filter(project => project.id !== CHATS_PROJECT_ID).length
   const sessionCount = Object.keys(state.sessionsById || {}).length
+  const host = state.fleetHosts.find(entry => entry.id === state.activeHostId)
+
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
+  const inventory = sessionCount
+    ? `${plural(projectCount, 'project')} and ${plural(sessionCount, 'thread')}${host ? ` on ${host.label}` : ''}.`
+    : 'Nothing here yet. Start a chat, or open a project folder.'
 
   return (
-    <div className="flex h-full items-center justify-center px-6">
-      <div className="w-full max-w-[760px] animate-scale-in">
-        <div className="mb-5 flex items-center justify-center gap-2 text-[11px] uppercase tracking-[0.16em] text-faint">
-          <span className="h-1.5 w-1.5 rounded-full bg-ok shadow-[0_0_12px_rgba(34,197,94,0.65)] animate-pulse-slow" />
-          <span>Workspace ready</span>
-        </div>
+    <div className="@container h-full overflow-y-auto px-9 py-12">
+      <div className="mx-auto grid max-w-[1080px] gap-x-10 gap-y-10 @3xl:grid-cols-[minmax(0,1fr)_17rem]">
+        <div className="min-w-0 max-w-[62ch]">
+          <h2 className="font-display text-[34px] font-bold leading-[1.1] tracking-[-0.015em] text-text-bright">
+            What are we working on?
+          </h2>
+          <p className="mt-2 mb-7 text-[14px] text-muted">{inventory}</p>
 
-        <div className="splash-console rounded-lg border border-line bg-surface/70 px-6 py-7 text-center shadow-[0_18px_80px_rgba(0,0,0,0.24)]">
-          {logo ? (
-            <pre className="mx-auto mb-5 max-w-full overflow-x-auto whitespace-pre text-[7px] leading-[1.15] text-accent sm:text-[8px] md:text-[9px] font-mono">{logo}</pre>
-          ) : (
-            <div className="mx-auto mb-5 text-[40px] font-bold tracking-[0.08em] text-accent font-mono">{title}</div>
-          )}
-          <h3 className="mb-2 text-[22px] font-bold text-text-bright">{title}</h3>
-          <p className="mx-auto mb-5 max-w-[460px] text-[13px] text-faint">
-            {sessionCount > 0
-              ? 'Pick up where you left off, or start a new workspace.'
-              : 'Select a thread from the sidebar or start a new workspace.'}
-          </p>
+          <div className="mb-10 flex flex-wrap items-center gap-x-5 gap-y-3 text-[13px]">
+            <button
+              type="button"
+              onClick={() => startChat()}
+              className="rounded-md border border-accent bg-accent px-4 py-1.5 font-medium text-bg transition-[filter] hover:brightness-110"
+            >
+              New chat
+            </button>
+            <button
+              type="button"
+              onClick={() => dispatch({ type: 'OPEN_DIR_PICKER' })}
+              className="text-muted transition-colors hover:text-accent"
+            >
+              Open a project
+            </button>
+            <button
+              type="button"
+              onClick={() => dispatch({ type: 'OPEN_SEARCH' })}
+              className="text-muted transition-colors hover:text-accent"
+            >
+              Search transcripts
+            </button>
+          </div>
 
           <RecentSessions />
-
-          <div className="mb-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <div className="rounded-md border border-line bg-bg/35 px-3 py-2">
-              <div className="text-[10px] uppercase tracking-[0.12em] text-faint">Approval</div>
-              <div className="mt-1 truncate text-[12px] font-medium text-text-default">{approvalLabel}</div>
-            </div>
-            <div className="rounded-md border border-line bg-bg/35 px-3 py-2">
-              <div className="text-[10px] uppercase tracking-[0.12em] text-faint">Verbose</div>
-              <div className="mt-1 text-[12px] font-medium text-text-default">{verboseLabel}</div>
-            </div>
-            <div className="rounded-md border border-line bg-bg/35 px-3 py-2">
-              <div className="text-[10px] uppercase tracking-[0.12em] text-faint">Projects</div>
-              <div className="mt-1 text-[12px] font-medium text-text-default tabular-nums">{projectCount}</div>
-            </div>
-            <div className="rounded-md border border-line bg-bg/35 px-3 py-2">
-              <div className="text-[10px] uppercase tracking-[0.12em] text-faint">Threads</div>
-              <div className="mt-1 text-[12px] font-medium text-text-default tabular-nums">{sessionCount}</div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-center gap-3">
-          <button
-            onClick={() => startChat()}
-            className="px-5 py-2 text-[13px] font-medium text-bg bg-accent border border-accent rounded-md hover:brightness-110 transition-[filter,transform] hover:-translate-y-0.5"
-          >
-            + Chat
-          </button>
-          <button
-            onClick={() => dispatch({ type: 'OPEN_DIR_PICKER' })}
-            className="px-5 py-2 text-[13px] font-medium text-accent border border-accent/30 rounded-md hover:bg-accent-soft transition-colors"
-          >
-            + Project
-          </button>
-          <button
-            onClick={() => dispatch({ type: 'OPEN_SEARCH' })}
-            className="px-5 py-2 text-[13px] font-medium text-muted border border-line rounded-md hover:text-accent hover:border-accent/30 hover:bg-accent-soft transition-colors"
-          >
-            Search
-          </button>
-          </div>
         </div>
+
+        <aside className="min-w-0 space-y-7 text-[13px] text-muted @3xl:border-l @3xl:border-line @3xl:pl-5">
+          <Machines />
+          <RunningNow />
+          {state.approvalMode && (
+            <section>
+              <h3 className="mb-2 font-display text-[14px] font-bold text-text-bright">Approvals</h3>
+              <p>
+                Mode is <span className="font-mono text-[12px] text-text-default">{state.approvalMode}</span>.
+                Verbose output is {state.verbose ? 'on' : 'off'}.
+              </p>
+            </section>
+          )}
+        </aside>
       </div>
     </div>
   )

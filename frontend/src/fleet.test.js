@@ -181,3 +181,24 @@ test('hostIdMismatch stays quiet when there is nothing to compare', () => {
   assert.equal(hostIdMismatch(host, hostStatus({ ok: false })), '')
   assert.equal(hostIdMismatch(host, null), '')
 })
+
+import { hostTag, nextPollMs } from './fleet.js'
+
+test('a host shows one of five tags, from the quickest evidence available', () => {
+  assert.equal(hostTag({ self: true }), 'serving')
+  assert.equal(hostTag({ status: { online: true }, bridgeLoaded: false }), 'serving')
+  assert.equal(hostTag({ status: undefined, bridgeLoaded: false }), 'connecting')
+  assert.equal(hostTag({ status: { online: false }, bridgeLoaded: false }), 'connecting')
+  assert.equal(hostTag({ status: { online: false }, bridge: { state: 'off' } }), 'notServing')
+  assert.equal(hostTag({ status: { online: false }, bridge: { state: 'unreachable' } }), 'offline')
+  assert.equal(hostTag({ status: { online: false }, bridge: { state: 'online' } }), 'online')
+  // No SSH check exists for this host and its backend is silent.
+  assert.equal(hostTag({ status: { online: false }, bridge: null, bridgeLoaded: true }), 'offline')
+})
+
+test('polling speeds up while a peer is not serving', () => {
+  const hosts = [{ id: 'a', self: true }, { id: 'b' }]
+  assert.equal(nextPollMs(hosts, { b: { online: false } }, 10000), 3000)
+  assert.equal(nextPollMs(hosts, { b: { online: true } }, 10000), 10000)
+  assert.equal(nextPollMs(hosts, {}, 2000), 2000)
+})

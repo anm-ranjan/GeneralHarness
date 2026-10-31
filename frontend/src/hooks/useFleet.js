@@ -5,6 +5,7 @@ import {
   findSelfHost,
   hostStatus,
   hostStorageKey,
+  nextPollMs,
   normalizeFleet,
   resolveActiveHost,
 } from '../fleet'
@@ -125,11 +126,13 @@ export default function useFleet(dispatch, stateRef) {
 
     function schedule() {
       // Poll on a fixed interval after completion rather than on a timer, so a
-      // slow or dead host cannot stack up overlapping rounds.
+      // slow or dead host cannot stack up overlapping rounds. The interval is
+      // short while a peer is not serving, so a freshly started backend is
+      // picked up within seconds instead of a full poll period.
       timer = setTimeout(async () => {
         await pollAll()
         if (!cancelled) schedule()
-      }, pollMsRef.current)
+      }, nextPollMs(stateRef.current.fleetHosts, stateRef.current.fleetStatuses, pollMsRef.current))
     }
 
     pollAll().then(() => { if (!cancelled) schedule() })

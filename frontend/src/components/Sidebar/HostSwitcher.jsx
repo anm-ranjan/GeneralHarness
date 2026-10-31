@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useApp, useSwitchHost } from '../../context/AppContext'
 import {
   describeHostStatus,
   hostIdMismatch,
+  HOST_TAGS,
   hostNeedsAttention,
+  hostTag,
   summarizeOtherHosts,
 } from '../../fleet'
 
@@ -19,6 +21,22 @@ export default function HostSwitcher() {
   const { state } = useApp()
   const switchHost = useSwitchHost()
   const [open, setOpen] = useState(false)
+  const rootRef = useRef(null)
+
+  // The list is a popover: a click anywhere else, or Escape, puts it away.
+  useEffect(() => {
+    if (!open) return undefined
+    const onPointer = event => {
+      if (rootRef.current && !rootRef.current.contains(event.target)) setOpen(false)
+    }
+    const onKey = event => { if (event.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onPointer)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onPointer)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
 
   // No fleet configured means there is nothing to switch between.
   if (!state.fleetHosts.length) return null
@@ -38,7 +56,7 @@ export default function HostSwitcher() {
   const hostName = active ? active.label : 'no host selected'
 
   return (
-    <div className="mt-4 text-[12.5px] text-muted">
+    <div ref={rootRef} className="mt-4 text-[12.5px] text-muted">
       {open && (
         <ul className="mb-2 border-t border-line">
           {state.fleetHosts.map(host => {
@@ -81,14 +99,16 @@ export default function HostSwitcher() {
                           : `${host.label} is not responding at ${host.url}`
                   }
                 >
-                                    <span className="flex-1 min-w-0">
+                  <span className="flex-1 min-w-0">
                     <span className="block text-[13px] truncate">{host.label}</span>
                     <span
                       className={`block text-[11px] truncate ${
                         hostNeedsAttention(status) ? 'text-warn' : 'text-faint'
                       }`}
                     >
-                      {describeHostStatus(status)}
+                      {reachable || host.self
+                        ? describeHostStatus(status)
+                        : HOST_TAGS[hostTag({ self: host.self, status })]}
                     </span>
                     {mismatch && (
                       <span className="block text-[11px] text-warn truncate">

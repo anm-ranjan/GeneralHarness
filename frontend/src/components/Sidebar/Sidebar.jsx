@@ -245,6 +245,18 @@ export default function Sidebar() {
       <div className="flex items-center gap-2 mb-5">
         <h1 className="font-display text-[19px] font-bold leading-none text-text-bright">{appName}</h1>
         <button
+          onClick={() => dispatch({ type: 'CLEAR_SESSION' })}
+          disabled={!currentSessionId}
+          className="p-1 rounded text-faint hover:text-accent hover:bg-surface-hover transition-colors disabled:opacity-40 disabled:hover:text-faint disabled:hover:bg-transparent"
+          title="Home"
+          aria-label="Home"
+        >
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M2.5 7.5 8 2.5l5.5 5" />
+            <path d="M4 6.8V13h3V9.5h2V13h3V6.8" />
+          </svg>
+        </button>
+        <button
           onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
           className="ml-auto p-1 rounded text-faint hover:text-accent hover:bg-surface-hover transition-colors"
           title={`Hide sidebar (${shortcutLabel('B')})`}

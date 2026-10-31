@@ -156,3 +156,45 @@ export function summarizeOtherHosts(hosts, statuses, activeHostId) {
   }
   return { waitingApproval, running, offline }
 }
+
+/** The one status word a host row shows. Machine and backend share a single list. */
+export const HOST_TAGS = {
+  connecting: 'Connecting',
+  online: 'Online',
+  offline: 'Offline',
+  serving: 'Serving',
+  notServing: 'Not serving',
+}
+
+/**
+ * The tag for one host, from whatever is known so far.
+ *
+ *  - Serving: its backend answers (this machine always does).
+ *  - Not serving: the machine answers over SSH but its backend is not running.
+ *  - Online: the machine side sees it up, but this page cannot reach its backend.
+ *  - Offline: nothing answers.
+ *  - Connecting: still finding out. The browser's own poll can only say that the
+ *    backend answers, so a host that does not is "Connecting" until the slower
+ *    SSH check (`bridge`) says whether the machine is up.
+ *
+ * `bridge` is that SSH check's row for the host (null when the host has none),
+ * and `bridgeLoaded` is whether the check has answered at all.
+ */
+export function hostTag({ self = false, status, bridge, bridgeLoaded = true }) {
+  if (self) return 'serving'
+  if (status?.online) return 'serving'
+  if (bridge) {
+    if (bridge.state === 'off') return 'notServing'
+    if (bridge.state === 'online') return 'online'
+    return 'offline'
+  }
+  if (!bridgeLoaded || !status) return 'connecting'
+  // Nothing can look past the backend for this host, and the backend is silent.
+  return 'offline'
+}
+
+/** Seconds between host polls: quick while a peer is not serving, so a start shows at once. */
+export function nextPollMs(hosts, statuses, baseMs) {
+  const waiting = (hosts || []).some(host => !host.self && !statuses?.[host.id]?.online)
+  return waiting ? Math.min(baseMs, 3000) : baseMs
+}
