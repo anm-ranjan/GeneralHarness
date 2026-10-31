@@ -51,3 +51,35 @@ export function runStateNotification(prevState, sessionId, state, currentSession
   }
   return null
 }
+
+const ACTIVE_STATES = new Set(['running', 'waiting_approval', 'waiting_input'])
+
+// Threads whose run finished while the user was not looking at them (another
+// thread open, or the window not focused). Running again or being opened
+// clears the mark.
+export function trackUnseenFinished(unseen, prevState, sessionId, state, viewing) {
+  if (!sessionId) return unseen
+  const idle = !state || state === 'idle'
+  if (idle && ACTIVE_STATES.has(prevState) && !viewing) {
+    return unseen[sessionId] ? unseen : { ...unseen, [sessionId]: true }
+  }
+  // Running again, or finishing in front of the user, leaves nothing unseen.
+  if (!idle || viewing) return withoutSession(unseen, sessionId)
+  return unseen
+}
+
+export function withoutSession(unseen, sessionId) {
+  if (!sessionId || !unseen[sessionId]) return unseen
+  const next = { ...unseen }
+  delete next[sessionId]
+  return next
+}
+
+// The Dock badge: finished threads not yet looked at, plus threads waiting for
+// the user's approval or answer.
+export function attentionCount(runStates, unseen) {
+  const waiting = Object.entries(runStates || {})
+    .filter(([id, state]) => (state === 'waiting_approval' || state === 'waiting_input') && !unseen?.[id])
+    .length
+  return Object.keys(unseen || {}).length + waiting
+}

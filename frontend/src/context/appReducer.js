@@ -1,7 +1,7 @@
 // Pure state layer for the app store. Kept free of JSX so it can be unit
 // tested directly with `node --test`.
 import { effectiveWorkspaceRoot } from '../sessionWorkspace.js'
-import { applyRunState, snapshotRunStates } from '../runStates.js'
+import { applyRunState, snapshotRunStates, trackUnseenFinished, withoutSession } from '../runStates.js'
 import { sidebarPrefs } from '../sidebarState.js'
 import { linksToPath } from '../artifacts.js'
 
@@ -94,6 +94,8 @@ export const initialState = {
   // session_id -> 'running' | 'waiting_approval' for non-idle sessions,
   // fed by the application-level /api/events stream.
   runStates: {},
+  // Threads that finished while not being looked at; counted on the Dock badge.
+  unseenFinished: {},
 
   // The machines this UI can switch between. Empty means single-machine mode
   // and the host switcher stays hidden. Each host owns its own projects,
@@ -328,6 +330,7 @@ export function reducer(state, action) {
           ? { ...state.sessionsById, [meta.id]: { ...state.sessionsById[meta.id], ...meta } }
           : state.sessionsById,
         currentSessionId: meta.id,
+        unseenFinished: withoutSession(state.unseenFinished, meta.id),
         currentMeta: meta,
         currentProvider: meta.provider || 'native',
         currentWorkspaceRoot: workspaceRoot || '',
@@ -492,8 +495,15 @@ export function reducer(state, action) {
     case 'SET_RUN_STATES':
       return { ...state, runStates: snapshotRunStates(action.payload) }
 
+    case 'WINDOW_FOCUSED':
+      return { ...state, unseenFinished: withoutSession(state.unseenFinished, state.currentSessionId) }
+
     case 'SET_SESSION_RUN_STATE': {
-      const { sessionId, state: runState } = action.payload
+      const { sessionId, state: runState, windowFocused = true } = action.payload
+      const viewing = sessionId === state.currentSessionId && windowFocused
+      const unseenFinished = trackUnseenFinished(
+        state.unseenFinished, state.runStates[sessionId], sessionId, runState, viewing,
+      )
       const sessionsById = state.sessionsById[sessionId]
         ? {
             ...state.sessionsById,
@@ -507,6 +517,7 @@ export function reducer(state, action) {
         ...state,
         runStates: applyRunState(state.runStates, sessionId, runState),
         sessionsById,
+        unseenFinished,
       }
     }
 

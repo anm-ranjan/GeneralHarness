@@ -589,6 +589,16 @@ function wireIpc() {
     backendUrl: activeBackendUrl,
     backendMode,
   }));
+  // Threads needing the user, on the Dock (macOS) or launcher (Linux) icon.
+  ipcMain.handle("myharness:set-badge-count", (_event, count) => {
+    const value = Number.isInteger(count) && count > 0 ? Math.min(count, 999) : 0;
+    try {
+      app.setBadgeCount(value);
+    } catch {
+      // Platforms without icon badges.
+    }
+    return { ok: true };
+  });
   ipcMain.handle("myharness:quit", () => {
     quitApp();
     return { ok: true };

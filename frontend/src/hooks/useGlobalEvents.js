@@ -55,7 +55,11 @@ export default function useGlobalEvents(dispatch, stateRef, activeHostId) {
             notify(msg.session_id, msg.state)
             dispatch({
               type: 'SET_SESSION_RUN_STATE',
-              payload: { sessionId: msg.session_id, state: msg.state },
+              payload: {
+                sessionId: msg.session_id,
+                state: msg.state,
+                windowFocused: document.hasFocus() && document.visibilityState === 'visible',
+              },
             })
           } else if (msg.type === 'native_settings') {
             dispatch({ type: 'SET_NATIVE_MODEL', payload: msg.model || '' })

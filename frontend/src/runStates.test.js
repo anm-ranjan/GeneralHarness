@@ -51,3 +51,14 @@ test('a session waiting on an answer gets its own badge and notification', () =>
   const done = runStateNotification('waiting_input', 'ses_b', 'idle', 'ses_a', 'Parser work')
   assert.equal(done.title, 'Run finished')
 })
+
+test('finished threads are counted until looked at, plus threads waiting on the user', async () => {
+  const { trackUnseenFinished, attentionCount } = await import('./runStates.js')
+  let unseen = {}
+  unseen = trackUnseenFinished(unseen, 'running', 'a', 'idle', false)
+  assert.deepEqual(unseen, { a: true })
+  assert.equal(trackUnseenFinished(unseen, 'running', 'b', 'idle', true), unseen) // finished in view
+  assert.deepEqual(trackUnseenFinished(unseen, undefined, 'a', 'running', false), {}) // running again
+  assert.equal(trackUnseenFinished(unseen, undefined, 'c', 'idle', false), unseen) // was not running
+  assert.equal(attentionCount({ b: 'waiting_input', c: 'running', d: 'waiting_approval' }, unseen), 3)
+})

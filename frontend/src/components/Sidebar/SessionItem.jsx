@@ -15,6 +15,7 @@ function SessionItem({ session, labels = [], subtitle = '', isActive, onSelect, 
   const [editing, setEditing] = useState(false)
   const [copied, setCopied] = useState('')
   const ownRunState = useAppSelector(state => state.runStates[session.id])
+  const finishedUnseen = useAppSelector(state => !!state.unseenFinished[session.id])
   const projectNames = useAppSelector(selectProjectNames)
   const runState = ownRunState || (session.status === 'running' ? 'running' : null)
 
@@ -88,11 +89,13 @@ function SessionItem({ session, labels = [], subtitle = '', isActive, onSelect, 
           onDoubleClick={(e) => { e.stopPropagation(); setEditing(true) }}
           title={session.title || session.id}
         >
-          {runState && (
+          {runState ? (
             <span
               className={`shrink-0 w-1.5 h-1.5 rounded-full ${runStateBadge(runState).dotClass}`}
               title={runStateBadge(runState).label}
             />
+          ) : finishedUnseen && (
+            <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-ok" title="Finished; not opened yet" />
           )}
           <span className="truncate">
             {session.title || session.id.slice(0, 8)}

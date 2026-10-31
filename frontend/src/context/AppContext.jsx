@@ -12,6 +12,7 @@ import { rememberSession, saveSidebarPrefs } from '../sidebarState'
 import { initialState, reducer } from './appReducer'
 import useGlobalEvents from '../hooks/useGlobalEvents'
 import useFleet from '../hooks/useFleet'
+import useAttentionBadge from '../hooks/useAttentionBadge'
 
 const AppContext = createContext(null)
 const FleetContext = createContext(null)
@@ -60,6 +61,7 @@ export function AppProvider({ children }) {
 
   const switchHost = useFleet(dispatch, stateRef)
   useGlobalEvents(dispatch, stateRef, activeHostId)
+  useAttentionBadge(store)
 
   useEffect(() => {
     let cancelled = false
@@ -68,8 +70,8 @@ export function AppProvider({ children }) {
       api('GET', '/api/health')
         .then(data => {
           if (!cancelled) {
+            // The page title (with its attention count) follows appName in useAttentionBadge.
             dispatch({ type: 'SET_HEALTH', payload: data })
-            document.title = data.app_name || 'MyHarness'
           }
         })
         .catch(err => {

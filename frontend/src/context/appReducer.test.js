@@ -454,3 +454,15 @@ test('the reply linking a created file replaces the automatic View link', () => 
   state = append(state, { type: 'assistant_message', markdown: `See [it](${path}).` })
   assert.equal(state.stageItems.filter(item => item.autoPreviewPath).length, 1)
 })
+
+test('a run finishing out of view is marked until its thread is opened or focused', () => {
+  let state = { ...initialState, currentSessionId: 'open', runStates: { open: 'running', other: 'running' } }
+  state = reducer(state, { type: 'SET_SESSION_RUN_STATE', payload: { sessionId: 'other', state: 'idle', windowFocused: true } })
+  state = reducer(state, { type: 'SET_SESSION_RUN_STATE', payload: { sessionId: 'open', state: 'idle', windowFocused: false } })
+  assert.deepEqual(state.unseenFinished, { other: true, open: true })
+
+  state = reducer(state, { type: 'WINDOW_FOCUSED' })
+  assert.deepEqual(state.unseenFinished, { other: true })
+  state = reducer(state, { type: 'SELECT_SESSION', payload: { meta: { id: 'other' }, workspaceRoot: '' } })
+  assert.deepEqual(state.unseenFinished, {})
+})
