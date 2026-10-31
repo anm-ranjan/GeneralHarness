@@ -533,6 +533,7 @@ def build_developer_instructions() -> str:
 
 {_web_output_block()}
 {skill_registry.prompt_fragment()}
+{utils.question_tool_rule("the request_user_input tool", "Independent questions can go in one call. ")}
 """
 
 
@@ -649,6 +650,58 @@ def _stream(ui, method_name: str, text: str) -> None:
 _PERMISSION_PROMPT = re.compile(r"^\s*(allow|let|grant|permit)\b.*\b(use|access|control)\b", re.I)
 
 
+def _elicitation_choices(field_schema: dict[str, Any]) -> list[tuple[str, Any]]:
+    """(label, value) options an MCP elicitation field offers, if any."""
+    kind = field_schema.get("type")
+    if kind == "boolean":
+        return [("Yes", True), ("No", False)]
+    source = field_schema.get("items") if kind == "array" and isinstance(field_schema.get("items"), dict) else field_schema
+    titled = source.get("oneOf") or source.get("anyOf")
+    if isinstance(titled, list):
+        return [
+            (str(option.get("title") or option.get("const")), option.get("const"))
+            for option in titled
+            if isinstance(option, dict) and "const" in option
+        ]
+    values = source.get("enum")
+    if isinstance(values, list):
+        names = source.get("enumNames") if isinstance(source.get("enumNames"), list) else []
+        return [(str(names[i]) if i < len(names) else str(value), value) for i, value in enumerate(values)]
+    return []
+
+
+def _elicitation_value(field_schema: dict[str, Any], choices: list[tuple[str, Any]], answer: str) -> Any:
+    """Convert a typed answer to the field's JSON type, or None if it does not fit."""
+    text = answer.strip()
+    if not text:
+        return None
+
+    def pick(item: str) -> Any:
+        for label, value in choices:
+            if item.lower() in {str(label).lower(), str(value).lower()}:
+                return value
+        return None
+
+    kind = field_schema.get("type")
+    if kind == "boolean":
+        return pick(text) if pick(text) is not None else {"true": True, "y": True, "false": False, "n": False}.get(text.lower())
+    if kind == "array":
+        items = [item.strip() for item in text.split(",") if item.strip()]
+        picked = [pick(item) for item in items] if choices else items
+        return None if any(item is None for item in picked) else picked
+    if choices:
+        return pick(text)
+    if kind in ("number", "integer"):
+        try:
+            number = float(text)
+        except ValueError:
+            return None
+        if kind == "integer":
+            return int(number) if number.is_integer() else None
+        return number
+    return text
+
+
 def _is_allow(answer: str) -> bool:
     """Whether a reply to a permission prompt is an explicit yes.
 
@@ -753,6 +806,9 @@ class CodexAppServerProvider:
             f'model_reasoning_effort="{self.reasoning_effort}"',
             f"sandbox_workspace_write.writable_roots={json.dumps(self.allowed_roots)}",
             "sandbox_workspace_write.network_access=false",
+            # Codex offers its question tool (request_user_input) only in Plan
+            # mode unless this is on; MyHarness runs Default mode.
+            "features.default_mode_request_user_input=true",
         ]
         self.transport = AppServerTransport(
             codex_bin=codex_bin,
@@ -1154,19 +1210,7 @@ class CodexAppServerProvider:
             await self.transport.respond(msg["id"], {"answers": answers})
             return
         if method == "mcpServer/elicitation/request":
-            message = str(params.get("message") or params.get("prompt") or "").strip()
-            is_permission = bool(_PERMISSION_PROMPT.match(message))
-            answer = await self._ask_one(
-                ui, message, ["Allow", "Deny"] if is_permission else []
-            )
-            if answer is None or (is_permission and not _is_allow(answer)):
-                await self.transport.respond(
-                    msg["id"], {"action": "decline", "content": None}
-                )
-            else:
-                await self.transport.respond(
-                    msg["id"], {"action": "accept", "content": {"answer": answer}}
-                )
+            await self.transport.respond(msg["id"], await self._answer_elicitation(params, ui))
             return
         await self.transport.respond_error(
             msg["id"], -32601, f"MyHarness does not support server request {method}"
@@ -1201,18 +1245,70 @@ class CodexAppServerProvider:
         answer = (answer or "").strip()
         return answer or None
 
-    async def _collect_user_answers(self, params: dict[str, Any], ui) -> dict[str, str]:
+    async def _answer_elicitation(self, params: dict[str, Any], ui) -> dict[str, Any]:
+        """Answer an MCP elicitation in the shape its server asked for.
+
+        ``url`` mode sends the user to a link; form modes carry a
+        ``requestedSchema`` whose properties the accepted ``content`` must
+        match (a schema with no properties is a plain confirmation, which is
+        how MCP tool approvals arrive). A request without any schema keeps the
+        older free-text reply.
+        """
+        decline = {"action": "decline", "content": None}
+        message = str(params.get("message") or params.get("prompt") or "").strip()
+        if params.get("mode") == "url":
+            url = str(params.get("url") or "").strip()
+            prompt = f"{message}\n\nOpen this link to continue: {url}" if url else message
+            answer = await self._ask_one(ui, prompt, ["Done", "Decline"])
+            done = answer is not None and answer.strip().lower() in {"done", "ok", "yes", "accept", "continue"}
+            return {"action": "accept", "content": None} if done else decline
+
+        schema = params.get("requestedSchema")
+        if not isinstance(schema, dict):
+            is_permission = bool(_PERMISSION_PROMPT.match(message))
+            answer = await self._ask_one(ui, message, ["Allow", "Deny"] if is_permission else [])
+            if answer is None or (is_permission and not _is_allow(answer)):
+                return decline
+            return {"action": "accept", "content": {"answer": answer}}
+
+        properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        if not properties:
+            answer = await self._ask_one(ui, message, ["Allow", "Deny"])
+            return {"action": "accept", "content": {}} if answer is not None and _is_allow(answer) else decline
+
+        required = set(schema.get("required") or [])
+        content: dict[str, Any] = {}
+        for name, field_schema in properties.items():
+            field_schema = field_schema if isinstance(field_schema, dict) else {}
+            title = str(field_schema.get("title") or name)
+            detail = str(field_schema.get("description") or "").strip()
+            prompt = message if len(properties) == 1 else f"{message}\n\n{title}"
+            if detail and len(properties) > 1:
+                prompt += f": {detail}"
+            choices = _elicitation_choices(field_schema)
+            answer = await self._ask_one(ui, prompt, [label for label, _value in choices])
+            value = None if answer is None else _elicitation_value(field_schema, choices, answer)
+            if value is None:
+                if name in required:
+                    return decline
+                continue
+            content[name] = value
+        return {"action": "accept", "content": content}
+
+    async def _collect_user_answers(self, params: dict[str, Any], ui) -> dict[str, dict[str, list[str]]]:
         """Answer a Codex requestUserInput, one question at a time.
 
         The schema is experimental, so identifiers and option shapes are read
         leniently: whatever key the request used to name a question is the key
         its answer is returned under. Unanswered questions are simply absent,
-        which Codex reads as "no answer given".
+        which Codex reads as "no answer given". Each answer is a
+        ToolRequestUserInputAnswer, ``{"answers": [text]}``; a bare string is
+        rejected by the app-server and the answer is lost.
         """
         questions = params.get("questions")
         if not isinstance(questions, list):
             return {}
-        answers: dict[str, str] = {}
+        answers: dict[str, dict[str, list[str]]] = {}
         for index, question in enumerate(questions):
             if not isinstance(question, dict):
                 continue
@@ -1235,7 +1331,7 @@ class CodexAppServerProvider:
                         options.append(label)
             answer = await self._ask_one(ui, text, options)
             if answer is not None:
-                answers[key] = answer
+                answers[key] = {"answers": [answer]}
         return answers
 
     @staticmethod

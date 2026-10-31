@@ -1040,6 +1040,7 @@ def _clarification_fragment() -> str:
         "rather than guessing. Ask again for each follow-up question so each one can build on the last "
         "answer. Do not use it for anything you can settle by reading the code, and do not use it to ask "
         "permission to continue. "
+        + utils.question_tool_rule("ask_user", "Ask one question per call. ")
     )
 
 

@@ -278,6 +278,25 @@ def build_openrouter_reasoning(effort, base_url: str | None = None) -> dict | No
     return {"effort": level}
 
 
+def question_tool_rule(tool: str, batching: str = "") -> str:
+    """Instruction to ask questions through the provider's question tool.
+
+    Skills often lay questions out as text (numbered questions, a recommended
+    answer, "reply yes to accept"); without this, models copy that layout
+    into the reply instead of raising a question card the user can answer.
+    """
+    return (
+        f"QUESTIONS: Whenever you put a question to the user (a clarification, a choice between options, "
+        f"or a round of questions from an interview or a skill), ask it with {tool} when it is available, "
+        f"not in your reply text. Give the choices as the tool's options, put your recommended choice first "
+        f"and mark it \"(Recommended)\", and add a \"Use your best judgement\" option where it fits. "
+        f"{batching}Write each question as one or two plain sentences: no numbering, emoji, Markdown, list of "
+        f"choices or recommended answer in the question text, since the options already carry them. Wait for "
+        f"the answers before asking questions that depend on them. A skill's text layout for questions says "
+        f"what to ask, not how to ask it. "
+    )
+
+
 def build_openrouter_provider_preferences(
     base_url: str | None = None,
     configured_provider=None,

@@ -167,6 +167,11 @@ def _allowed_paths_block() -> str:
     return "Allowed filesystem roots:\n" + "\n".join(f"- {root}" for root in roots)
 
 
+_CLAUDE_QUESTION_RULE = utils.question_tool_rule(
+    "the AskUserQuestion tool", "AskUserQuestion takes up to four independent questions per call. "
+).strip()
+
+
 def build_system_prompt_append(meta) -> str:
     if getattr(meta, "kind", "project") == "chat":
         return f"""You are running inside a local agent harness as a general-purpose assistant.
@@ -181,6 +186,7 @@ Rules:
 - Be concise: no verbose tool narration, no risk disclaimers, no unnecessary explanation.
 - When the request is genuinely ambiguous and the readings lead to materially different answers,
   call {ASK_TOOL_QUALIFIED} with one question and wait, rather than guessing.
+- {_CLAUDE_QUESTION_RULE}
 """
     return f"""You are running inside a local agent harness for coding sessions.
 Context: project={meta.project_id}, task={meta.task_id}
@@ -196,6 +202,7 @@ Rules:
 - When the request is genuinely ambiguous and the readings lead to materially different work, call
   {ASK_TOOL_QUALIFIED} with one concrete question and wait for the answer rather than guessing. Ask
   again for each follow-up. Do not use it for anything you can settle by reading the code.
+- {_CLAUDE_QUESTION_RULE}
 - End with a short summary: files changed, commands run, test result.
 """
 
@@ -224,6 +231,43 @@ ASK_TOOL_DESCRIPTION = (
     "for questions you can answer by reading the code, or to ask permission to continue. Ask one "
     "question per call; call it again for follow-ups so each builds on the last answer."
 )
+
+
+# Claude Code's built-in multiple-choice question tool. The SDK hands it to
+# can_use_tool; the answers must come back in updated_input, or Claude is told
+# "The user did not answer the questions."
+BUILTIN_ASK_TOOL = "AskUserQuestion"
+
+
+async def answer_builtin_questions(tool_input: Any, ui) -> dict[str, Any] | None:
+    """Ask each AskUserQuestion question through the harness; None if none answered.
+
+    Returns the tool input with ``answers`` (question text -> answer) added,
+    which is what Claude Code reads back as the user's choices.
+    """
+    ask = getattr(ui, "ask_user_question", None)
+    questions = tool_input.get("questions") if isinstance(tool_input, Mapping) else None
+    if not callable(ask) or not isinstance(questions, list):
+        return None
+    answers: dict[str, str] = {}
+    for item in questions:
+        if not isinstance(item, Mapping):
+            continue
+        question = str(item.get("question") or item.get("header") or "").strip()
+        if not question:
+            continue
+        options = [
+            str(option.get("label") if isinstance(option, Mapping) else option)
+            for option in item.get("options") or []
+            if (option.get("label") if isinstance(option, Mapping) else option)
+        ]
+        prompt = f"{question}\n\n(Choose one or more, separated by commas.)" if item.get("multiSelect") else question
+        answer = await asyncio.to_thread(ask, prompt, options, True)
+        if answer is not None and str(answer).strip():
+            answers[question] = str(answer).strip()
+    if not answers:
+        return None
+    return {**dict(tool_input), "answers": answers}
 
 
 def _build_ask_server(ui, sdk):
@@ -306,7 +350,7 @@ def _tool_activity(name: str, tool_input: Any) -> tuple[str, str] | None:
         value = str(data.get(key) or "").rstrip("/\\")
         return os.path.basename(value) or fallback
 
-    if name in ("Task", "TodoWrite", "ExitPlanMode") or name == ASK_TOOL_QUALIFIED:
+    if name in ("Task", "TodoWrite", "ExitPlanMode", BUILTIN_ASK_TOOL) or name == ASK_TOOL_QUALIFIED:
         return None
     if name == "Bash":
         command = " ".join(str(data.get("command") or "").split())
@@ -688,6 +732,11 @@ class ClaudeAgentProvider:
         async def can_use_tool(tool_name: str, tool_input: dict[str, Any], context):
             # Harness-level approval gate; only consulted for calls the SDK
             # does not auto-allow under the active permission mode.
+            if tool_name == BUILTIN_ASK_TOOL:
+                # Its own confirmation, like ask_user: put the questions to the
+                # user and hand their answers back instead of an approval prompt.
+                answered = await answer_builtin_questions(tool_input, ui)
+                return PermissionResultAllow(updated_input=answered) if answered else PermissionResultAllow()
             if tool_name in _READ_ONLY_TOOLS or tool_name == ASK_TOOL_QUALIFIED:
                 # Asking the user a question is its own confirmation; gating it
                 # behind an approval would make them click before they answer.
@@ -703,6 +752,13 @@ class ClaudeAgentProvider:
                 return PermissionResultAllow()
             return PermissionResultDeny(message="The user declined this tool call.")
 
+        async def answer_questions_only(tool_name: str, tool_input: dict[str, Any], context):
+            if tool_name == BUILTIN_ASK_TOOL:
+                answered = await answer_builtin_questions(tool_input, ui)
+                if answered:
+                    return PermissionResultAllow(updated_input=answered)
+            return PermissionResultAllow()
+
         options = ClaudeAgentOptions(
             cwd=str(workspace_path),
             model=self.model,
@@ -717,7 +773,9 @@ class ClaudeAgentProvider:
                 "append": build_system_prompt_append(meta),
             },
             cli_path=self.cli_path,
-            can_use_tool=can_use_tool if permission_mode not in ("bypassPermissions",) else None,
+            # bypassPermissions skips approvals, but AskUserQuestion still needs
+            # its answers collected: that callback allows everything else as-is.
+            can_use_tool=can_use_tool if permission_mode not in ("bypassPermissions",) else answer_questions_only,
             setting_sources=[],
             include_partial_messages=streaming,
             **ask_options,

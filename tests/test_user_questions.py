@@ -16,6 +16,7 @@ for path in (BACKEND, AGENT):
         sys.path.insert(0, str(path))
 
 import codex_app_server_provider as codex_provider
+import claude_agent_provider as claude_provider
 import harness_agent as agent
 import web_app
 from web_models import EventType
@@ -156,7 +157,10 @@ class CodexQuestionTests(unittest.IsolatedAsyncioTestCase):
             ui.asked,
             [("Which search tool?", ["ripgrep", "grep"], True), ("Include tests?", [], True)],
         )
-        self.assertEqual(transport.responses, [(7, {"answers": {"q1": "ripgrep", "q2": "yes"}})])
+        self.assertEqual(
+            transport.responses,
+            [(7, {"answers": {"q1": {"answers": ["ripgrep"]}, "q2": {"answers": ["yes"]}}})],
+        )
 
     async def test_unanswered_questions_are_simply_absent(self):
         provider, transport = self._provider()
@@ -207,6 +211,93 @@ class CodexQuestionTests(unittest.IsolatedAsyncioTestCase):
                 FakeAskUI([answer]),
             )
             self.assertEqual(transport.responses[0][1]["action"], action, answer)
+
+
+class CodexElicitationSchemaTests(unittest.IsolatedAsyncioTestCase):
+    def _provider(self):
+        provider = codex_provider.CodexAppServerProvider(timeout_seconds=2, allowed_roots=[])
+        transport = FakeTransport()
+        provider.transport = transport
+        return provider, transport
+
+    async def _answer(self, params, answers):
+        provider, transport = self._provider()
+        ui = FakeAskUI(answers)
+        await provider._handle_server_request({"id": 20, "method": "mcpServer/elicitation/request", "params": params}, ui)
+        return ui, transport.responses[0][1]
+
+    def test_the_question_tool_is_enabled_in_default_mode(self):
+        provider = codex_provider.CodexAppServerProvider(timeout_seconds=2, allowed_roots=[])
+        self.assertIn("features.default_mode_request_user_input=true", provider.transport.config_overrides)
+
+    async def test_form_fields_are_answered_in_their_schema_types(self):
+        schema = {"type": "object", "required": ["branch", "count"], "properties": {
+            "branch": {"type": "string", "title": "Branch", "enum": ["main", "dev"]},
+            "count": {"type": "integer", "title": "How many"},
+            "force": {"type": "boolean", "title": "Force"},
+            "labels": {"type": "array", "items": {"anyOf": [{"const": "bug", "title": "Bug"}, {"const": "ui", "title": "UI"}]}},
+        }}
+        ui, reply = await self._answer({"mode": "form", "message": "Configure", "requestedSchema": schema},
+                                       ["dev", "3", "No", "Bug, UI"])
+        self.assertEqual(reply, {"action": "accept", "content": {"branch": "dev", "count": 3, "force": False, "labels": ["bug", "ui"]}})
+        self.assertEqual(ui.asked[0][1], ["main", "dev"])
+        self.assertEqual(ui.asked[2][1], ["Yes", "No"])
+
+    async def test_a_missing_or_invalid_required_field_declines(self):
+        schema = {"type": "object", "required": ["count"], "properties": {"count": {"type": "integer"}}}
+        _ui, reply = await self._answer({"mode": "form", "message": "How many?", "requestedSchema": schema}, ["lots"])
+        self.assertEqual(reply, {"action": "decline", "content": None})
+
+    async def test_a_schema_without_fields_is_a_confirmation(self):
+        params = {"mode": "form", "message": "Allow the tool to run?", "requestedSchema": {"type": "object", "properties": {}}}
+        ui, reply = await self._answer(params, ["Allow"])
+        self.assertEqual(reply, {"action": "accept", "content": {}})
+        self.assertEqual(ui.asked[0][1], ["Allow", "Deny"])
+        _ui, reply = await self._answer(params, ["Deny"])
+        self.assertEqual(reply["action"], "decline")
+
+    async def test_url_mode_shows_the_link(self):
+        params = {"mode": "url", "message": "Sign in to continue", "url": "https://example.com/auth", "elicitationId": "e1"}
+        ui, reply = await self._answer(params, ["Done"])
+        self.assertIn("https://example.com/auth", ui.asked[0][0])
+        self.assertEqual(reply, {"action": "accept", "content": None})
+
+
+class ClaudeBuiltinQuestionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_answers_are_returned_in_updated_input(self):
+        tool_input = {"questions": [
+            {"question": "Which colour?", "header": "Colour", "multiSelect": False,
+             "options": [{"label": "Red", "description": "warm"}, {"label": "Blue", "description": "cool"}]},
+        ]}
+        ui = FakeAskUI(["Blue"])
+        answered = await claude_provider.answer_builtin_questions(tool_input, ui)
+        self.assertEqual(ui.asked, [("Which colour?", ["Red", "Blue"], True)])
+        self.assertEqual(answered["answers"], {"Which colour?": "Blue"})
+        self.assertEqual(answered["questions"], tool_input["questions"])
+
+    async def test_no_answer_or_no_question_surface_returns_none(self):
+        tool_input = {"questions": [{"question": "Which colour?", "options": []}]}
+        self.assertIsNone(await claude_provider.answer_builtin_questions(tool_input, FakeAskUI([None])))
+        self.assertIsNone(await claude_provider.answer_builtin_questions(tool_input, object()))
+
+    def test_it_is_not_shown_as_a_tool_on_the_live_line(self):
+        self.assertIsNone(claude_provider._tool_activity("AskUserQuestion", {}))
+
+
+class QuestionToolRuleTests(unittest.TestCase):
+    def test_every_provider_is_told_to_ask_through_its_question_tool(self):
+        meta = SimpleNamespace(kind="project", id="s", project_id="p", task_id="t")
+        chat = SimpleNamespace(kind="chat", id="s", project_id="p", task_id="t")
+        prompts = {
+            "native": (agent._clarification_fragment(), "ask_user"),
+            "codex": (codex_provider.build_developer_instructions(), "request_user_input"),
+            "claude": (claude_provider.build_system_prompt_append(meta), "AskUserQuestion"),
+            "claude chat": (claude_provider.build_system_prompt_append(chat), "AskUserQuestion"),
+        }
+        for name, (prompt, tool) in prompts.items():
+            self.assertIn("QUESTIONS:", prompt, name)
+            self.assertIn(tool, prompt, name)
+            self.assertIn("says what to ask, not how", prompt, name)
 
 
 class RecordingManager:
