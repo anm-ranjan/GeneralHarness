@@ -118,7 +118,7 @@ function ProjectNode({
       </div>
 
       <div className={`collapse-grid ${open ? 'open' : ''}`}>
-        <div hidden={!open} className="mt-1 space-y-px">
+        <div hidden={!open} className="mt-1 space-y-px pl-3">
           {sessions.length === 0 ? (
             <p className="text-[12px] text-faint italic py-1 px-2">{filtering ? 'No matching threads.' : 'No threads yet.'}</p>
           ) : sessions.map(s => (

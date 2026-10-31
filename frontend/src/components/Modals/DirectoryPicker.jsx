@@ -88,7 +88,7 @@ export default function DirectoryPicker() {
       className="fixed inset-0 glass-overlay z-50 flex items-center justify-center"
       onClick={handleOverlayClick}
     >
-      <div className="glass-surface border border-line rounded-lg w-[480px] max-h-[70vh] flex flex-col">
+      <div className="solid-surface border border-line rounded-lg w-[480px] max-h-[70vh] flex flex-col">
         <div className="px-5 pt-5 pb-3 border-b border-line">
           <h3 className="text-[15px] font-semibold text-text-bright mb-3">Select Project Directory</h3>
           <form onSubmit={handleDirectPathSubmit} className="flex gap-2">

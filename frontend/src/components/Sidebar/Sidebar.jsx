@@ -257,6 +257,17 @@ export default function Sidebar() {
           </svg>
         </button>
         <button
+          onClick={() => dispatch({ type: 'OPEN_SEARCH' })}
+          className="p-1 rounded text-faint hover:text-accent hover:bg-surface-hover transition-colors"
+          title={`Search transcripts (${shortcutLabel('K')})`}
+          aria-label="Search transcripts"
+        >
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="7" cy="7" r="4.5" />
+            <path d="m10.5 10.5 3 3" />
+          </svg>
+        </button>
+        <button
           onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
           className="ml-auto p-1 rounded text-faint hover:text-accent hover:bg-surface-hover transition-colors"
           title={`Hide sidebar (${shortcutLabel('B')})`}

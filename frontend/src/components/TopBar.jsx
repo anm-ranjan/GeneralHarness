@@ -6,7 +6,7 @@ import { shortcutLabel } from '../constants'
 import SessionBreadcrumb from './SessionBreadcrumb'
 import { SidebarIcon } from './Sidebar/Sidebar'
 
-// Quiet header: where you are on the left, three plain text links on the right.
+// Quiet header: where you are on the left, two plain text links on the right.
 // It only raises its voice when something is wrong (server down, host fallback).
 export default function TopBar() {
   const { state, dispatch } = useApp()
@@ -87,14 +87,7 @@ export default function TopBar() {
           className={`${linkClass} ${state.workspacePanelOpen ? '!text-text-bright decoration-accent' : ''}`}
           title="Toggle workspace panel"
         >
-          Files{state.touchedFiles.length > 0 ? ` ${state.touchedFiles.length}` : ''}
-        </button>
-        <button
-          onClick={() => dispatch({ type: 'OPEN_SEARCH' })}
-          className={linkClass}
-          title={`Search the text of every thread (${shortcutLabel('K')})`}
-        >
-          Search transcripts
+          Workspace{state.touchedFiles.length > 0 ? ` ${state.touchedFiles.length}` : ''}
         </button>
         <button
           onClick={() => dispatch({ type: 'OPEN_SETTINGS' })}
