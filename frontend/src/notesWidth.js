@@ -12,14 +12,8 @@ export function clampNotesWidth(width, blockWidth) {
   return Math.round(Math.min(max, Math.max(NOTES_MIN, width)))
 }
 
-// Width of the whole thread block (thread + notes), when the notes' outer
-// edge has been dragged. Null means the automatic width.
+// Saved by a short-lived outer-edge handle; only read to be cleared.
 export const BLOCK_WIDTH_KEY = 'myharness.threadBlockWidth'
-export const BLOCK_MIN = NOTES_MIN + COLUMN_GAP + THREAD_MIN
-
-export function clampBlockWidth(width, stageWidth) {
-  return Math.round(Math.min(Math.max(BLOCK_MIN, stageWidth), Math.max(BLOCK_MIN, width)))
-}
 
 export function readNotesWidth(storage = globalThis.localStorage, key = NOTES_WIDTH_KEY) {
   try {

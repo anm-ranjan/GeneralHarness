@@ -627,14 +627,10 @@ html, body, #root {
 .markdown-body .math-source { color: var(--color-text-default); white-space: pre-wrap; }
 
 @layer components {
-  /* The thread block (thread + margin notes). At the automatic width it is
-     centred: 1080px on a laptop, growing to 1440px on wide screens. Its left
-     edge stays where centring puts it, so a width dragged wider at the notes'
-     outer edge grows to the right only and the thread does not move. */
+  /* The thread block (thread + margin notes), centred: 1080px on a laptop,
+     growing to 1440px on wide screens. */
   .thread-block {
-    --thread-auto-w: clamp(1080px, 72cqw, 1440px);
-    --thread-left: max(0px, calc((100% - var(--thread-auto-w)) / 2));
-    margin-left: var(--thread-left);
-    max-width: min(var(--thread-block-w, var(--thread-auto-w)), calc(100% - var(--thread-left)));
+    margin-inline: auto;
+    max-width: clamp(1080px, 72cqw, 1440px);
   }
 }
