@@ -436,6 +436,17 @@ export function reducer(state, action) {
     case 'SET_QUEUE':
       return { ...state, queuedMessages: (action.payload || []).map(queueItemView) }
 
+    // The server's queue for a thread, applied only if that thread is still open.
+    case 'SYNC_QUEUE': {
+      const { sessionId, queue, steering } = action.payload
+      if (sessionId !== state.currentSessionId) return state
+      return {
+        ...state,
+        queuedMessages: (queue || []).map(queueItemView),
+        pendingSteering: (steering || []).map(queueItemView),
+      }
+    }
+
     case 'SET_PLAN':
       return { ...state, plan: action.payload || [] }
 

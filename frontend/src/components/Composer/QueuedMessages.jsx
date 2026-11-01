@@ -24,26 +24,50 @@ export default function QueuedMessages() {
   const items = [...queued, ...steering]
   if (!state.currentSessionId || (items.length === 0 && !editing)) return null
 
+  // A queue action answered "not found" means this window's copy is stale
+  // (the item was already sent, steered or removed): take the server's.
+  async function refreshQueue(sessionId) {
+    try {
+      const { meta } = await api('GET', `/api/sessions/${encodeURIComponent(sessionId)}?events=0`)
+      dispatch({ type: 'SYNC_QUEUE', payload: { sessionId, queue: meta.message_queue || [], steering: meta.steering_queue || [] } })
+    } catch {
+      // Leave it; the next queue update or reload corrects it.
+    }
+  }
+
+  async function failQueueAction(err, sessionId, fallback) {
+    if (err?.status === 404) {
+      await refreshQueue(sessionId)
+      return
+    }
+    dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: err.detail || err.message || fallback } })
+  }
+
   const canDrag = queued.length > 1 && !steering.length && queued.every((item) => item.id) && !removingId && !editing
 
   async function saveEdit() {
     if (!editing || saving) return
     setSaving(true); setEditError('')
+    const sessionId = state.currentSessionId
     try {
-      await api('PATCH', `/api/sessions/${encodeURIComponent(state.currentSessionId)}/${editing.steering ? 'steering' : 'queue'}/${encodeURIComponent(editing.id)}`, { text: draft, expected_text: editing.text })
+      await api('PATCH', `/api/sessions/${encodeURIComponent(sessionId)}/${editing.steering ? 'steering' : 'queue'}/${encodeURIComponent(editing.id)}`, { text: draft, expected_text: editing.text })
       setEditing(null)
-    } catch (err) { setEditError(err.detail || err.message || 'Could not save the message') }
+    } catch (err) {
+      if (err?.status === 404) { setEditing(null); await refreshQueue(sessionId); return }
+      setEditError(err.detail || err.message || 'Could not save the message')
+    }
     finally { setSaving(false) }
   }
 
   async function removeItem(item) {
     if (!item.id || removingId) return
     setRemovingId(item.id)
+    const sessionId = state.currentSessionId
     try {
-      await api('DELETE', `/api/sessions/${encodeURIComponent(state.currentSessionId)}/queue/${encodeURIComponent(item.id)}`)
+      await api('DELETE', `/api/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(item.id)}`)
       // The queue_updated broadcast refreshes state for every client.
     } catch (err) {
-      dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: err.detail || err.message || 'Failed to remove queued message.' } })
+      await failQueueAction(err, sessionId, 'Failed to remove queued message.')
     } finally {
       setRemovingId(null)
     }
@@ -52,10 +76,11 @@ export default function QueuedMessages() {
   async function steerItem(item) {
     if (removingId) return
     setRemovingId(item.id)
+    const sessionId = state.currentSessionId
     try {
-      await api('POST', `/api/sessions/${encodeURIComponent(state.currentSessionId)}/queue/${encodeURIComponent(item.id)}/steer`)
+      await api('POST', `/api/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(item.id)}/steer`)
     } catch (err) {
-      dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: err.detail || err.message || 'Failed to steer queued message.' } })
+      await failQueueAction(err, sessionId, 'Failed to steer queued message.')
     } finally { setRemovingId(null) }
   }
 

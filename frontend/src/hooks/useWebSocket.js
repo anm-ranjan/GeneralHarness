@@ -31,6 +31,11 @@ export default function useWebSocket(sessionId, dispatch, stateRef) {
         try {
           const started = performance.now()
           const evt = JSON.parse(e.data)
+          // Only this thread's events, and only while it is the one on screen:
+          // a late event from a thread just left would otherwise land in the
+          // new thread's state (its queue showed up on other threads).
+          if (evt.session_id && evt.session_id !== sessionId) return
+          if (stateRef.current.currentSessionId !== sessionId) return
           handleSessionEvent(evt, dispatch, stateRef)
           if (evt.type === 'session_loaded') reportAfterPaint('session_replay_rendered', started, evt.data?.events?.length || 0)
         } catch (err) {

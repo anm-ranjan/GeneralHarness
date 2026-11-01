@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 
 from fastapi import WebSocket
@@ -50,6 +51,11 @@ class ConnectionManager:
                 dead.append(ws)
         for ws in dead:
             self.disconnect(session_id, ws)
+            # Close it too: a socket dropped silently stays open on the
+            # client, which then misses every later event (a queue that
+            # already emptied kept showing) instead of reconnecting.
+            with contextlib.suppress(Exception):
+                await ws.close()
 
     async def broadcast_global(self, payload: dict) -> None:
         with self._lock:
@@ -62,6 +68,8 @@ class ConnectionManager:
                 dead.append(ws)
         for ws in dead:
             self.disconnect_global(ws)
+            with contextlib.suppress(Exception):
+                await ws.close()
 
 
 class ActiveRun:
