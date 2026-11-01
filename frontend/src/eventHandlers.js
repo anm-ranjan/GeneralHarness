@@ -42,15 +42,21 @@ export function isCodexProtocolStatus(text) {
 
 // Wraps dispatch so stage items appended while replaying a stored event carry
 // the event's absolute index in the session log, used for search deep-linking.
-// What a finished turn keeps when a transcript is reloaded: the exchange itself.
-// Answered questions are part of it (an interview may be nothing but questions
-// and answers), and an error says why the turn ended without a reply.
-const HISTORICAL_ITEM_TYPES = new Set(['user_message', 'assistant_message', 'question', 'error'])
+// What a finished turn keeps when a transcript is reloaded: the exchange itself
+// and what its margin notes are built from. Answered questions are part of the
+// exchange (an interview may be nothing but questions and answers), and an
+// error says why the turn ended without a reply. Tool calls and provider steps
+// (codex_command also carries Claude's tools) feed the notes, which only show
+// a summary, so dropping them left a reopened turn's notes empty, or holding
+// just its reasoning. Status lines and protocol items still stay live-only.
+const HISTORICAL_ITEM_TYPES = new Set([
+  'user_message', 'assistant_message', 'question', 'error',
+  'codex_command', 'codex_file_change', 'turn_note',
+])
 
 function indexedDispatch(dispatch, eventIndex, historical = false) {
   return (action) => {
-    if (historical && (action.type === 'APPEND_TOOL_CALL' || (action.type === 'APPEND_STAGE_ITEM' && !HISTORICAL_ITEM_TYPES.has(action.payload.type)))) return
-    if (action.type === 'UPDATE_TOOL_RESULT' && historical) return
+    if (historical && action.type === 'APPEND_STAGE_ITEM' && !HISTORICAL_ITEM_TYPES.has(action.payload.type)) return
     if (action.type === 'APPEND_STAGE_ITEM' || action.type === 'APPEND_TOOL_CALL') {
       dispatch({ ...action, payload: { ...action.payload, eventIndex, historical } })
     } else {

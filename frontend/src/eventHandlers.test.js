@@ -235,10 +235,33 @@ test('session_loaded stamps replayed stage items with absolute event indices', (
 
   const appended = replayed.filter(a => a.type === 'APPEND_STAGE_ITEM')
   assert.deepEqual(appended.map(a => a.payload.eventIndex), [100, 103])
-
-  const toolCall = replayed.find(a => a.type === 'APPEND_TOOL_CALL')
-  assert.equal(toolCall, undefined)
   assert.ok(appended.every(a => a.payload.historical))
+
+  // A finished turn keeps its tool calls: the margin notes are built from them.
+  const toolCall = replayed.find(a => a.type === 'APPEND_TOOL_CALL')
+  assert.equal(toolCall.payload.eventIndex, 101)
+  assert.ok(replayed.some(a => a.type === 'UPDATE_TOOL_RESULT'))
+})
+
+test('a reopened turn keeps provider steps for its notes but not status lines', () => {
+  const ctx = collect()
+  handleSessionEvent({
+    type: 'session_loaded',
+    data: {
+      meta: { status: 'idle' },
+      events: [
+        { type: 'user_message', data: { text: 'check the build' } },
+        { type: 'status', data: { text: 'Steering saved' } },
+        { type: 'codex_command', data: { command: 'Run: ls', status: 'completed', tool: 'shell_run', label: 'Run: ls', call_id: 'toolu_1' } },
+        { type: 'codex_file_change', data: { path: '/a/b.py', status: 'modified', records_change: false } },
+        { type: 'turn_note', data: { text: 'Checked the build.' } },
+        { type: 'assistant_message', data: { markdown: 'Done.' } },
+      ],
+    },
+  }, ctx.dispatch, ctx.stateRef)
+
+  const types = flatten(ctx.actions).filter(a => a.type === 'APPEND_STAGE_ITEM').map(a => a.payload.type)
+  assert.deepEqual(types, ['user_message', 'codex_command', 'codex_file_change', 'turn_note', 'assistant_message'])
 })
 
 test('live events are not stamped with event indices', () => {
@@ -506,7 +529,7 @@ test('running replay keeps an unresolved live question interactive', () => {
 })
 
 
-test('completed history hides tools while reconnecting active turn keeps tools and approval', () => {
+test('completed history keeps tools for its notes while reconnecting active turn stays live with its approval', () => {
   const ctx = collect()
   handleSessionEvent({ type: 'session_loaded', data: {
     meta: { status: 'running' }, events: [
@@ -520,7 +543,8 @@ test('completed history hides tools while reconnecting active turn keeps tools a
     ],
   } }, ctx.dispatch, ctx.stateRef)
   const actions = flatten(ctx.actions)
-  assert.deepEqual(actions.filter(a => a.type === 'APPEND_TOOL_CALL').map(a => a.payload.callId), ['live'])
+  const calls = actions.filter(a => a.type === 'APPEND_TOOL_CALL')
+  assert.deepEqual(calls.map(a => [a.payload.callId, a.payload.historical]), [['old', true], ['live', false]])
   assert.ok(actions.some(a => a.type === 'APPEND_STAGE_ITEM' && a.payload.type === 'approval'))
 })
 

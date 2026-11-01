@@ -18,6 +18,16 @@ import utils
 import skill_registry
 
 
+
+def _codex_tool_status(status, method: str) -> str:
+    """A Codex item status in the running / completed / failed terms the notes use."""
+    status = str(status or "").lower()
+    if status in {"failed", "declined", "error"}:
+        return "failed"
+    if status == "completed" or (not status and method == "item/completed"):
+        return "completed"
+    return "running"
+
 class AppServerProtocolError(RuntimeError):
     pass
 
@@ -1573,22 +1583,35 @@ class CodexAppServerProvider:
                         # thinking deltas streamed above.
                         ui.show_thinking(text)
                 return
+            # Commands and file changes feed the margin notes whatever the
+            # verbose setting, the way Claude's tools do: with verbose off a
+            # Codex turn's notes otherwise held only its reasoning.
             if (
                 item_type in {"file_change", "fileChange"}
                 and method == "item/completed"
             ):
+                show_tool = getattr(ui, "show_provider_tool", None)
                 for path, action in self._file_changes(item):
                     ui.show_observed_file_change(path, action, "codex")
-                    if verbose:
-                        ui.show_codex_file_change(path, action)
+                    if show_tool:
+                        show_tool(
+                            "file_replace",
+                            f"Update {os.path.basename(str(path).rstrip('/')) or path}",
+                            "completed",
+                            f"{item.get('id', '')}:{path}",
+                        )
                 return
             if item_type in {"command_execution", "commandExecution"}:
                 # Surfaced on start as well as completion, so a long-running
-                # command is visible while it runs rather than only after it.
-                if method in {"item/started", "item/completed"} and verbose:
-                    ui.show_codex_command(
-                        item.get("command", ""),
-                        item.get("status") or ("running" if method == "item/started" else "completed"),
+                # command is visible while it runs; the item id makes both
+                # reports one entry.
+                show_tool = getattr(ui, "show_provider_tool", None)
+                if method in {"item/started", "item/completed"} and show_tool:
+                    show_tool(
+                        "shell_run",
+                        f"Run: {item.get('command', '')}",
+                        _codex_tool_status(item.get("status"), method),
+                        str(item.get("id", "")),
                     )
                 return
             if not verbose:

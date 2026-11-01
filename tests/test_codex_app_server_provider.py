@@ -143,6 +143,7 @@ class FakeStore:
 
 class FakeUI:
     def __init__(self, verbose=False, approval=True, approval_mode="always_ask"):
+        self.provider_tools = []
         self.run_settings = {"verbose_tools": verbose, "approval_mode": approval_mode}
         self.approval = approval
         self.statuses = []
@@ -187,6 +188,9 @@ class FakeUI:
 
     def show_codex_command(self, command, status):
         self.commands.append((command, status))
+
+    def show_provider_tool(self, tool, label, status, call_id=""):
+        self.provider_tools.append((tool, label, status, call_id))
 
     def show_codex_file_change(self, path, status):
         self.codex_files.append((path, status))
@@ -447,7 +451,7 @@ class CodexAppServerProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ui.agent_events[1]["action"], "delegated")
         self.assertEqual(ui.agent_events[1]["agent_id"], "child")
 
-    async def test_non_verbose_hides_protocol_chatter_but_tracks_file_changes(self):
+    async def test_non_verbose_hides_protocol_chatter_but_reports_steps_for_the_notes(self):
         provider, _transport, client = make_provider()
         client.emit_items = [
             {
@@ -470,9 +474,12 @@ class CodexAppServerProviderTests(unittest.IsolatedAsyncioTestCase):
         await self.run_provider(provider, make_meta(), ui, FakeStore())
 
         self.assertEqual(ui.statuses, [])
-        self.assertEqual(ui.commands, [])
-        self.assertEqual(ui.codex_files, [])
         self.assertEqual(ui.observed_files, [("src/app.js", "modified", "codex")])
+        # The margin notes get the command and the edit with verbose off too.
+        self.assertEqual(ui.provider_tools, [
+            ("shell_run", "Run: npm test", "completed", "cmd"),
+            ("file_replace", "Update app.js", "completed", "edit:src/app.js"),
+        ])
 
     async def test_verbose_shows_protocol_progress_and_completed_items(self):
         provider, _transport, client = make_provider()
@@ -497,8 +504,10 @@ class CodexAppServerProviderTests(unittest.IsolatedAsyncioTestCase):
         await self.run_provider(provider, make_meta(), ui, FakeStore())
 
         self.assertTrue(ui.statuses)
-        self.assertEqual(ui.commands, [("npm test", "completed")])
-        self.assertEqual(ui.codex_files, [("src/app.js", "modified")])
+        self.assertEqual(ui.provider_tools, [
+            ("shell_run", "Run: npm test", "completed", "cmd"),
+            ("file_replace", "Update app.js", "completed", "edit:src/app.js"),
+        ])
 
     async def test_reasoning_is_surfaced_as_a_thinking_trace(self):
         provider, _transport, client = make_provider()
@@ -543,11 +552,27 @@ class CodexAppServerProviderTests(unittest.IsolatedAsyncioTestCase):
             {"method": "item/started", "params": {"item": {"id": "c1", "type": "commandExecution", "command": "npm test"}}},
             {"method": "item/completed", "params": {"item": {"id": "c1", "type": "commandExecution", "command": "npm test", "status": "completed"}}},
         ]
-        ui = FakeUI(verbose=True)
+        ui = FakeUI(verbose=False)
 
         await self.run_provider(provider, make_meta(), ui, FakeStore())
 
-        self.assertEqual(ui.commands, [("npm test", "running"), ("npm test", "completed")])
+        # One call id, so the notes update a single entry from running to done.
+        self.assertEqual(ui.provider_tools, [
+            ("shell_run", "Run: npm test", "running", "c1"),
+            ("shell_run", "Run: npm test", "completed", "c1"),
+        ])
+
+    async def test_failed_or_declined_commands_are_reported_as_failed(self):
+        provider, _transport, client = make_provider()
+        client.emit_messages = [
+            {"method": "item/completed", "params": {"item": {"id": "c1", "type": "commandExecution", "command": "make", "status": "failed"}}},
+            {"method": "item/completed", "params": {"item": {"id": "c2", "type": "commandExecution", "command": "rm -rf x", "status": "declined"}}},
+        ]
+        ui = FakeUI(verbose=False)
+
+        await self.run_provider(provider, make_meta(), ui, FakeStore())
+
+        self.assertEqual([entry[2] for entry in ui.provider_tools], ["failed", "failed"])
 
     async def test_transport_eof_fails_pending_requests_and_active_turns(self):
         class EmptyStdout:
