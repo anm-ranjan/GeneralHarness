@@ -69,7 +69,7 @@ function MessageBubble({ role, text, markdown, images = [], attachments = [], st
           dangerouslySetInnerHTML={{ __html: html }}
         />
       ) : (
-        <div className={`whitespace-pre-wrap text-[15px] leading-relaxed ${steering ? 'text-muted' : 'font-medium text-text-bright'}`}>
+        <div className={`whitespace-pre-wrap [overflow-wrap:anywhere] text-[15px] leading-relaxed ${steering ? 'text-muted' : 'font-medium text-text-bright'}`}>
           {text && <div>{text}</div>}
           {displayAttachments.length > 0 && (
             <div className="mt-3 grid grid-cols-2 gap-2 font-normal">

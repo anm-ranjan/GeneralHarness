@@ -89,7 +89,7 @@ export default function SplashScreen() {
 
   return (
     <div className="@container h-full overflow-y-auto px-9 py-12">
-      <div className="mx-auto grid max-w-[1080px] gap-x-10 gap-y-10 @3xl:grid-cols-[minmax(0,1fr)_17rem]">
+      <div className="mx-auto grid max-w-[clamp(1080px,72cqw,1440px)] gap-x-10 gap-y-10 @3xl:grid-cols-[minmax(0,1fr)_clamp(17rem,20cqw,22rem)]">
         <div className="min-w-0 max-w-[62ch]">
           <h2 className="font-display text-[34px] font-bold leading-[1.1] tracking-[-0.015em] text-text-bright">
             What are we working on?

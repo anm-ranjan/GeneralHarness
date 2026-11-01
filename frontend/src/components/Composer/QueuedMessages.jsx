@@ -111,7 +111,7 @@ export default function QueuedMessages() {
         <div className="flex gap-2"><button type="submit" disabled={saving || (!draft.trim() && !editing.attachmentCount)} className="rounded px-3 py-1 bg-accent text-bg disabled:opacity-50">{saving ? 'Saving…' : 'Save'}</button>
           <button type="button" disabled={saving} onClick={() => setEditing(null)} className="rounded px-3 py-1 text-muted border border-line">Cancel</button></div>
       </form>}
-      <div className="max-w-[min(1100px,calc(100vw-2rem))] mx-auto flex items-center gap-3 text-[12px]">
+      <div className="max-w-[min(clamp(1100px,72cqw,1460px),calc(100cqw-2rem))] mx-auto flex items-center gap-3 text-[12px]">
         <span className="shrink-0 text-accent font-medium">
           Queued {queued.length}{steering.length > 0 ? ` · Steering ${steering.length}` : ''}
         </span>

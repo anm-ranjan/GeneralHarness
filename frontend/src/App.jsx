@@ -63,7 +63,7 @@ function AppLayout() {
         </aside>
       )}
 
-      <main className="main-area flex flex-col overflow-hidden bg-panel">
+      <main className="main-area @container flex flex-col overflow-hidden bg-panel">
         <TopBar />
         <Stage />
         <QueuedMessages key={state.currentSessionId || 'none'} />

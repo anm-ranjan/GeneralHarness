@@ -162,7 +162,7 @@ export default function Stage() {
       ref={stageRef}
       className="@container flex-1 overflow-y-auto px-9 py-5"
     >
-      <div className="max-w-[1080px] mx-auto flex flex-col gap-10">
+      <div className="max-w-[clamp(1080px,72cqw,1440px)] mx-auto flex flex-col gap-10">
         {turns.map((turn, i) => (
           <Turn
             key={turn.id}
@@ -181,12 +181,13 @@ export default function Stage() {
 }
 
 // One exchange: what was said on the left, what the agent did in the margin.
-// Below ~48rem of stage width the notes drop underneath. Settled turns skip
+// Below ~48rem of stage width the notes drop underneath; on wide screens
+// the thread (up to 1440px) and the notes (up to 22rem) grow with the stage. Settled turns skip
 // re-rendering while a later turn streams.
 const Turn = memo(function Turn({ turn, renderItem, live, isLast, unanswered }) {
   const talk = [...(turn.user ? [turn.user] : []), ...turn.talk]
   return (
-    <section className="grid gap-x-10 gap-y-3 @3xl:grid-cols-[minmax(0,1fr)_17rem]">
+    <section className="grid gap-x-10 gap-y-3 @3xl:grid-cols-[minmax(0,1fr)_clamp(17rem,20cqw,22rem)]">
       <div className="flex min-w-0 flex-col">
         {talk.map((item, i) => {
           const node = renderItem(item)

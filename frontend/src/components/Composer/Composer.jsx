@@ -421,7 +421,7 @@ export default function Composer() {
 
   return (
     <div className="px-9 pt-2 pb-4">
-      <div className="max-w-[min(1100px,calc(100vw-2rem))] mx-auto">
+      <div className="max-w-[min(clamp(1100px,72cqw,1460px),calc(100cqw-2rem))] mx-auto">
         <div>
           <div className="min-w-0">
             <textarea
