@@ -29,8 +29,10 @@ _CONFIG_DEFAULTS = {
     "CONTEXT_LIMIT_TOKENS": utils.CONTEXT_LIMIT_TOKENS,
     "COMPACT_THRESHOLD_TOKENS": utils.COMPACT_THRESHOLD_TOKENS,
 }
-# Compaction must start well inside the window, whatever the configured threshold.
-_COMPACT_SHARE = 0.6
+# History is compacted once it fills this share of the context window, which
+# leaves room for the reply and tool results. The configured
+# compact_threshold_tokens applies only when there is no window (limit <= 0).
+_COMPACT_SHARE = 0.75
 # Where the context window in effect came from, for Settings.
 _context = {"source": "config", "detail": "agent_config.yaml"}
 
@@ -80,7 +82,7 @@ def _set_context(window: int | None, source: str, detail: str) -> None:
     configured_compact = _CONFIG_DEFAULTS["COMPACT_THRESHOLD_TOKENS"]
     limit = window if window else configured_limit
     utils.CONTEXT_LIMIT_TOKENS = limit
-    utils.COMPACT_THRESHOLD_TOKENS = min(configured_compact, int(limit * _COMPACT_SHARE)) if limit > 0 else configured_compact
+    utils.COMPACT_THRESHOLD_TOKENS = int(limit * _COMPACT_SHARE) if limit > 0 else configured_compact
     _context.update(source=source, detail=detail)
 
 

@@ -207,6 +207,10 @@ class NativeSettingsTests(unittest.TestCase):
         self.assertEqual(payload["context_source"], "openrouter")
         self.assertIn("azure/eu", payload["context_detail"])
 
+    def test_a_large_window_compacts_late(self):
+        native_settings.save("openai/gpt-6.1-terra", ["openai/flex"])
+        self.assertEqual(utils.COMPACT_THRESHOLD_TOKENS, 750000)
+
     def test_several_pinned_providers_use_the_smallest_window(self):
         native_settings.save("openai/gpt-6.1-terra", ["openai/flex", "azure/eu"])
         self.assertEqual(utils.CONTEXT_LIMIT_TOKENS, 400000)
@@ -216,14 +220,13 @@ class NativeSettingsTests(unittest.TestCase):
         # The 2M endpoint has no tool calling, so native cannot be routed to it.
         self.assertEqual(utils.CONTEXT_LIMIT_TOKENS, 1000000)
 
-    def test_compaction_starts_inside_a_small_window(self):
+    def test_compaction_starts_at_three_quarters_of_the_window(self):
         def small(model):
             return {"id": model, "name": "Small", "endpoints": [{"tag": "tiny", "tools": True, "context_length": 32000}]}
-        configured = native_settings._CONFIG_DEFAULTS["COMPACT_THRESHOLD_TOKENS"]
         with patch.object(openrouter_catalog, "model_endpoints", side_effect=small):
             native_settings.save("small/model", ["tiny"])
         self.assertEqual(utils.CONTEXT_LIMIT_TOKENS, 32000)
-        self.assertEqual(utils.COMPACT_THRESHOLD_TOKENS, min(configured, int(32000 * 0.6)))
+        self.assertEqual(utils.COMPACT_THRESHOLD_TOKENS, 24000)
 
     def test_lookup_failure_or_other_api_falls_back_to_the_config(self):
         config_limit = native_settings._CONFIG_DEFAULTS["CONTEXT_LIMIT_TOKENS"]

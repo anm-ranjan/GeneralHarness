@@ -36,7 +36,10 @@ permissions:
   allowed_paths: []
 
 memory:
+  # Native on OpenRouter takes the context window from the model's providers;
+  # this value is the fallback. History compacts at 75% of the window.
   context_limit_tokens: 200000
+  # Used only when context_limit_tokens is 0 (no window).
   compact_threshold_tokens: 50000
   keep_recent_messages: 8
   tool_compress_threshold_chars: 500
