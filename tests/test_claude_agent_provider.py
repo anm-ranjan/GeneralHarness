@@ -462,6 +462,52 @@ class ClaudeAgentProviderTests(unittest.TestCase):
         unanswered = asyncio.run(handler({"question": "Which parser?"}))
         self.assertTrue(unanswered["content"][0]["text"].startswith("No answer:"))
 
+    def test_a_subagents_messages_stay_out_of_the_answer(self):
+        # The SDK forwards a Task subagent's messages and stream events tagged
+        # with parent_tool_use_id; they belong to that agent, not the answer.
+        captured = {}
+        sdk = fake_sdk(captured)
+
+        def tool_use(block_id, name, tool_input):
+            block = sdk.ToolUseBlock()
+            block.id, block.name, block.input = block_id, name, tool_input
+            return block
+
+        def child(message):
+            message.parent_tool_use_id = "task_1"
+            return message
+
+        captured["blocks"] = [tool_use("task_1", "Task", {"description": "Review", "subagent_type": "reviewer"})]
+        captured["extra_messages"] = [
+            child(sdk.StreamEvent({"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Child "}})),
+            child(sdk.AssistantMessage([
+                sdk.ThinkingBlock("child thinking"),
+                tool_use("bash_1", "Bash", {"command": "rg -n startLive"}),
+                sdk.TextBlock("Child report."),
+            ])),
+            sdk.AssistantMessage([sdk.TextBlock("Root answer.")]),
+        ]
+        ui = FakeUI()
+        meta = SimpleNamespace(id="ses_claude", project_id="project", task_id="task", kind="project",
+                               message_count=1, claude_state={})
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.dict(sys.modules, {"claude_agent_sdk": sdk}), \
+                patch.object(provider_module.utils, "UI_VERBOSE_TOOLS", False), \
+                patch.object(provider_module.utils, "CLAUDE_AGENT_PERMISSION_MODE", ""):
+            provider = provider_module.ClaudeAgentProvider(timeout_seconds=30, allowed_roots=[tmp])
+            asyncio.run(provider.run(meta=meta, user_prompt="Review", workspace=tmp, ui=ui,
+                                     cancel_event=threading.Event(), store=FakeStore()))
+
+        self.assertEqual(ui.assistant, ["Root answer."])
+        self.assertEqual(ui.assistant_deltas, [])
+        self.assertEqual(ui.thinking, [])
+        self.assertNotIn("bash_1", [call_id for *_rest, call_id in ui.tools])
+        progress = [e for e in ui.agent_events if e["action"] == "tool_call"]
+        self.assertEqual(len(progress), 1)
+        self.assertEqual(progress[0]["agent_id"], "task_1")
+        self.assertIn("rg -n startLive", progress[0]["text"])
+        self.assertNotIn("status", progress[0])
+
     def test_the_ask_tool_is_not_offered_to_a_ui_that_cannot_ask(self):
         captured = {}
         store = FakeStore()

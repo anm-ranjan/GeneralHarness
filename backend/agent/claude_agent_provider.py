@@ -642,6 +642,23 @@ class _ClaudeAgentTree:
                 _field(message, "result", None),
             )
 
+    def progress(self, parent_tool_use_id: str | None, action: str, **extra: Any) -> None:
+        """A progress line for the subagent running under ``parent_tool_use_id``.
+
+        No "status" field: what a child is doing is not a change of its state.
+        """
+        node = self._tasks.get(str(parent_tool_use_id or ""))
+        if not node:
+            return
+        event = {
+            "provider": CLAUDE_PROVIDER_ID,
+            "action": action,
+            "agent_id": node["agent_id"],
+            "agent_path": node["agent_path"],
+        }
+        event.update({key: value for key, value in extra.items() if value is not None})
+        _emit_agent_event(self._ui, event)
+
     def source_for(self, context: Any) -> dict[str, Any]:
         parent_tool_use_id = _field(context, "parent_tool_use_id", None)
         tool_use_id = _field(context, "tool_use_id", None)
@@ -945,6 +962,20 @@ class ClaudeAgentProvider:
                             clock.touch()
                             if isinstance(message, AssistantMessage):
                                 parent_tool_use_id = _field(message, "parent_tool_use_id", None)
+                                if parent_tool_use_id:
+                                    # A subagent's (Task's) turn: its words are its report to
+                                    # the parent, not the answer, and its tool calls are its own.
+                                    for block in message.content:
+                                        agent_tree.observe_tool_use(block, parent_tool_use_id)
+                                        if isinstance(block, ToolUseBlock) and not _is_task_tool(block.name):
+                                            activity = _tool_activity(block.name, block.input)
+                                            agent_tree.progress(
+                                                parent_tool_use_id, "tool_call",
+                                                tool=activity[0] if activity else block.name,
+                                                text=activity[1] if activity else block.name,
+                                                tool_use_id=_field(block, "id", None),
+                                            )
+                                    continue
                                 for block in message.content:
                                     agent_tree.observe_tool_use(block, parent_tool_use_id)
                                     if isinstance(block, TextBlock) and block.text.strip():
@@ -976,10 +1007,11 @@ class ClaudeAgentProvider:
                                                 {"name": block.name, "input": block.input},
                                             )
                             elif isinstance(message, StreamEvent):
-                                agent_tree.observe_stream(
-                                    message.event,
-                                    _field(message, "parent_tool_use_id", None),
-                                )
+                                stream_parent = _field(message, "parent_tool_use_id", None)
+                                agent_tree.observe_stream(message.event, stream_parent)
+                                if stream_parent:
+                                    # A subagent's tokens stay out of the live answer.
+                                    continue
                                 _emit_stream_delta(ui, message.event)
                                 started = message.event if isinstance(message.event, dict) else {}
                                 started_block = started.get("content_block")
