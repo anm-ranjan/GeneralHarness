@@ -14,7 +14,7 @@ import TurnNotes from './TurnNotes'
 import PromptActions from './PromptActions'
 import { buildTurns, sameTurn, unansweredLastTurn } from '../../turnModel'
 import ApprovalCard from './ApprovalCard'
-import { BLOCK_WIDTH_KEY, clampBlockWidth, clampNotesWidth, readNotesWidth, saveNotesWidth } from '../../notesWidth'
+import { BLOCK_WIDTH_KEY, NOTES_MIN, clampBlockWidth, clampNotesWidth, readNotesWidth, saveNotesWidth } from '../../notesWidth'
 import QuestionCard from './QuestionCard'
 
 export default function Stage() {
@@ -158,15 +158,13 @@ export default function Stage() {
   // The latest prompt, when it never got a reply: the one Retry / Delete apply to.
   const unansweredTurn = useMemo(() => unansweredLastTurn(turns, state.isRunning), [turns, state.isRunning])
 
-  // One handler for every turn's resize handles (data-notes-handle), so the
-  // memoised turns need no props for them. "inner" is the divider: the notes
-  // take room from the thread and the block keeps its width. "outer" is the
-  // notes' right edge: the block grows to the right with the notes, and the
-  // thread keeps its width and place (see .thread-block in index.css).
+  // One handler for every turn's resize handle (the notes' outer edge,
+  // data-notes-handle), so the memoised turns need no props for it. The block
+  // grows to the right with the notes, and the thread keeps its width and
+  // place (see .thread-block in index.css).
   const resizeNotes = useCallback((e) => {
     const handle = e.target.closest?.('[data-notes-handle]')
     if (!handle) return
-    const outer = handle.dataset.notesHandle === 'outer'
     const notes = handle.parentElement
     const block = notes?.closest('[data-turn]')
     const stage = stageRef.current
@@ -178,32 +176,29 @@ export default function Stage() {
     const roomRight = stageWidth - (block.getBoundingClientRect().left - contentLeft)
     const startBlock = block.getBoundingClientRect().width
     const startNotes = notes.getBoundingClientRect().width
+    // The thread keeps its width, so the block shrinks only until the notes
+    // reach their minimum.
+    const smallestBlock = startBlock - Math.max(0, startNotes - NOTES_MIN)
     const apply = (delta) => {
-      if (!outer) return { notes: clampNotesWidth(startNotes + delta, startBlock), block: null }
-      const nextBlock = clampBlockWidth(startBlock + delta, roomRight)
+      const nextBlock = clampBlockWidth(Math.max(smallestBlock, startBlock + delta), roomRight)
       return { notes: clampNotesWidth(startNotes + (nextBlock - startBlock), nextBlock), block: nextBlock }
     }
     const show = ({ notes: n, block: b }) => {
       setNotesWidth(n)
-      if (b != null) setBlockWidth(b)
+      setBlockWidth(b)
     }
     const save = ({ notes: n, block: b }) => {
       saveNotesWidth(n)
-      if (b != null) saveNotesWidth(b, undefined, BLOCK_WIDTH_KEY)
+      saveNotesWidth(b, undefined, BLOCK_WIDTH_KEY)
     }
     if (e.type === 'dblclick') {
-      setNotesWidth(null)
-      saveNotesWidth(null)
-      if (outer) {
-        setBlockWidth(null)
-        saveNotesWidth(null, undefined, BLOCK_WIDTH_KEY)
-      }
+      show({ notes: null, block: null })
+      save({ notes: null, block: null })
       return
     }
     if (e.type === 'keydown') {
       const step = e.shiftKey ? 64 : 16
-      const toward = outer ? (e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0)
-                           : (e.key === 'ArrowLeft' ? 1 : e.key === 'ArrowRight' ? -1 : 0)
+      const toward = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
       if (!toward) return
       e.preventDefault()
       const next = apply(toward * step)
@@ -214,10 +209,9 @@ export default function Stage() {
     if (e.button !== 0) return
     e.preventDefault()
     const startX = e.clientX
-    let latest = { notes: startNotes, block: outer ? startBlock : null }
+    let latest = null
     const onMove = (ev) => {
-      const travel = ev.clientX - startX
-      latest = apply(outer ? travel : -travel)
+      latest = apply(ev.clientX - startX)
       show(latest)
     }
     const onUp = () => {
@@ -225,7 +219,8 @@ export default function Stage() {
       window.removeEventListener('pointerup', onUp)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
-      save(latest)
+      // A click without a drag keeps the automatic widths.
+      if (latest) save(latest)
     }
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
@@ -289,24 +284,17 @@ const Turn = memo(function Turn({ turn, renderItem, live, isLast, unanswered }) 
         })}
       </div>
       <div className="relative min-w-0 @3xl:border-l @3xl:border-line @3xl:pl-5">
-        {/* Drag (or arrow keys) either edge to resize the notes; double-click for the automatic width. */}
-        <div
-          data-notes-handle="inner"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize margin notes against the thread"
-          title="Drag to resize the notes · double-click to reset"
-          tabIndex={0}
-          className="absolute -left-2 top-0 hidden h-full w-4 cursor-col-resize touch-none @3xl:block after:absolute after:left-[7px] after:top-0 after:h-full after:w-0.5 after:bg-transparent hover:after:bg-accent/50 focus-visible:outline-none focus-visible:after:bg-accent"
-        />
+        {/* Drag (or arrow keys) the notes' outer edge to resize them; double-click for
+            the automatic width. z-10 keeps the handle above the sticky notes list, which
+            would otherwise cover its inner half (and, on Linux, put its scrollbar there). */}
         <div
           data-notes-handle="outer"
           role="separator"
           aria-orientation="vertical"
-          aria-label="Widen or narrow the margin notes"
+          aria-label="Resize margin notes"
           title="Drag to widen the notes · double-click to reset"
           tabIndex={0}
-          className="absolute -right-2 top-0 hidden h-full w-4 cursor-col-resize touch-none @3xl:block after:absolute after:left-[7px] after:top-0 after:h-full after:w-0.5 after:bg-transparent hover:after:bg-accent/50 focus-visible:outline-none focus-visible:after:bg-accent"
+          className="absolute -right-2 top-0 z-10 hidden h-full w-4 cursor-col-resize touch-none @3xl:block after:absolute after:left-[7px] after:top-0 after:h-full after:w-px after:bg-line hover:after:w-0.5 hover:after:bg-accent/50 focus-visible:outline-none focus-visible:after:w-0.5 focus-visible:after:bg-accent"
         />
         {/* Pinned while this turn is on screen, so the plan, Stop and the live
             line stay in view next to a long reply. A notes list taller than the
