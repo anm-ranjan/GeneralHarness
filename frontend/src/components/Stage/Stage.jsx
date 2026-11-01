@@ -161,9 +161,8 @@ export default function Stage() {
   // One handler for every turn's resize handles (data-notes-handle), so the
   // memoised turns need no props for them. "inner" is the divider: the notes
   // take room from the thread and the block keeps its width. "outer" is the
-  // notes' right edge: the block grows with the notes and the thread keeps its
-  // width. The block is centred, so it grows by twice the pointer travel to
-  // keep the edge under the pointer.
+  // notes' right edge: the block grows to the right with the notes, and the
+  // thread keeps its width and place (see .thread-block in index.css).
   const resizeNotes = useCallback((e) => {
     const handle = e.target.closest?.('[data-notes-handle]')
     if (!handle) return
@@ -173,12 +172,15 @@ export default function Stage() {
     const stage = stageRef.current
     if (!notes || !block || !stage) return
     const stageStyle = getComputedStyle(stage)
+    const contentLeft = stage.getBoundingClientRect().left + stage.clientLeft + parseFloat(stageStyle.paddingLeft)
     const stageWidth = stage.clientWidth - parseFloat(stageStyle.paddingLeft) - parseFloat(stageStyle.paddingRight)
+    // Room to the right of the block's (fixed) left edge.
+    const roomRight = stageWidth - (block.getBoundingClientRect().left - contentLeft)
     const startBlock = block.getBoundingClientRect().width
     const startNotes = notes.getBoundingClientRect().width
     const apply = (delta) => {
       if (!outer) return { notes: clampNotesWidth(startNotes + delta, startBlock), block: null }
-      const nextBlock = clampBlockWidth(startBlock + 2 * delta, stageWidth)
+      const nextBlock = clampBlockWidth(startBlock + delta, roomRight)
       return { notes: clampNotesWidth(startNotes + (nextBlock - startBlock), nextBlock), block: nextBlock }
     }
     const show = ({ notes: n, block: b }) => {
@@ -204,7 +206,7 @@ export default function Stage() {
                            : (e.key === 'ArrowLeft' ? 1 : e.key === 'ArrowRight' ? -1 : 0)
       if (!toward) return
       e.preventDefault()
-      const next = apply(toward * step / (outer ? 2 : 1))
+      const next = apply(toward * step)
       show(next)
       save(next)
       return
@@ -247,7 +249,7 @@ export default function Stage() {
       onDoubleClick={resizeNotes}
       onKeyDown={resizeNotes}
     >
-      <div className="max-w-[var(--thread-block-w,clamp(1080px,72cqw,1440px))] mx-auto flex flex-col gap-10">
+      <div className="thread-block flex flex-col gap-10">
         {turns.map((turn, i) => (
           <Turn
             key={turn.id}
