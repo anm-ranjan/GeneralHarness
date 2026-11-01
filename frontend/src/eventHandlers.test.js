@@ -591,3 +591,58 @@ test('a reloaded finished turn keeps its answered questions and its error', () =
   const resolved = flatten(ctx.actions).find(a => a.type === 'RESOLVE_QUESTION')
   assert.deepEqual(resolved.payload, { questionId: 'q1', answer: 'Server', answered: true })
 })
+
+test('a reopened thread keeps its asides with their answers', async () => {
+  const { reducer, initialState } = await import('./context/appReducer.js')
+  let state = initialState
+  const ctx = { dispatch: action => { state = reducer(state, action) }, stateRef: { get current() { return state } } }
+  handleSessionEvent({
+    type: 'session_loaded',
+    data: {
+      meta: { status: 'idle' },
+      events: [
+        { type: 'user_message', data: { text: 'build it' } },
+        { type: 'assistant_message', data: { markdown: 'Built.' } },
+        { type: 'run_finished', data: { reason: 'completed' } },
+        { type: 'aside_question', data: { aside_id: 'aside_1', text: 'Which port?' } },
+        { type: 'aside_answer', data: { aside_id: 'aside_1', markdown: 'Port 8420.' } },
+      ],
+    },
+  }, ctx.dispatch, ctx.stateRef)
+  const asides = state.stageItems.filter(item => item.type === 'aside')
+  assert.equal(asides.length, 1)
+  assert.equal(asides[0].question, 'Which port?')
+  assert.equal(asides[0].answer, 'Port 8420.')
+  assert.equal(asides[0].pending, false)
+})
+
+test('an aside asked mid-run goes in before the live stream and open tool group', async () => {
+  const { reducer, initialState } = await import('./context/appReducer.js')
+  let state = {
+    ...initialState,
+    stageItems: [
+      { type: 'user_message', text: 'go', _id: 'u' },
+      { type: 'work_group', tools: [], finalized: false, _id: 'w' },
+      { type: 'assistant_stream', text: 'Work', _id: 's' },
+    ],
+  }
+  state = reducer(state, { type: 'APPEND_STAGE_ITEM', payload: { type: 'aside', asideId: 'a1', question: 'q', pending: true } })
+  assert.deepEqual(state.stageItems.map(item => item.type), ['user_message', 'aside', 'work_group', 'assistant_stream'])
+  // The stream still updates in place.
+  state = reducer(state, { type: 'APPEND_ASSISTANT_DELTA', payload: 'ing' })
+  assert.equal(state.stageItems.at(-1).text, 'Working')
+  state = reducer(state, { type: 'RESOLVE_ASIDE', payload: { asideId: 'a1', error: 'Codex is unavailable.' } })
+  const resolved = state.stageItems.find(item => item.type === 'aside')
+  assert.equal(resolved.error, 'Codex is unavailable.')
+  assert.equal(resolved.pending, false)
+})
+
+test('isAside recognises the command only at the start', async () => {
+  const { isAside, isSlashCommand } = await import('./constants.js')
+  assert.equal(isAside('/aside why?'), true)
+  assert.equal(isAside('  /ASIDE'), true)
+  assert.equal(isAside('/asides x'), false)
+  assert.equal(isAside('see /aside'), false)
+  // Not an idle-only slash command, so it can be sent mid-run.
+  assert.equal(isSlashCommand('/aside why?'), false)
+})

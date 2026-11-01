@@ -431,6 +431,9 @@ _READ_ONLY_TOOLS = {
     "Read", "Glob", "Grep", "WebSearch", "WebFetch", "TodoWrite", "Task",
     "NotebookRead", "ListMcpResourcesTool", "ReadMcpResourceTool",
 }
+# What an /aside may use: reading only. Task could start subagents that write,
+# and TodoWrite would change the thread's plan.
+_ASIDE_TOOLS = _READ_ONLY_TOOLS - {"Task", "TodoWrite"}
 
 
 def _field(value: Any, name: str, default: Any = None) -> Any:
@@ -701,6 +704,70 @@ class ClaudeAgentProvider:
         self.approval_mode = approval_mode
         self.cli_path = cli_path or None
         self.reasoning_effort = reasoning_effort or None
+
+    async def aside(self, meta, question: str, workspace: str) -> tuple[str, list[dict[str, Any]]]:
+        """Answer an /aside on a fork of the thread's Claude session.
+
+        ``fork_session`` resumes the session under a new id, so the thread
+        keeps resuming the original and never sees the question or answer.
+        Only reading tools are allowed: no edits, no shell, and no Task or
+        TodoWrite, which could start writing subagents or change the plan.
+        Returns the answer and the usage records for the ledger.
+        """
+        from claude_agent_sdk import (
+            AssistantMessage,
+            ClaudeAgentOptions,
+            ClaudeSDKClient,
+            PermissionResultAllow,
+            PermissionResultDeny,
+            ResultMessage,
+            TextBlock,
+        )
+
+        session_id = (meta.claude_state or {}).get("session_id")
+        if not session_id:
+            raise RuntimeError("This thread has no Claude conversation yet to ask about.")
+        workspace_path = Path(workspace).expanduser().resolve()
+
+        async def read_only(tool_name: str, tool_input: dict[str, Any], context):
+            if tool_name in _ASIDE_TOOLS:
+                return PermissionResultAllow()
+            return PermissionResultDeny(message="An aside is read-only; answer from what you can read.")
+
+        options = ClaudeAgentOptions(
+            cwd=str(workspace_path),
+            model=self.model,
+            effort=self.reasoning_effort,
+            permission_mode="default",
+            resume=session_id,
+            fork_session=True,
+            add_dirs=[r for r in self.allowed_roots if r != str(workspace_path)],
+            max_turns=self.max_turns,
+            system_prompt={
+                "type": "preset",
+                "preset": "claude_code",
+                "append": build_system_prompt_append(meta),
+            },
+            cli_path=self.cli_path,
+            can_use_tool=read_only,
+            setting_sources=[],
+        )
+        texts: list[str] = []
+        result_msg = None
+        async with asyncio.timeout(self.timeout_seconds):
+            async with ClaudeSDKClient(options=options) as client:
+                await client.query(question)
+                async for message in client.receive_response():
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock) and block.text.strip():
+                                texts.append(block.text)
+                    elif isinstance(message, ResultMessage):
+                        result_msg = message
+        answer = str(_field(result_msg, "result", "") or "").strip() or (texts[-1].strip() if texts else "")
+        if result_msg is not None and _field(result_msg, "is_error", False) and not answer:
+            raise RuntimeError("Claude could not answer the aside.")
+        return answer, (claude_usage_metrics(result_msg) if result_msg is not None else [])
 
     async def run(
         self,

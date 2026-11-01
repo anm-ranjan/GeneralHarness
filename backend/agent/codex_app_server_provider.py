@@ -239,6 +239,11 @@ class AppServerTransport:
                 for receiver_thread_id in item.get("receiverThreadIds") or []:
                     self._register_thread_owner(receiver_thread_id, sender_owner)
                 owner_thread_id = owner_thread_id or sender_owner
+        if thread_id and thread_id in self._thread_queues and self._thread_owners.get(thread_id) == thread_id:
+            # A thread with its own subscription (an /aside fork) keeps its
+            # events even if they name a parent thread, which is the main
+            # run's; otherwise a fork mid-run would feed the running turn.
+            return thread_id
         return owner_thread_id
 
     def _fail_all(self, exc: BaseException) -> None:
@@ -806,6 +811,15 @@ async def _wait_for_cancel(cancel_event: threading.Event) -> None:
         await asyncio.sleep(0.1)
 
 
+class _SilentUI:
+    """Accepts every UI call and shows nothing: an /aside only wants the answer."""
+
+    run_settings = {"verbose_tools": False}
+
+    def __getattr__(self, _name):
+        return lambda *args, **kwargs: None
+
+
 class CodexAppServerProvider:
     def __init__(
         self,
@@ -1209,6 +1223,75 @@ class CodexAppServerProvider:
         error = self._turn_error(completed_params or {})
         ui.show_error(f"Codex turn failed{f': {error}' if error else '.'}")
         ui.show_agent_finished("error")
+
+    async def aside(
+        self,
+        thread_id: str,
+        question: str,
+        workspace: str,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> str:
+        """Answer an /aside on an ephemeral, read-only fork of ``thread_id``.
+
+        The fork carries the thread's context but is never saved, and nothing
+        it does reaches the original thread. Commands run in a read-only
+        sandbox with approvals off, so anything needing more is refused.
+        """
+        await self.client.initialize(utils.CODEX_APP_SERVER_EXPERIMENTAL_API)
+        forked = await self.transport.request(
+            "thread/fork",
+            {
+                "threadId": thread_id,
+                "ephemeral": True,
+                "excludeTurns": True,
+                "cwd": workspace,
+                "approvalPolicy": "never",
+                "sandbox": "read-only",
+            },
+            timeout=60,
+        )
+        fork_id = extract_thread_id_from_result(forked)
+        if not fork_id:
+            raise CodexAppServerRunError("Codex did not return a forked thread.")
+        queue = self.transport.subscribe_thread(fork_id)
+        try:
+            started = await self.client.turn_start(
+                fork_id,
+                question,
+                cwd=workspace,
+                approval_policy="never",
+                sandbox="read-only",
+                model=model,
+                effort=reasoning_effort,
+            )
+            turn_id = extract_turn_id_from_result(started)
+            final_messages: list[str] = []
+            deltas: list[str] = []
+            phases: dict[str, str] = {}
+            pending: dict[str, list[str]] = {}
+            sink = _SilentUI()
+            while True:
+                queued = await asyncio.wait_for(queue.get(), timeout=self.timeout_seconds)
+                if isinstance(queued, BaseException):
+                    raise queued
+                if _is_server_request(queued):
+                    # Read-only with approvals off: nothing may be granted.
+                    await self.transport.respond_error(queued.get("id"), -32000, "An aside is read-only.")
+                    continue
+                self._emit_ui_event(queued, sink, final_messages, deltas, phases, pending)
+                if queued.get("method") == "turn/completed":
+                    params = queued.get("params") or {}
+                    if turn_id and params.get("turnId") not in (None, turn_id):
+                        continue
+                    status = self._turn_status(params)
+                    if status != "completed":
+                        error = self._turn_error(params)
+                        raise CodexAppServerRunError(error or f"Codex turn {status or 'failed'}.")
+                    break
+            return "".join(deltas).strip() or (final_messages[-1].strip() if final_messages else "")
+        finally:
+            self.transport.unsubscribe_thread(fork_id)
 
     async def _handle_server_request(self, msg: dict[str, Any], ui) -> None:
         method = msg.get("method", "")
@@ -1703,6 +1786,14 @@ class CodexAppServerRuntime:
             self._provider.run(**run_kwargs), self._loop
         )
         future.result()
+
+    def aside(self, **kwargs: Any) -> str:
+        """Blocking /aside on the shared app-server; runs beside any live turn."""
+        self.start()
+        if self._loop is None or self._provider is None:
+            raise CodexAppServerRunError("Codex runtime did not initialize.")
+        future = asyncio.run_coroutine_threadsafe(self._provider.aside(**kwargs), self._loop)
+        return future.result()
 
     def list_models(self) -> dict[str, Any]:
         self.start()

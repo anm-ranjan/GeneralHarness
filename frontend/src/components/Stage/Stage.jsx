@@ -16,6 +16,7 @@ import { buildTurns, sameTurn, unansweredLastTurn } from '../../turnModel'
 import ApprovalCard from './ApprovalCard'
 import { clampNotesWidth, readNotesWidth, saveNotesWidth, BLOCK_WIDTH_KEY } from '../../notesWidth'
 import QuestionCard from './QuestionCard'
+import AsideBox from './AsideBox'
 
 export default function Stage() {
   const { state, dispatch } = useApp()
@@ -118,6 +119,8 @@ export default function Stage() {
         return <MessageBubble role="assistant" markdown={item.markdown} />
       case 'assistant_stream':
         return <MessageBubble role="assistant" markdown={item.text} streaming />
+      case 'aside':
+        return <AsideBox question={item.question} answer={item.answer} error={item.error} pending={item.pending} />
       case 'status':
         return <StatusMessage text={item.text} />
       case 'error':

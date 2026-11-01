@@ -51,7 +51,7 @@ export function isCodexProtocolStatus(text) {
 // just its reasoning. Status lines and protocol items still stay live-only.
 const HISTORICAL_ITEM_TYPES = new Set([
   'user_message', 'assistant_message', 'question', 'error',
-  'codex_command', 'codex_file_change', 'turn_note',
+  'codex_command', 'codex_file_change', 'turn_note', 'aside',
 ])
 
 function indexedDispatch(dispatch, eventIndex, historical = false) {
@@ -168,6 +168,16 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
 
     case 'plan_update':
       dispatch({ type: 'SET_PLAN', payload: data.items || [] })
+      break
+
+    case 'aside_question':
+      // A side question: shown in its own box, answered on a copy of the
+      // context, and never part of any model context.
+      dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'aside', asideId: data.aside_id, question: data.text || '', pending: true } })
+      break
+
+    case 'aside_answer':
+      dispatch({ type: 'RESOLVE_ASIDE', payload: { asideId: data.aside_id, markdown: data.markdown || '', error: data.error || '' } })
       break
 
     case 'turn_note':

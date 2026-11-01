@@ -4,6 +4,7 @@ export const SLASH_CMDS = ['/verbose', '/approve', '/clear', '/chdir', '/model',
 export const CHATS_PROJECT_ID = '__chats__'
 
 export const SUGGESTED_SLASH_COMMANDS = [
+  '/aside what does this function return?',
   '/model native',
   '/model codex',
   '/model claude',
@@ -29,6 +30,12 @@ export const MOD_KEY_LABEL = IS_MAC ? '⌘' : 'Ctrl+'
 
 export function shortcutLabel(key) {
   return `${MOD_KEY_LABEL}${key}`
+}
+
+// "/aside <question>": a side question, sendable mid-run (not a slash command
+// in the idle-only sense, so it is not in SLASH_CMDS).
+export function isAside(text) {
+  return /^\/aside(\s|$)/i.test((text || '').trim())
 }
 
 export function isSlashCommand(text) {

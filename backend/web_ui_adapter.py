@@ -586,3 +586,43 @@ class SubagentUI:
 
     def show_agent_finished(self, reason: str) -> None:
         pass
+
+
+class AsideUI:
+    """UI for a native /aside: a read-only side run on a copy of the context.
+
+    Modelled on SubagentUI, but needs no parent run, since an aside may be
+    asked while the thread is idle. It keeps the answer and the token usage
+    and shows nothing else: no plan, notes, statuses or tool steps reach the
+    thread, and it can neither approve a write nor ask the user a question.
+    """
+
+    def __init__(self, store: SessionStore, session_id: str, run_settings: dict | None = None):
+        self._store = store
+        self._sid = session_id
+        self.run_settings = dict(run_settings or {})
+        self.result = ""
+
+    def show_assistant_markdown(self, text: str) -> None:
+        self.result = text
+
+    def request_approval(self, tool_name: str, args_json: str, diff_preview: str | None) -> bool:
+        return False
+
+    def ask_user_question(self, question: str, options=None, allow_free_text: bool = True):
+        return None
+
+    def run_myharness_context(self, arguments: dict) -> str:
+        return session_context.execute(self._store, self._sid, arguments)
+
+    def archive_tool_evidence(self, name, arguments, result):
+        return self._store.native_evidence(self._sid).archive(name, arguments, result)
+
+    def show_api_metrics(self, metrics: dict) -> None:
+        usage_ledger.record(self._store, self._sid, metrics)
+
+    def __getattr__(self, name: str):
+        # Every other show_*/snapshot hook: deliberately silent.
+        if name.startswith(("show_", "snapshot_")):
+            return lambda *args, **kwargs: None
+        raise AttributeError(name)

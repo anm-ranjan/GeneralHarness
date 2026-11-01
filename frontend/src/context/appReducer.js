@@ -131,6 +131,22 @@ function buildNameMaps(projects) {
   return { projectRoots, projectNames, taskNames }
 }
 
+// The live tail of a running turn: items updated in place while they are last
+// (the streaming reply or reasoning, the open tool group).
+function isLiveTail(item) {
+  return item.type === 'assistant_stream' || item.type === 'thinking_stream'
+    || (item.type === 'work_group' && !item.finalized)
+}
+
+// An /aside asked mid-run goes in before the live tail, so the stream and the
+// open tool group stay last and keep updating in place.
+function insertAside(items, item) {
+  let at = items.length
+  while (at > 0 && isLiveTail(items[at - 1])) at -= 1
+  const entry = { ...item, _id: item._id || `si_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }
+  return [...items.slice(0, at), entry, ...items.slice(at)]
+}
+
 function appendStageItem(items, item) {
   // A streamed thinking trace is live-only and never replayed, so anything
   // appended after it supersedes it; dropping it here keeps a live stage and a
@@ -540,10 +556,22 @@ export function reducer(state, action) {
 
     case 'APPEND_STAGE_ITEM': {
       const item = action.payload
+      if (item.type === 'aside') return { ...state, stageItems: insertAside(state.stageItems, item) }
       const items = item.type === 'assistant_message' && !item.autoPreviewPath && item.markdown
         ? dropLinkedAutoPreviews(state.stageItems, item.markdown)
         : state.stageItems
       return { ...state, stageItems: appendStageItem(items, item) }
+    }
+
+    case 'RESOLVE_ASIDE': {
+      const { asideId, markdown, error } = action.payload
+      let found = false
+      const stageItems = state.stageItems.map(item => {
+        if (item.type !== 'aside' || item.asideId !== asideId) return item
+        found = true
+        return { ...item, answer: markdown || '', error: error || '', pending: false }
+      })
+      return found ? { ...state, stageItems } : state
     }
 
     case 'APPEND_ASSISTANT_DELTA': {

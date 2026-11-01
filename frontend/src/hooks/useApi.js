@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { api } from '../api'
 import { useAppDispatch, useAppStateRef } from '../context/AppContext'
 import { submitQuestion } from './questionSubmission.js'
+import { isAside } from '../constants.js'
 
 // Deliberately non-reactive: these callbacks read state on invocation rather
 // than subscribing, so every component using them keeps stable handlers and
@@ -11,7 +12,8 @@ export default function useApi() {
   const stateRef = useAppStateRef()
 
   const sendMessage = useCallback(async (sessionId, text, attachments = [], mode = 'queue') => {
-    const wasRunning = stateRef.current.isRunning
+    // An /aside is answered beside the thread and never starts a run.
+    const wasRunning = stateRef.current.isRunning || isAside(text)
     if (!wasRunning) dispatch({ type: 'SET_RUNNING' })
     try {
       return await api('POST', `/api/sessions/${encodeURIComponent(sessionId)}/message`, { text, attachments, mode })

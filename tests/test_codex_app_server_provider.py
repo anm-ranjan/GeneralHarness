@@ -42,6 +42,12 @@ class FakeTransport:
     async def respond_error(self, request_id, code, message):
         self.errors.append((request_id, code, message))
 
+    async def request(self, method, params=None, timeout=60):
+        self.requests = getattr(self, "requests", []) + [(method, params)]
+        if method == "thread/fork":
+            return {"thread": {"id": "thr_fork"}}
+        return {}
+
     async def stderr_text(self):
         return ""
 
@@ -573,6 +579,62 @@ class CodexAppServerProviderTests(unittest.IsolatedAsyncioTestCase):
         await self.run_provider(provider, make_meta(), ui, FakeStore())
 
         self.assertEqual([entry[2] for entry in ui.provider_tools], ["failed", "failed"])
+
+    async def test_aside_answers_on_an_ephemeral_read_only_fork(self):
+        provider, transport, client = make_provider()
+        main_queue = transport.subscribe_thread("thr_existing")
+        client.emit_messages = [
+            {"method": "item/completed", "params": {"item": {"id": "a1", "type": "agent_message", "phase": "final_answer", "text": "It returns a list."}}},
+        ]
+
+        answer = await provider.aside(
+            thread_id="thr_existing", question="What does f return?", workspace=self.tmp.name)
+
+        self.assertEqual(answer, "It returns a list.")
+        method, params = transport.requests[0]
+        self.assertEqual(method, "thread/fork")
+        self.assertEqual(params["threadId"], "thr_existing")
+        self.assertTrue(params["ephemeral"])
+        self.assertEqual((params["sandbox"], params["approvalPolicy"]), ("read-only", "never"))
+        thread_id, text, kwargs = client.turn_calls[0]
+        self.assertEqual((thread_id, text), ("thr_fork", "What does f return?"))
+        self.assertEqual((kwargs["sandbox"], kwargs["approval_policy"]), ("read-only", "never"))
+        # The fork's subscription is gone and the main thread saw nothing.
+        self.assertNotIn("thr_fork", transport.queues)
+        self.assertTrue(main_queue.empty())
+
+    async def test_aside_declines_server_requests_and_reports_failures(self):
+        provider, transport, client = make_provider()
+        client.emit_messages = [{"method": "item/commandExecution/requestApproval", "params": {}}]
+        original = client.turn_start
+
+        async def with_request(thread_id, text, *args, **kwargs):
+            # A server request carries an id; give the first message one.
+            result = await original(thread_id, text, *args, **kwargs)
+            queue = transport.queues[thread_id]
+            items = []
+            while not queue.empty():
+                items.append(queue.get_nowait())
+            items[0]["id"] = 7
+            for item in items:
+                queue.put_nowait(item)
+            return result
+
+        client.turn_start = with_request
+        client.next_status = "failed"
+        with self.assertRaises(provider_module.CodexAppServerRunError):
+            await provider.aside(thread_id="thr_existing", question="q", workspace=self.tmp.name)
+        self.assertEqual(transport.errors[0][0], 7)
+
+    def test_a_subscribed_fork_keeps_its_events_from_the_parent_thread(self):
+        transport = provider_module.AppServerTransport()
+        transport.subscribe_thread("thr_main")
+        transport.subscribe_thread("thr_fork")
+        forked = {"method": "item/completed", "params": {"threadId": "thr_fork", "parentThreadId": "thr_main"}}
+        self.assertEqual(transport._owner_for_message(forked), "thr_fork")
+        # An unsubscribed child (a subagent) still reports to its parent.
+        child = {"method": "item/completed", "params": {"threadId": "thr_child", "parentThreadId": "thr_main"}}
+        self.assertEqual(transport._owner_for_message(child), "thr_main")
 
     async def test_transport_eof_fails_pending_requests_and_active_turns(self):
         class EmptyStdout:

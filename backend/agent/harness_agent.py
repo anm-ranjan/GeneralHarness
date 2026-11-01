@@ -51,6 +51,9 @@ JOB_CONTROL_TOOL_NAMES = frozenset({"shell_check", "shell_kill"})
 # instead so evidence remains available after backend restarts and in backups.
 _local_evidence_dir = None
 
+# What a tool_policy="read_only" agent (a child agent or an /aside) may call.
+_READ_ONLY_TOOL_NAMES = frozenset(tool["function"]["name"] for tool in READ_ONLY_TOOLS)
+
 
 def local_history_evidence():
     global _local_evidence_dir
@@ -1926,6 +1929,23 @@ def run_agent(
                     }
                     messages.append(tool_msg)
                     turn_messages.append(tool_msg)
+                    continue
+
+                if tool_policy == "read_only" and func_name not in _READ_ONLY_TOOL_NAMES and not (
+                    orchestrator is not None and func_name in COLLABORATION_TOOL_NAMES
+                ):
+                    # The policy only narrows the tools offered; a call to any
+                    # other tool must still be refused, or under auto_approve
+                    # a read-only agent could write files or run commands.
+                    tool_msg = {
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": f"ERROR: {func_name} is not available here: this agent is read-only.",
+                    }
+                    messages.append(tool_msg)
+                    turn_messages.append(tool_msg)
+                    if ui:
+                        ui.show_status(f"Refused {func_name}: read-only")
                     continue
 
                 status_line = _tool_status_line(func_name, func_args)

@@ -11,6 +11,7 @@ from web_models import (
     ApprovalResponse, EventEnvelope, EventType, QuestionResponse, SendMessageRequest,
 )
 
+import aside
 import web_app
 import web_helpers
 import web_runs
@@ -134,6 +135,14 @@ async def session_events(websocket: WebSocket, session_id: str):
         web_app._manager.connections.disconnect(session_id, websocket)
 
 
+def _aside_question(text: str) -> str | None:
+    """The question of an /aside message, "" for a bare /aside, else None."""
+    stripped = (text or "").strip()
+    if stripped[:6].lower() != "/aside" or (len(stripped) > 6 and not stripped[6].isspace()):
+        return None
+    return stripped[6:].strip()
+
+
 @router.post("/api/sessions/{session_id}/message")
 async def send_message(session_id: str, req: SendMessageRequest):
     meta = web_app._store.load_session(session_id)
@@ -145,6 +154,23 @@ async def send_message(session_id: str, req: SendMessageRequest):
 
     workspace_root = web_helpers._workspace_root_for_session(meta)
     req_attachments = _request_attachments(req)
+
+    # /aside runs beside the thread, idle or mid-run, on a copy of its context;
+    # it is not a turn, so it skips the steering, queue and idle-only checks.
+    question = _aside_question(req.text)
+    if question is not None:
+        if not question:
+            raise HTTPException(status_code=400, detail="Usage: /aside <question>")
+        if req_attachments:
+            raise HTTPException(status_code=400, detail="An aside cannot take attachments.")
+        blocked = web_runs._message_block_detail(meta, question, workspace_root)
+        if blocked:
+            raise HTTPException(status_code=409, detail=blocked)
+        try:
+            aside_id = aside.start(session_id, meta, question, workspace_root)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"status": "aside", "session_id": session_id, "aside_id": aside_id}
 
     if req.mode == "steer":
         if not req.text.strip() or req.text.lstrip().startswith("/") or req_attachments:

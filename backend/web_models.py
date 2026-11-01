@@ -40,6 +40,10 @@ class EventType(str, Enum):
     WORKSPACE_CHANGED = "workspace_changed"
     PLAN_UPDATE = "plan_update"
     TURN_NOTE = "turn_note"
+    # /aside: a side question answered from a copy of the thread's context.
+    # Shown in the transcript, never read back into any model context.
+    ASIDE_QUESTION = "aside_question"
+    ASIDE_ANSWER = "aside_answer"
 
 
 def _evt_id() -> str:
