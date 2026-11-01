@@ -4,6 +4,7 @@ import useSessionTree from '../../hooks/useSessionTree'
 import useSelectSession from '../../hooks/useSelectSession'
 import { importSessionBackup, isAbandonedRequest, downloadSessionBackup, downloadSessionExport } from '../../api'
 import SearchInput from './SearchInput'
+import BrandMark from '../BrandMark'
 import HostSwitcher from './HostSwitcher'
 import ProjectNode from './ProjectNode'
 import SessionGroup from './SessionGroup'
@@ -247,7 +248,7 @@ export default function Sidebar() {
   return (
     <div className="flex flex-col h-full pl-6 pr-4 pt-7 pb-5">
       <div className="flex items-center gap-2 mb-5">
-        <h1 className="font-display text-[19px] font-bold leading-none text-text-bright">{appName}</h1>
+        <h1 className="leading-none"><BrandMark name={appName} /></h1>
         <button
           onClick={() => dispatch({ type: 'CLEAR_SESSION' })}
           disabled={!currentSessionId}

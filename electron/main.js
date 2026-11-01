@@ -321,9 +321,16 @@ async function resolveBackend() {
   return health;
 }
 
+// On Linux the app name becomes each window's WM_CLASS, which the dock
+// matches against the launcher's StartupWMClass (desktopName without
+// ".desktop"). Renaming it to the display name ("2B|!2B") left the running
+// window unmatched, so the dock showed it as an unknown app with a generic
+// icon. Linux keeps that class; the display name is used for titles and labels.
+const LINUX_WINDOW_CLASS = String(require("./package.json").desktopName || "myharness-electron").replace(/\.desktop$/, "");
+
 function applyBranding(health) {
   displayName = String(health?.app_name || displayName).trim() || "MyHarness";
-  app.setName(displayName);
+  app.setName(process.platform === "linux" ? LINUX_WINDOW_CLASS : displayName);
 }
 
 function isAllowedMainUrl(targetUrl) {

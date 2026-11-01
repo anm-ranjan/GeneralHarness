@@ -4,6 +4,7 @@ import { copyText } from '../clipboard'
 import { sessionReference } from '../sessionLabels'
 import { shortcutLabel } from '../constants'
 import SessionBreadcrumb from './SessionBreadcrumb'
+import BrandMark from './BrandMark'
 import { SidebarIcon } from './Sidebar/Sidebar'
 
 // Quiet header: where you are on the left, two plain text links on the right.
@@ -60,7 +61,7 @@ export default function TopBar() {
           <span className="sr-only" role="status">{copyState}</span>
         </>
       ) : (
-        <h2 className="font-display text-[20px] font-bold text-text-bright">{state.appName}</h2>
+        <h2 className="leading-none"><BrandMark name={state.appName} className="h-8 w-8" /></h2>
       )}
 
       <div className="ml-auto flex shrink-0 items-center gap-4 whitespace-nowrap">
