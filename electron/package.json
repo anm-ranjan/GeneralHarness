@@ -65,16 +65,19 @@
       "output": "dist"
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.png"
     },
     "mac": {
-      "target": "dmg"
+      "target": "dmg",
+      "icon": "build/icon.icns"
     },
     "linux": {
       "target": [
         "AppImage",
         "deb"
       ],
+      "icon": "build/icon.png",
       "category": "Development",
       "maintainer": "anm-ranjan",
       "syncDesktopName": true
