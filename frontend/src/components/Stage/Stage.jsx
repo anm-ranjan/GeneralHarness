@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api'
 import { useApp, useAppStateRef } from '../../context/AppContext'
 import { handleSessionEvent } from '../../eventHandlers'
+import { fetchEventsBefore, stageItemsForEvents } from '../../olderEvents'
 import { findAnchorEventIndex } from '../../search'
 import useWebSocket from '../../hooks/useWebSocket'
 import useApi from '../../hooks/useApi'
@@ -32,12 +33,46 @@ export default function Stage() {
 
   useWebSocket(state.currentSessionId, dispatch, stateRef)
 
+  // Set while earlier messages are put in front, so the view stays where the
+  // reader is instead of jumping to the bottom.
+  const keepScrollRef = useRef(null)
+  const [olderState, setOlderState] = useState({ loading: false, error: '' })
+
   useEffect(() => {
-    if (state.scrollTarget) return
-    if (stageRef.current) {
-      stageRef.current.scrollTop = stageRef.current.scrollHeight
+    const stage = stageRef.current
+    if (!stage) return
+    const keep = keepScrollRef.current
+    if (keep) {
+      keepScrollRef.current = null
+      stage.scrollTop = stage.scrollHeight - keep.height + keep.top
+      return
     }
+    if (state.scrollTarget) return
+    stage.scrollTop = stage.scrollHeight
   }, [state.stageItems, state.scrollTarget])
+
+  useEffect(() => { setOlderState({ loading: false, error: '' }) }, [state.currentSessionId])
+
+  const showEarlier = useCallback(async () => {
+    const current = stateRef.current
+    const sessionId = current.currentSessionId
+    const offset = current.eventWindowOffset
+    if (!sessionId || offset <= 0) return
+    setOlderState({ loading: true, error: '' })
+    try {
+      const events = await fetchEventsBefore(offset, (start, limit) => api(
+        'GET', `/api/sessions/${encodeURIComponent(sessionId)}/events?offset=${start}&limit=${limit}`,
+      ))
+      const items = stageItemsForEvents(events, stateRef.current)
+      const stage = stageRef.current
+      if (stage) keepScrollRef.current = { height: stage.scrollHeight, top: stage.scrollTop }
+      dispatch({ type: 'PREPEND_STAGE_ITEMS', payload: { sessionId, items, offset } })
+      setOlderState({ loading: false, error: '' })
+    } catch (err) {
+      keepScrollRef.current = null
+      setOlderState({ loading: false, error: err.detail || err.message || 'Could not load earlier messages.' })
+    }
+  }, [dispatch, stateRef])
 
   // Search deep-linking: once the session's events are loaded, scroll to the
   // stage item nearest the targeted event index, paging in an older window of
@@ -225,6 +260,19 @@ export default function Stage() {
       onKeyDown={resizeNotes}
     >
       <div className="thread-block flex flex-col gap-10">
+        {state.eventWindowOffset > 0 && !state.isReplaying && (
+          <div className="flex items-center justify-center gap-3 text-[12.5px] text-faint">
+            <button
+              type="button"
+              onClick={showEarlier}
+              disabled={olderState.loading}
+              className="rounded-full border border-line px-3 py-1 hover:border-accent hover:text-accent disabled:opacity-60"
+            >
+              {olderState.loading ? 'Loading earlier messages…' : 'Show earlier messages'}
+            </button>
+            {olderState.error && <span className="text-danger">{olderState.error}</span>}
+          </div>
+        )}
         {turns.map((turn, i) => (
           <Turn
             key={turn.id}

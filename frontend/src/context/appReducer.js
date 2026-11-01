@@ -683,6 +683,14 @@ export function reducer(state, action) {
     case 'CLEAR_STAGE':
       return { ...state, stageItems: [] }
 
+    // Older events loaded on request, placed before what is on screen. Ignored
+    // if the user has since switched threads or the window moved.
+    case 'PREPEND_STAGE_ITEMS': {
+      const { sessionId, items, offset } = action.payload
+      if (sessionId !== state.currentSessionId || offset !== state.eventWindowOffset) return state
+      return { ...state, stageItems: [...items, ...state.stageItems], eventWindowOffset: 0 }
+    }
+
     case 'SET_CONTEXT': {
       const { percent, label, tokens } = action.payload
       return {
