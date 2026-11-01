@@ -60,6 +60,25 @@ def _thread_id_from_message(msg: dict[str, Any]) -> str | None:
     return None
 
 
+def _completes_turn(msg: dict[str, Any], thread_id: str | None, turn_id: str | None) -> bool:
+    """Whether ``msg`` is the end of this thread's turn, not a subagent's.
+
+    Subagent threads share the parent's queue and finish their own turns
+    mid-run. Current Codex nests the id (``params.turn.id``) rather than
+    sending ``turnId``, so matching on ``turnId`` alone let the first
+    subagent to finish end the parent's turn with the subagent's answer.
+    """
+    if msg.get("method") != "turn/completed":
+        return False
+    sender = _thread_id_from_message(msg)
+    if sender and thread_id and sender != thread_id:
+        return False
+    params = msg.get("params") or {}
+    turn = params.get("turn") if isinstance(params.get("turn"), dict) else {}
+    completed = params.get("turnId") or params.get("turn_id") or turn.get("id")
+    return not turn_id or completed in (None, turn_id)
+
+
 def _parent_thread_id_from_message(msg: dict[str, Any]) -> str | None:
     params = msg.get("params")
     if not isinstance(params, dict):
@@ -1167,7 +1186,8 @@ class CodexAppServerProvider:
                 before_final_count = len(final_messages)
                 store.append_codex_raw_event(meta.id, persisted_msg)
                 self._emit_ui_event(
-                    msg, ui, final_messages, deltas, agent_message_phases, pending_deltas
+                    msg, ui, final_messages, deltas, agent_message_phases, pending_deltas,
+                    root_thread_id=thread_id,
                 )
                 if (
                     not first_response_seen
@@ -1182,13 +1202,8 @@ class CodexAppServerProvider:
                         f"Codex first response after {_elapsed(stream_started_at)}.",
                     )
 
-                if msg.get("method") == "turn/completed":
-                    params = msg.get("params") or {}
-                    if (
-                        params.get("turnId") in (None, turn_id)
-                        or params.get("turn_id") == turn_id
-                    ):
-                        completed_params = params
+                if _completes_turn(msg, thread_id, turn_id):
+                    completed_params = msg.get("params") or {}
         finally:
             if active_run is not None:
                 active_run.steering_open = False
@@ -1279,11 +1294,11 @@ class CodexAppServerProvider:
                     # Read-only with approvals off: nothing may be granted.
                     await self.transport.respond_error(queued.get("id"), -32000, "An aside is read-only.")
                     continue
-                self._emit_ui_event(queued, sink, final_messages, deltas, phases, pending)
-                if queued.get("method") == "turn/completed":
+                self._emit_ui_event(
+                    queued, sink, final_messages, deltas, phases, pending, root_thread_id=fork_id,
+                )
+                if _completes_turn(queued, fork_id, turn_id):
                     params = queued.get("params") or {}
-                    if turn_id and params.get("turnId") not in (None, turn_id):
-                        continue
                     status = self._turn_status(params)
                     if status != "completed":
                         error = self._turn_error(params)
@@ -1590,6 +1605,36 @@ class CodexAppServerProvider:
                 item_id=item.get("id"),
             )
 
+    def _emit_child_item(self, msg: dict[str, Any], ui, child_thread_id: str) -> None:
+        method = msg.get("method", "")
+        params = msg.get("params") or {}
+        if method == "thread/tokenUsage/updated":
+            # Subagent tokens are real spend; they count toward the run.
+            metrics = codex_usage_metrics(params, self._thread_models)
+            if metrics:
+                ui.show_api_metrics(metrics)
+            return
+        item = params.get("item") if isinstance(params, dict) else None
+        if not isinstance(item, dict):
+            return
+        item_type = item.get("type", "")
+        if item_type in {"command_execution", "commandExecution"} and method in {"item/started", "item/completed"}:
+            started = method == "item/started"
+            fields = {"tool": "shell_run", "item_id": item.get("id")}
+            if started:
+                fields["text"] = f"Run: {item.get('command', '')}"
+            else:
+                fields["ok"] = item.get("status") == "completed"
+            # No "status" field: these are progress lines, not agent state.
+            self._emit_agent_event(
+                ui, "tool_call" if started else "tool_result",
+                agent_id=child_thread_id, thread_id=child_thread_id, source=method, **fields,
+            )
+            return
+        if item_type in {"file_change", "fileChange"} and method == "item/completed":
+            for path, action in self._file_changes(item):
+                ui.show_observed_file_change(path, action, "codex")
+
     @staticmethod
     def _file_changes(item: dict[str, Any]) -> list[tuple[str, str]]:
         changes: list[tuple[str, str]] = []
@@ -1617,11 +1662,18 @@ class CodexAppServerProvider:
         deltas: list[str],
         agent_message_phases: dict[str, str],
         pending_deltas: dict[str, list[str]],
+        root_thread_id: str | None = None,
     ) -> None:
         method = msg.get("method", "")
         params = msg.get("params") or {}
         verbose = self._verbose(ui)
         self._emit_subagent_event(msg, ui)
+        sender = _thread_id_from_message(msg)
+        if root_thread_id and sender and sender != root_thread_id:
+            # A subagent's thread: its work belongs under that agent, not in
+            # the parent's answer stream, reasoning or command notes.
+            self._emit_child_item(msg, ui, sender)
+            return
 
         if method in {"thread/started", "turn/started"}:
             if verbose:

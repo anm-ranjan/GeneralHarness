@@ -464,7 +464,13 @@ export function reducer(state, action) {
       const pathId = agent.agent_path && Object.keys(known).find(key => known[key]?.agent_path === agent.agent_path)
       const id = agent.agent_id || pathId || agent.agent_path
       if (!id) return state
-      return { ...state, agentsById: { ...known, [id]: { ...known[id], ...agent } } }
+      const before = known[id]
+      // Codex reports its thread going "idle" right after the subagent
+      // completes; that would turn "done" back into "idle".
+      const merged = before?.status === 'completed' && agent.status === 'idle'
+        ? { ...before, ...agent, status: 'completed' }
+        : { ...before, ...agent }
+      return { ...state, agentsById: { ...known, [id]: merged } }
     }
 
     case 'CLEAR_AGENTS':

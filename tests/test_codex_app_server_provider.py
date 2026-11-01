@@ -809,6 +809,49 @@ class SubagentAndInactivityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transport.responses, [(5, {"decision": "accept"})])
         self.assertEqual(ui.finished, ["completed"])
 
+    async def test_a_subagent_finishing_does_not_end_the_parent_turn(self):
+        # Shapes from a real run: Codex nests the turn id under "turn", and a
+        # subagent's messages, commands and turn end share the parent's queue.
+        provider, transport, client = make_provider()
+
+        async def turn_with_subagent(thread_id, text, **kwargs):
+            client.turn_calls.append((thread_id, text, kwargs))
+            queue = transport.queues[thread_id]
+            transport._register_thread_owner("child", thread_id)
+            child = {"threadId": "child", "turnId": "child_turn"}
+            for message in (
+                {"method": "item/started", "params": {**child, "item": {
+                    "type": "commandExecution", "id": "c1", "command": "rg -n startLive", "status": "inProgress"}}},
+                {"method": "item/completed", "params": {**child, "item": {
+                    "type": "commandExecution", "id": "c1", "command": "rg -n startLive", "status": "completed"}}},
+                {"method": "item/started", "params": {**child, "item": {
+                    "type": "agentMessage", "id": "m_child", "phase": "final_answer", "text": ""}}},
+                {"method": "item/agentMessage/delta", "params": {**child, "itemId": "m_child", "delta": "Child report."}},
+                {"method": "item/completed", "params": {**child, "item": {
+                    "type": "agentMessage", "id": "m_child", "phase": "final_answer", "text": "Child report."}}},
+                {"method": "turn/completed", "params": {"threadId": "child", "turn": {
+                    "id": "child_turn", "rootTurnId": "turn_1", "status": "completed", "error": None}}},
+                {"method": "item/completed", "params": {"threadId": thread_id, "turnId": "turn_1", "item": {
+                    "type": "agentMessage", "id": "m_root", "phase": "final_answer", "text": "Root review."}}},
+                {"method": "turn/completed", "params": {"threadId": thread_id, "turn": {
+                    "id": "turn_1", "status": "completed", "error": None}}},
+            ):
+                await queue.put(message)
+            return {"turn": {"id": "turn_1"}}
+
+        client.turn_start = turn_with_subagent
+        ui = FakeUI()
+        await self.run_once(provider, ui)
+
+        self.assertEqual(ui.assistant, ["Root review."])
+        self.assertEqual(ui.assistant_deltas, [])
+        self.assertEqual(ui.provider_tools, [])
+        tool_events = [e for e in ui.agent_events if e["action"] in ("tool_call", "tool_result")]
+        self.assertEqual([(e["action"], e["agent_id"]) for e in tool_events],
+                         [("tool_call", "child"), ("tool_result", "child")])
+        self.assertEqual(tool_events[0]["text"], "Run: rg -n startLive")
+        self.assertNotIn("status", tool_events[0])
+
 
 class LongLineTests(unittest.IsolatedAsyncioTestCase):
     """One app-server message is one JSON line; command output can make it huge."""

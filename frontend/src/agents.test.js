@@ -53,3 +53,11 @@ test('labels and status words read plainly', () => {
   assert.ok(agentIsLive({ status: 'pending' }))
   assert.ok(!agentIsLive({ status: 'failed' }))
 })
+
+test('a Codex thread going idle after completing stays done', async () => {
+  const { reducer, initialState } = await import('./context/appReducer.js')
+  let state = { ...initialState }
+  state = reducer(state, { type: 'UPSERT_AGENT', payload: { agent_id: 'child', agent_path: '/root/review', status: 'completed' } })
+  state = reducer(state, { type: 'UPSERT_AGENT', payload: { agent_id: 'child', status: 'idle' } })
+  assert.equal(state.agentsById.child.status, 'completed')
+})
