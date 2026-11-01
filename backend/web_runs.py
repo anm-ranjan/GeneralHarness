@@ -110,12 +110,24 @@ def _message_block_detail(meta, text: str, workspace_root: str, image_count: int
         return "The Claude provider is unavailable. Run /model native to migrate this session before sending messages."
     if meta.provider == "native" and not web_app._native_available():
         return "The Native provider has no API credential. Configure it in Electron Settings, or run /model codex or /model claude."
-    if meta.provider == "codex-app-server":
-        external_refs = web_helpers._codex_external_path_refs(text, workspace_root)
-        if external_refs:
-            refs = ", ".join(external_refs[:3])
-            return f"Codex cannot access paths outside the workspace: {refs}"
     return None
+
+
+def _codex_outside_paths_notice(meta, text: str, workspace_root: str) -> str | None:
+    """A heads-up, never a block: the message names paths Codex's sandbox can't reach.
+
+    Pasted logs and stack traces name real system paths (/dev/null, /tmp/...,
+    /run/user/...) that Codex never needs to open, and Codex's sandbox enforces
+    access on its own, so the message is always sent.
+    """
+    if meta.provider != "codex-app-server":
+        return None
+    external_refs = web_helpers._codex_external_path_refs(text, workspace_root)
+    if not external_refs:
+        return None
+    refs = ", ".join(external_refs[:3])
+    more = f" and {len(external_refs) - 3} more" if len(external_refs) > 3 else ""
+    return f"Sent. Codex's sandbox can't reach these paths outside the workspace if it needs them: {refs}{more}"
 
 
 async def _handle_chdir_command(session_id: str, command: str, current_workspace_root: str) -> None:
@@ -276,8 +288,12 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
         ).start()
 
     if meta.provider == "codex-app-server":
+        outside_notice = _codex_outside_paths_notice(meta, text, workspace_root)
+
         def worker():
             web_ui = WebUI(session_id, web_app._manager, run, web_app._store, run_settings=run_settings)
+            if outside_notice:
+                _emit_session_event(session_id, EventType.STATUS, {"text": outside_notice})
             run_started = time.monotonic()
             try:
                 prompt = web_helpers._codex_prompt_with_attachments(text, saved_attachments, workspace_root)

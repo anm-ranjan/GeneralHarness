@@ -35,6 +35,19 @@ class CodexPathGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             self.assertEqual(self.refs(f"Edit {workspace}/app.py", workspace=workspace), [])
 
+    def test_outside_paths_never_block_a_codex_message(self):
+        import web_runs
+        from types import SimpleNamespace
+
+        meta = SimpleNamespace(provider="codex-app-server")
+        log = "emulator: Unable to open /dev/null and /tmp/android-x/emu-crash.db"
+        with tempfile.TemporaryDirectory() as workspace, \
+                patch.object(web_runs.web_app, "_codex_app_server_available", return_value=True):
+            self.assertIsNone(web_runs._message_block_detail(meta, log, workspace))
+            notice = web_runs._codex_outside_paths_notice(meta, log, workspace)
+        self.assertIn("/dev/null", notice)
+        self.assertIsNone(web_runs._codex_outside_paths_notice(SimpleNamespace(provider="native"), log, "/x"))
+
 
 if __name__ == "__main__":
     unittest.main()
