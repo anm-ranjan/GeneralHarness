@@ -14,6 +14,43 @@ const PLAN_MARK = {
   pending: 'text-faint',
 }
 
+// Up to this many diff links sit inline after "Changed …"; more than that and
+// the note becomes a toggle over a list, so a big change doesn't flood the notes.
+const INLINE_DIFFS = 3
+
+function ChangedFilesNote({ text, paths, onOpen }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        className="group flex items-center gap-1.5 text-left hover:text-text-bright"
+      >
+        <span className={`inline-block text-[10px] text-faint transition-transform duration-200 ${open ? 'rotate-90' : ''}`}>&#9654;</span>
+        <span>{text}</span>
+      </button>
+      {open && (
+        <ul className="mt-1 ml-1 space-y-0.5 border-l border-line pl-3" aria-label="Changed files">
+          {paths.map(path => (
+            <li key={path}>
+              <button
+                type="button"
+                onClick={() => onOpen(path)}
+                title={path}
+                className="max-w-full truncate font-mono text-[12px] text-accent underline decoration-line underline-offset-4 hover:text-text-bright"
+              >
+                {baseName(path)}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function clock(ms) {
   return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
@@ -89,6 +126,8 @@ function TurnNotes({ turn, live, isLast }) {
       .filter(Boolean)
   }
 
+  const openDiff = path => dispatch({ type: 'OPEN_DIFF_VIEWER', payload: path })
+
   if (!live && !notes.length && !turn.thinking.length && !showPlan && !turn.tools.length && !agents.length) return null
 
   return (
@@ -109,6 +148,7 @@ function TurnNotes({ turn, live, isLast }) {
 
       {notes.map((note, i) => {
         const paths = note.kind === 'edit' ? diffPaths(note.files) : []
+        if (paths.length > INLINE_DIFFS) return <ChangedFilesNote key={i} text={note.text} paths={paths} onOpen={openDiff} />
         return (
           <p key={i} className={note.tone === 'bad' ? 'text-danger' : ''}>
             {note.text}
@@ -116,7 +156,7 @@ function TurnNotes({ turn, live, isLast }) {
               <button
                 key={path}
                 type="button"
-                onClick={() => dispatch({ type: 'OPEN_DIFF_VIEWER', payload: path })}
+                onClick={() => openDiff(path)}
                 className="ml-1.5 underline decoration-line underline-offset-4 text-accent hover:text-text-bright"
               >
                 {paths.length > 1 ? `Diff of ${baseName(path)}` : 'Open diff'}
