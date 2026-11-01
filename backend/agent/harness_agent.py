@@ -1489,7 +1489,22 @@ _BROWSER_PREVIEW_TYPES = {
 }
 
 
-def _snapshot_shell_images(arguments: dict, file_types=None) -> dict[str, tuple[int, int]]:
+# Files up to this size are hashed so a rewrite with the same bytes is not
+# reported; larger ones fall back to mtime and size.
+_ARTIFACT_HASH_LIMIT = 16 * 1024 * 1024
+
+
+def _content_digest(path: str, size: int):
+    if size > _ARTIFACT_HASH_LIMIT:
+        return None
+    try:
+        with open(path, "rb") as handle:
+            return hashlib.blake2b(handle.read(), digest_size=16).digest()
+    except OSError:
+        return None
+
+
+def _snapshot_shell_images(arguments: dict, file_types=None) -> dict[str, tuple]:
     file_types = file_types or _BROWSER_IMAGE_TYPES
     directory = arguments.get("working_directory", "")
     try:
@@ -1502,20 +1517,32 @@ def _snapshot_shell_images(arguments: dict, file_types=None) -> dict[str, tuple[
             if extension not in file_types or not entry.is_file(follow_symlinks=False):
                 continue
             stat = entry.stat(follow_symlinks=False)
-            snapshot[entry.path] = (stat.st_mtime_ns, stat.st_size)
+            snapshot[entry.path] = (stat.st_mtime_ns, stat.st_size, _content_digest(entry.path, stat.st_size))
         return snapshot
     except OSError:
         return {}
 
 
-def _changed_shell_images(arguments: dict, before: dict[str, tuple[int, int]], file_types=None) -> list[tuple[str, str]]:
+def _changed_shell_images(arguments: dict, before: dict[str, tuple], file_types=None) -> list[tuple[str, str]]:
+    """Previewable files the command created or whose content it changed.
+
+    A touched file with the same bytes is not "generated": git checkout,
+    rebase and stash rewrite tracked files (README.md, AGENTS.md) in place,
+    and each such command used to surface them all as new artifacts.
+    """
     file_types = file_types or _BROWSER_IMAGE_TYPES
     after = _snapshot_shell_images(arguments, file_types)
     changed = []
-    for path, signature in after.items():
-        if before.get(path) != signature:
-            extension = os.path.splitext(path)[1].lower()
-            changed.append((path, file_types[extension]))
+    for path, (mtime, size, digest) in after.items():
+        previous = before.get(path)
+        if previous is not None:
+            old_mtime, old_size, old_digest = previous
+            if (old_mtime, old_size) == (mtime, size):
+                continue
+            if digest is not None and digest == old_digest:
+                continue
+        extension = os.path.splitext(path)[1].lower()
+        changed.append((path, file_types[extension]))
     return sorted(changed)
 
 

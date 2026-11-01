@@ -36,6 +36,24 @@ class GeneratedArtifactTests(unittest.TestCase):
                 ],
             )
 
+    def test_a_rewrite_with_the_same_bytes_is_not_an_artifact(self):
+        # git checkout/rebase rewrite tracked files in place without changing them.
+        with tempfile.TemporaryDirectory() as tmp, patch.object(agent.utils, "ALLOWED_PATHS", [tmp]):
+            readme = Path(tmp, "README.md")
+            readme.write_text("# App\n", encoding="utf-8")
+            report = Path(tmp, "report.md")
+            report.write_text("v1", encoding="utf-8")
+            arguments = {"working_directory": tmp}
+            before = agent._snapshot_shell_images(arguments, agent._BROWSER_PREVIEW_TYPES)
+
+            stat = readme.stat()
+            readme.write_text("# App\n", encoding="utf-8")
+            os.utime(readme, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+            report.write_text("v2, longer", encoding="utf-8")
+
+            changed = agent._changed_shell_images(arguments, before, agent._BROWSER_PREVIEW_TYPES)
+            self.assertEqual(changed, [(str(report), "text/markdown")])
+
 
 if __name__ == "__main__":
     unittest.main()
