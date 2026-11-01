@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api'
 import { useApp, useAppStateRef } from '../../context/AppContext'
 import { handleSessionEvent } from '../../eventHandlers'
@@ -14,6 +14,7 @@ import TurnNotes from './TurnNotes'
 import PromptActions from './PromptActions'
 import { buildTurns, sameTurn, unansweredLastTurn } from '../../turnModel'
 import ApprovalCard from './ApprovalCard'
+import { clampNotesWidth, readNotesWidth, saveNotesWidth } from '../../notesWidth'
 import QuestionCard from './QuestionCard'
 
 export default function Stage() {
@@ -22,6 +23,8 @@ export default function Stage() {
   const stageRef = useRef(null)
   const stateRef = useAppStateRef()
   const windowFetchRef = useRef(false)
+  // Margin-notes width the user dragged to (px), or null for the automatic width.
+  const [notesWidth, setNotesWidth] = useState(readNotesWidth)
 
   useWebSocket(state.currentSessionId, dispatch, stateRef)
 
@@ -153,6 +156,53 @@ export default function Stage() {
   // The latest prompt, when it never got a reply: the one Retry / Delete apply to.
   const unansweredTurn = useMemo(() => unansweredLastTurn(turns, state.isRunning), [turns, state.isRunning])
 
+  // One handler for every turn's divider (data-notes-handle), so the memoised
+  // turns need no props for it. The thread block keeps its width, so the
+  // divider follows the pointer: the notes take room from the thread.
+  const resizeNotes = useCallback((e) => {
+    const handle = e.target.closest?.('[data-notes-handle]')
+    if (!handle) return
+    const notes = handle.parentElement
+    const block = notes.closest('[data-turn]')
+    if (!notes || !block) return
+    const blockWidth = block.getBoundingClientRect().width
+    const startWidth = notes.getBoundingClientRect().width
+    if (e.type === 'dblclick') {
+      setNotesWidth(null)
+      saveNotesWidth(null)
+      return
+    }
+    if (e.type === 'keydown') {
+      const step = e.shiftKey ? 64 : 16
+      const delta = e.key === 'ArrowLeft' ? step : e.key === 'ArrowRight' ? -step : 0
+      if (!delta) return
+      e.preventDefault()
+      const next = clampNotesWidth(startWidth + delta, blockWidth)
+      setNotesWidth(next)
+      saveNotesWidth(next)
+      return
+    }
+    if (e.button !== 0) return
+    e.preventDefault()
+    const startX = e.clientX
+    let latest = startWidth
+    const onMove = (ev) => {
+      latest = clampNotesWidth(startWidth + (startX - ev.clientX), blockWidth)
+      setNotesWidth(latest)
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      saveNotesWidth(latest)
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }, [])
+
   if (!sessionId) {
     return <SplashScreen />
   }
@@ -161,6 +211,10 @@ export default function Stage() {
     <div
       ref={stageRef}
       className="@container flex-1 overflow-y-auto px-9 py-5"
+      style={notesWidth ? { '--notes-w': `${notesWidth}px` } : undefined}
+      onPointerDown={resizeNotes}
+      onDoubleClick={resizeNotes}
+      onKeyDown={resizeNotes}
     >
       <div className="max-w-[clamp(1080px,72cqw,1440px)] mx-auto flex flex-col gap-10">
         {turns.map((turn, i) => (
@@ -187,7 +241,7 @@ export default function Stage() {
 const Turn = memo(function Turn({ turn, renderItem, live, isLast, unanswered }) {
   const talk = [...(turn.user ? [turn.user] : []), ...turn.talk]
   return (
-    <section className="grid gap-x-10 gap-y-3 @3xl:grid-cols-[minmax(0,1fr)_clamp(17rem,20cqw,22rem)]">
+    <section data-turn className="grid gap-x-10 gap-y-3 @3xl:grid-cols-[minmax(0,1fr)_var(--notes-w,clamp(17rem,20cqw,22rem))]">
       <div className="flex min-w-0 flex-col">
         {talk.map((item, i) => {
           const node = renderItem(item)
@@ -201,7 +255,17 @@ const Turn = memo(function Turn({ turn, renderItem, live, isLast, unanswered }) 
           )
         })}
       </div>
-      <div className="min-w-0 @3xl:border-l @3xl:border-line @3xl:pl-5">
+      <div className="relative min-w-0 @3xl:border-l @3xl:border-line @3xl:pl-5">
+        {/* Drag (or arrow keys) to resize the notes; double-click for the automatic width. */}
+        <div
+          data-notes-handle
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize margin notes"
+          title="Drag to resize the notes · double-click to reset"
+          tabIndex={0}
+          className="absolute -left-2 top-0 hidden h-full w-4 cursor-col-resize touch-none @3xl:block after:absolute after:left-[7px] after:top-0 after:h-full after:w-0.5 after:bg-transparent hover:after:bg-accent/50 focus-visible:outline-none focus-visible:after:bg-accent"
+        />
         {/* Pinned while this turn is on screen, so the plan, Stop and the live
             line stay in view next to a long reply. A notes list taller than the
             window scrolls inside itself; the notes still leave with their turn. */}
