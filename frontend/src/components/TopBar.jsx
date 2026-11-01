@@ -41,6 +41,8 @@ export default function TopBar() {
           <SidebarIcon />
         </button>
       )}
+      {/* The sidebar carries the logo; it moves up here only while the sidebar is hidden. */}
+      {!state.sidebarOpen && <BrandMark name={state.appName} className="-ml-2 h-7 w-7" />}
       {meta ? (
         <>
           <SessionBreadcrumb meta={meta} />
@@ -61,7 +63,7 @@ export default function TopBar() {
           <span className="sr-only" role="status">{copyState}</span>
         </>
       ) : (
-        <h2 className="leading-none"><BrandMark name={state.appName} className="h-8 w-8" /></h2>
+        <h2 className="sr-only">{state.appName}</h2>
       )}
 
       <div className="ml-auto flex shrink-0 items-center gap-4 whitespace-nowrap">
