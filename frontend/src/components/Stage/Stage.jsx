@@ -14,7 +14,7 @@ import TurnNotes from './TurnNotes'
 import PromptActions from './PromptActions'
 import { buildTurns, sameTurn, unansweredLastTurn } from '../../turnModel'
 import ApprovalCard from './ApprovalCard'
-import { clampNotesWidth, readNotesWidth, saveNotesWidth } from '../../notesWidth'
+import { BLOCK_WIDTH_KEY, clampBlockWidth, clampNotesWidth, readNotesWidth, saveNotesWidth } from '../../notesWidth'
 import QuestionCard from './QuestionCard'
 
 export default function Stage() {
@@ -25,6 +25,8 @@ export default function Stage() {
   const windowFetchRef = useRef(false)
   // Margin-notes width the user dragged to (px), or null for the automatic width.
   const [notesWidth, setNotesWidth] = useState(readNotesWidth)
+  // Width of the thread block when the notes' outer edge was dragged, or null.
+  const [blockWidth, setBlockWidth] = useState(() => readNotesWidth(undefined, BLOCK_WIDTH_KEY))
 
   useWebSocket(state.currentSessionId, dispatch, stateRef)
 
@@ -156,46 +158,72 @@ export default function Stage() {
   // The latest prompt, when it never got a reply: the one Retry / Delete apply to.
   const unansweredTurn = useMemo(() => unansweredLastTurn(turns, state.isRunning), [turns, state.isRunning])
 
-  // One handler for every turn's divider (data-notes-handle), so the memoised
-  // turns need no props for it. The thread block keeps its width, so the
-  // divider follows the pointer: the notes take room from the thread.
+  // One handler for every turn's resize handles (data-notes-handle), so the
+  // memoised turns need no props for them. "inner" is the divider: the notes
+  // take room from the thread and the block keeps its width. "outer" is the
+  // notes' right edge: the block grows with the notes and the thread keeps its
+  // width. The block is centred, so it grows by twice the pointer travel to
+  // keep the edge under the pointer.
   const resizeNotes = useCallback((e) => {
     const handle = e.target.closest?.('[data-notes-handle]')
     if (!handle) return
+    const outer = handle.dataset.notesHandle === 'outer'
     const notes = handle.parentElement
-    const block = notes.closest('[data-turn]')
-    if (!notes || !block) return
-    const blockWidth = block.getBoundingClientRect().width
-    const startWidth = notes.getBoundingClientRect().width
+    const block = notes?.closest('[data-turn]')
+    const stage = stageRef.current
+    if (!notes || !block || !stage) return
+    const stageStyle = getComputedStyle(stage)
+    const stageWidth = stage.clientWidth - parseFloat(stageStyle.paddingLeft) - parseFloat(stageStyle.paddingRight)
+    const startBlock = block.getBoundingClientRect().width
+    const startNotes = notes.getBoundingClientRect().width
+    const apply = (delta) => {
+      if (!outer) return { notes: clampNotesWidth(startNotes + delta, startBlock), block: null }
+      const nextBlock = clampBlockWidth(startBlock + 2 * delta, stageWidth)
+      return { notes: clampNotesWidth(startNotes + (nextBlock - startBlock), nextBlock), block: nextBlock }
+    }
+    const show = ({ notes: n, block: b }) => {
+      setNotesWidth(n)
+      if (b != null) setBlockWidth(b)
+    }
+    const save = ({ notes: n, block: b }) => {
+      saveNotesWidth(n)
+      if (b != null) saveNotesWidth(b, undefined, BLOCK_WIDTH_KEY)
+    }
     if (e.type === 'dblclick') {
       setNotesWidth(null)
       saveNotesWidth(null)
+      if (outer) {
+        setBlockWidth(null)
+        saveNotesWidth(null, undefined, BLOCK_WIDTH_KEY)
+      }
       return
     }
     if (e.type === 'keydown') {
       const step = e.shiftKey ? 64 : 16
-      const delta = e.key === 'ArrowLeft' ? step : e.key === 'ArrowRight' ? -step : 0
-      if (!delta) return
+      const toward = outer ? (e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0)
+                           : (e.key === 'ArrowLeft' ? 1 : e.key === 'ArrowRight' ? -1 : 0)
+      if (!toward) return
       e.preventDefault()
-      const next = clampNotesWidth(startWidth + delta, blockWidth)
-      setNotesWidth(next)
-      saveNotesWidth(next)
+      const next = apply(toward * step / (outer ? 2 : 1))
+      show(next)
+      save(next)
       return
     }
     if (e.button !== 0) return
     e.preventDefault()
     const startX = e.clientX
-    let latest = startWidth
+    let latest = { notes: startNotes, block: outer ? startBlock : null }
     const onMove = (ev) => {
-      latest = clampNotesWidth(startWidth + (startX - ev.clientX), blockWidth)
-      setNotesWidth(latest)
+      const travel = ev.clientX - startX
+      latest = apply(outer ? travel : -travel)
+      show(latest)
     }
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
-      saveNotesWidth(latest)
+      save(latest)
     }
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
@@ -211,12 +239,15 @@ export default function Stage() {
     <div
       ref={stageRef}
       className="@container flex-1 overflow-y-auto px-9 py-5"
-      style={notesWidth ? { '--notes-w': `${notesWidth}px` } : undefined}
+      style={{
+        ...(notesWidth ? { '--notes-w': `${notesWidth}px` } : {}),
+        ...(blockWidth ? { '--thread-block-w': `${blockWidth}px` } : {}),
+      }}
       onPointerDown={resizeNotes}
       onDoubleClick={resizeNotes}
       onKeyDown={resizeNotes}
     >
-      <div className="max-w-[clamp(1080px,72cqw,1440px)] mx-auto flex flex-col gap-10">
+      <div className="max-w-[var(--thread-block-w,clamp(1080px,72cqw,1440px))] mx-auto flex flex-col gap-10">
         {turns.map((turn, i) => (
           <Turn
             key={turn.id}
@@ -256,15 +287,24 @@ const Turn = memo(function Turn({ turn, renderItem, live, isLast, unanswered }) 
         })}
       </div>
       <div className="relative min-w-0 @3xl:border-l @3xl:border-line @3xl:pl-5">
-        {/* Drag (or arrow keys) to resize the notes; double-click for the automatic width. */}
+        {/* Drag (or arrow keys) either edge to resize the notes; double-click for the automatic width. */}
         <div
-          data-notes-handle
+          data-notes-handle="inner"
           role="separator"
           aria-orientation="vertical"
-          aria-label="Resize margin notes"
+          aria-label="Resize margin notes against the thread"
           title="Drag to resize the notes · double-click to reset"
           tabIndex={0}
           className="absolute -left-2 top-0 hidden h-full w-4 cursor-col-resize touch-none @3xl:block after:absolute after:left-[7px] after:top-0 after:h-full after:w-0.5 after:bg-transparent hover:after:bg-accent/50 focus-visible:outline-none focus-visible:after:bg-accent"
+        />
+        <div
+          data-notes-handle="outer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Widen or narrow the margin notes"
+          title="Drag to widen the notes · double-click to reset"
+          tabIndex={0}
+          className="absolute -right-2 top-0 hidden h-full w-4 cursor-col-resize touch-none @3xl:block after:absolute after:left-[7px] after:top-0 after:h-full after:w-0.5 after:bg-transparent hover:after:bg-accent/50 focus-visible:outline-none focus-visible:after:bg-accent"
         />
         {/* Pinned while this turn is on screen, so the plan, Stop and the live
             line stay in view next to a long reply. A notes list taller than the

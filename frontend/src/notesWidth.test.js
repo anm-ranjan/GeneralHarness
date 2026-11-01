@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { clampNotesWidth, readNotesWidth, saveNotesWidth, NOTES_MIN, THREAD_MIN } from './notesWidth.js'
+import { clampBlockWidth, clampNotesWidth, readNotesWidth, saveNotesWidth, BLOCK_MIN, BLOCK_WIDTH_KEY, NOTES_MIN, THREAD_MIN } from './notesWidth.js'
 
 function memoryStorage() {
   const data = new Map()
@@ -31,5 +31,18 @@ test('a dragged width is remembered and can be reset to automatic', () => {
 test('a broken stored value falls back to automatic', () => {
   const storage = memoryStorage()
   storage.setItem('myharness.notesWidth', 'wide')
+  assert.equal(readNotesWidth(storage), null)
+})
+
+test('the block grows only as far as the stage and shrinks only to its minimum', () => {
+  assert.equal(clampBlockWidth(4000, 2400), 2400)
+  assert.equal(clampBlockWidth(100, 2400), BLOCK_MIN)
+  assert.equal(clampBlockWidth(1700.4, 2400), 1700)
+})
+
+test('the block width is stored under its own key', () => {
+  const storage = memoryStorage()
+  saveNotesWidth(1800, storage, BLOCK_WIDTH_KEY)
+  assert.equal(readNotesWidth(storage, BLOCK_WIDTH_KEY), 1800)
   assert.equal(readNotesWidth(storage), null)
 })
