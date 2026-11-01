@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+/* Tailwind v4 applies hover: (and group-hover:) only under
+   @media (hover: hover). Chromium on Linux can report no pointer at all when it
+   cannot read the input devices (Jarvis: hover: none with a USB mouse), which
+   switched off every hover style there, such as a thread's rename and copy
+   icons. This is a desktop app, so hover is a plain :hover. */
+@custom-variant hover (&:hover);
+
 /* These are the defaults (the "Ember" palette). The theme engine in
    src/theme/ overrides the same custom properties as inline styles on :root,
    which is why every value here must stay a plain token reference downstream —
