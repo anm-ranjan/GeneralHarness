@@ -2,7 +2,7 @@
 // the automatic width (CSS: 17rem on a laptop, up to 22rem on wide screens).
 
 export const NOTES_WIDTH_KEY = 'myharness.notesWidth'
-export const NOTES_MIN = 180
+export const NOTES_MIN = 120
 // The thread keeps at least this much room, however wide the notes are dragged.
 export const THREAD_MIN = 360
 const COLUMN_GAP = 40

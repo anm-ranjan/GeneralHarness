@@ -40,8 +40,10 @@ function ThinkingBlock({ markdown, streaming = false }) {
         aria-expanded={open}
       >
         <span className={`inline-block transition-transform duration-200 ${open ? 'rotate-90' : ''}`}>&#9654;</span>
-        <span className={open || streaming ? 'text-shimmer' : 'group-hover:text-muted'}>
-          {streaming ? 'Thinking…' : 'Its reasoning'}
+        {/* The shimmer means "still going", so only live reasoning gets it; an
+            expanded finished block used to pulse as if it were running. */}
+        <span className={streaming ? 'text-shimmer' : 'group-hover:text-muted'}>
+          {streaming ? 'Thinking…' : 'Reasoning done'}
         </span>
       </button>
       <div className={`collapse-grid ${open ? 'open' : ''}`}>
