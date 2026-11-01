@@ -59,6 +59,31 @@ class ReadOnlyEnforcementTests(unittest.TestCase):
         self.assertEqual(execute.call_args[0][0], "shell_run")
 
 
+class ToolSetTests(unittest.TestCase):
+    def _offered(self, prompt, **kwargs):
+        seen = []
+
+        def api_caller(messages, tools=None, **_kwargs):
+            seen.append({tool["function"]["name"] for tool in tools or []})
+            return {"choices": [{"message": {"role": "assistant", "content": "Done."}, "finish_reason": "stop"}]}
+
+        ui = Mock(run_settings={"approval_mode": "always_ask", "verbose_tools": False})
+        with patch.object(agent, "log_interaction"):
+            agent.run_agent(prompt, [{"role": "system", "content": "rules"}], max_iterations=1, ui=ui,
+                            api_caller=api_caller, **kwargs)
+        return seen[0]
+
+    def test_an_analysis_prompt_still_gets_the_shell(self):
+        # No "fix"/"add"/"change" in it: this used to get read-only tools only.
+        offered = self._offered("How much did Cat spend on groceries in October? Chart it.")
+        self.assertIn("shell_run", offered)
+        self.assertIn("file_write", offered)
+
+    def test_a_read_only_agent_gets_no_shell(self):
+        offered = self._offered("How much?", agent_path="/aside", tool_policy="read_only")
+        self.assertNotIn("shell_run", offered)
+
+
 class ToolBoundaryTests(unittest.TestCase):
     def test_an_unanswered_tool_call_is_dropped(self):
         history = [

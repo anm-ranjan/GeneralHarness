@@ -143,27 +143,16 @@ def prompt_input(prompt_text: str) -> str:
 # Tool selection
 # ---------------------------------------------------------------------------
 
-_WRITE_INTENT_PATTERN = re.compile(
-    r"\b(write|create|overwrite|replace|edit|modify|update|patch|append|save|rewrite|refactor|fix|change|add|insert|delete|remove)\b",
-    re.IGNORECASE,
-)
-
-
-def needs_write_tools(messages: list) -> bool:
-    for msg in reversed(messages):
-        if msg.get("role") == "user" and isinstance(msg.get("content"), str):
-            return bool(_WRITE_INTENT_PATTERN.search(msg["content"]))
-        if msg.get("role") == "assistant":
-            for tc in (msg.get("tool_calls") or []):
-                if tc["function"]["name"] in WRITE_TOOL_NAMES:
-                    return True
-    return False
-
-
 def select_tools(messages: list) -> list:
-    if needs_write_tools(messages):
-        return TOOLS
-    return READ_ONLY_TOOLS
+    """Every tool, every turn; the approval mode decides what runs unasked.
+
+    The tool list used to depend on keywords in the latest prompt ("fix",
+    "add", ...), so a request like "how much did we spend, and chart it" got no
+    shell and the model reported it could not run anything. A list that
+    changes between turns also defeats prompt caching. Read-only agents and
+    /aside narrow it through tool_policy instead.
+    """
+    return TOOLS
 
 
 def choose_model_for_tools(tools: list = None, model: str = None) -> str:
