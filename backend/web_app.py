@@ -207,6 +207,9 @@ async def _lifespan(app: FastAPI):
     _manager.set_event_loop(asyncio.get_event_loop())
     performance_log.record("backend_ready", _IMPORT_STARTED)
     fleet_bridge.tunnels.start()
+    # The native context window comes from OpenRouter when it can; the lookup
+    # may need the network, so it runs beside startup rather than in it.
+    native_settings.resolve_context_window_in_background()
     yield
     fleet_bridge.tunnels.stop()
     shutdown_codex_runtime()

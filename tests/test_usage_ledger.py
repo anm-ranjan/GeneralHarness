@@ -150,9 +150,16 @@ class NativeSettingsTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.saved = {name: getattr(utils, name) for name in ("DATA_DIR", "MODEL", "READ_MODEL", "WRITE_MODEL",
-                                                               "SUMMARY_MODEL", "API_PROVIDER", "BASE_URL")}
+                                                               "SUMMARY_MODEL", "API_PROVIDER", "BASE_URL",
+                                                               "CONTEXT_LIMIT_TOKENS", "COMPACT_THRESHOLD_TOKENS")}
         utils.DATA_DIR = self.tmp.name
         utils.BASE_URL = "https://openrouter.ai/api/v1"
+        # Never reach OpenRouter from tests; each test sees a fresh endpoint cache.
+        openrouter_catalog._endpoints_cache.clear()
+        catalog = patch.object(openrouter_catalog, "model_endpoints", side_effect=self._catalog)
+        catalog.start()
+        self.addCleanup(catalog.stop)
+        self.addCleanup(openrouter_catalog._endpoints_cache.clear)
 
     def tearDown(self):
         for name, value in self.saved.items():
@@ -160,10 +167,14 @@ class NativeSettingsTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _catalog(self, model):
+        if model == "deepseek/deepseek-v4":
+            return {"id": model, "name": "DeepSeek", "endpoints": []}
         if model != "openai/gpt-6.1-terra":
             raise openrouter_catalog.CatalogError(f"OpenRouter has no model '{model}'")
         return {"id": model, "name": "GPT Terra", "endpoints": [
-            {"tag": "azure/eu", "tools": True}, {"tag": "openai/flex", "tools": True}, {"tag": "toolless", "tools": False}]}
+            {"tag": "azure/eu", "tools": True, "context_length": 400000},
+            {"tag": "openai/flex", "tools": True, "context_length": 1000000},
+            {"tag": "toolless", "tools": False, "context_length": 2000000}]}
 
     def test_save_applies_everywhere_and_broadcasts(self):
         with (
@@ -188,6 +199,41 @@ class NativeSettingsTests(unittest.TestCase):
                 self.assertEqual(ctx.exception.status_code, 400)
             with self.assertRaises(HTTPException):
                 usage_routes.update_native_settings(usage_routes.NativeSettingsRequest(model="nobody/nothing"))
+
+    def test_context_window_follows_the_pinned_provider(self):
+        payload = native_settings.save("openai/gpt-6.1-terra", ["azure/eu"]) and native_settings.current()
+        self.assertEqual(utils.CONTEXT_LIMIT_TOKENS, 400000)
+        self.assertEqual(payload["context_window"], 400000)
+        self.assertEqual(payload["context_source"], "openrouter")
+        self.assertIn("azure/eu", payload["context_detail"])
+
+    def test_several_pinned_providers_use_the_smallest_window(self):
+        native_settings.save("openai/gpt-6.1-terra", ["openai/flex", "azure/eu"])
+        self.assertEqual(utils.CONTEXT_LIMIT_TOKENS, 400000)
+
+    def test_without_a_pin_the_largest_tool_capable_window_applies(self):
+        native_settings.save("openai/gpt-6.1-terra", [])
+        # The 2M endpoint has no tool calling, so native cannot be routed to it.
+        self.assertEqual(utils.CONTEXT_LIMIT_TOKENS, 1000000)
+
+    def test_compaction_starts_inside_a_small_window(self):
+        def small(model):
+            return {"id": model, "name": "Small", "endpoints": [{"tag": "tiny", "tools": True, "context_length": 32000}]}
+        configured = native_settings._CONFIG_DEFAULTS["COMPACT_THRESHOLD_TOKENS"]
+        with patch.object(openrouter_catalog, "model_endpoints", side_effect=small):
+            native_settings.save("small/model", ["tiny"])
+        self.assertEqual(utils.CONTEXT_LIMIT_TOKENS, 32000)
+        self.assertEqual(utils.COMPACT_THRESHOLD_TOKENS, min(configured, int(32000 * 0.6)))
+
+    def test_lookup_failure_or_other_api_falls_back_to_the_config(self):
+        config_limit = native_settings._CONFIG_DEFAULTS["CONTEXT_LIMIT_TOKENS"]
+        native_settings.save("nobody/nothing", [])
+        self.assertEqual(utils.CONTEXT_LIMIT_TOKENS, config_limit)
+        self.assertEqual(native_settings.current()["context_source"], "config")
+        utils.BASE_URL = "http://localhost:8000/v1"
+        native_settings.save("openai/gpt-6.1-terra", [])
+        self.assertEqual(utils.CONTEXT_LIMIT_TOKENS, config_limit)
+        self.assertIn("not OpenRouter", native_settings.current()["context_detail"])
 
     def test_clear_restores_configuration(self):
         native_settings.save("deepseek/deepseek-v4", [])

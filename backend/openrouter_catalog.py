@@ -165,3 +165,47 @@ def model_endpoints(model: str) -> dict:
         "name": data.get("name") or model,
         "endpoints": endpoints,
     }
+
+
+# Endpoint lists by model id, kept for a day: the context window is resolved at
+# startup and on every native-settings save, and must not refetch each time.
+_endpoints_cache: dict[str, tuple[float, dict]] = {}
+
+
+def cached_model_endpoints(model: str) -> dict:
+    model = (model or "").strip()
+    now = time.time()
+    with _lock:
+        hit = _endpoints_cache.get(model)
+    if hit and now - hit[0] < _CACHE_TTL_SECONDS:
+        return hit[1]
+    info = model_endpoints(model)
+    with _lock:
+        _endpoints_cache[model] = (now, info)
+    return info
+
+
+def context_window(model: str, providers: list[str] | None = None) -> tuple[int, str] | None:
+    """Context window (tokens) native can rely on for ``model``, and why.
+
+    Native pins OpenRouter routing to the chosen providers with no fallbacks,
+    so any of them may serve a request: the smallest window among them is
+    the safe one. Without a pin OpenRouter only routes a request to a provider
+    whose window fits it, so the largest window among the providers native
+    can use (tool calling) applies. None when nothing usable is listed.
+    """
+    info = cached_model_endpoints(model)
+    endpoints = [e for e in info.get("endpoints") or [] if isinstance(e.get("context_length"), int) and e["context_length"] > 0]
+    if providers:
+        chosen = [e for e in endpoints if e["tag"] in providers]
+        if not chosen:
+            return None
+        smallest = min(chosen, key=lambda e: e["context_length"])
+        if len(chosen) == 1:
+            return smallest["context_length"], f"{smallest['tag']} on OpenRouter"
+        return smallest["context_length"], f"smallest of {', '.join(e['tag'] for e in chosen)} on OpenRouter"
+    usable = [e for e in endpoints if e.get("tools")]
+    if not usable:
+        return None
+    largest = max(usable, key=lambda e: e["context_length"])
+    return largest["context_length"], "largest provider window on OpenRouter"

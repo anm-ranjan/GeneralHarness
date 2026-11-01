@@ -4,6 +4,13 @@ import { useApp } from '../../context/AppContext'
 import ProviderLogo from '../ProviderLogo'
 import { modelFromInput, perMillion } from '../../nativeModel'
 
+// 400000 -> "400k", 1048576 -> "1.05M": context windows read in round units.
+function tokensLabel(count) {
+  if (!count) return '—'
+  if (count >= 1000000) return `${(count / 1000000).toFixed(2).replace(/\.?0+$/, '')}M`
+  return `${Math.round(count / 1000)}k`
+}
+
 const inputClass = 'w-full bg-surface border border-line rounded px-3 py-1.5 font-mono text-[12.5px] text-text-default placeholder:text-faint outline-none focus:border-line-hover'
 
 export default function NativeSettings() {
@@ -118,6 +125,13 @@ export default function NativeSettings() {
             {settings ? (settings.source === 'settings' ? 'Set here, on this host' : 'From agent_config.yaml') : ''}
           </span>
         </div>
+        {settings?.context_window > 0 && (
+          <p className="text-[12px] text-muted" title={settings.context_detail}>
+            Context window: <span className="text-text-default">{tokensLabel(settings.context_window)} tokens</span>
+            {settings.context_source === 'openrouter' ? `, from ${settings.context_detail}` : ', from agent_config.yaml'}.
+            {' '}Compacts history at {tokensLabel(settings.compact_threshold)}.
+          </p>
+        )}
         {error && <p className="text-[12px] text-danger" role="alert">{error}</p>}
         {notice && <p className="text-[12px] text-ok" role="status">{notice}</p>}
       </div>

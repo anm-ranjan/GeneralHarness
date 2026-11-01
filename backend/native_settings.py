@@ -3,6 +3,10 @@
 Stored as ``<data>/native_settings.json`` (data/ is host-local and survives
 syncs), applied over agent_config.yaml at startup and on every save. One
 model replaces the configured default, read, write and summary models.
+
+The context window follows the model and providers in effect: on OpenRouter
+it comes from the providers' listed windows, otherwise (or when OpenRouter
+cannot be reached) from memory.context_limit_tokens in agent_config.yaml.
 """
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ import os
 import threading
 from pathlib import Path
 
+import openrouter_catalog
 import utils
 
 _lock = threading.Lock()
@@ -21,7 +26,13 @@ _CONFIG_DEFAULTS = {
     "WRITE_MODEL": utils.WRITE_MODEL,
     "SUMMARY_MODEL": utils.SUMMARY_MODEL,
     "API_PROVIDER": utils.API_PROVIDER,
+    "CONTEXT_LIMIT_TOKENS": utils.CONTEXT_LIMIT_TOKENS,
+    "COMPACT_THRESHOLD_TOKENS": utils.COMPACT_THRESHOLD_TOKENS,
 }
+# Compaction must start well inside the window, whatever the configured threshold.
+_COMPACT_SHARE = 0.6
+# Where the context window in effect came from, for Settings.
+_context = {"source": "config", "detail": "agent_config.yaml"}
 
 
 def _path() -> Path:
@@ -60,6 +71,45 @@ def _apply(settings: dict) -> None:
             setattr(utils, name, value)
 
 
+def _is_openrouter() -> bool:
+    return utils.build_openrouter_provider_preferences(configured_provider=["x"]) is not None
+
+
+def _set_context(window: int | None, source: str, detail: str) -> None:
+    configured_limit = _CONFIG_DEFAULTS["CONTEXT_LIMIT_TOKENS"]
+    configured_compact = _CONFIG_DEFAULTS["COMPACT_THRESHOLD_TOKENS"]
+    limit = window if window else configured_limit
+    utils.CONTEXT_LIMIT_TOKENS = limit
+    utils.COMPACT_THRESHOLD_TOKENS = min(configured_compact, int(limit * _COMPACT_SHARE)) if limit > 0 else configured_compact
+    _context.update(source=source, detail=detail)
+
+
+def resolve_context_window() -> None:
+    """Set the context limit (and cap the compaction point) for the model in effect."""
+    model = utils.MODEL
+    provider = utils.API_PROVIDER
+    providers = normalize_providers(provider if isinstance(provider, (list, tuple)) else [provider] if provider else [])
+    if not _is_openrouter():
+        _set_context(None, "config", "agent_config.yaml (the native API is not OpenRouter)")
+        return
+    try:
+        found = openrouter_catalog.context_window(model, providers)
+    except Exception as exc:  # network or catalog trouble: keep working on the config value
+        _set_context(None, "config", f"agent_config.yaml (OpenRouter lookup failed: {exc})")
+        return
+    if utils.MODEL != model:  # changed while the lookup ran; that change resolves its own
+        return
+    if found is None:
+        _set_context(None, "config", "agent_config.yaml (OpenRouter lists no window for it)")
+    else:
+        _set_context(found[0], "openrouter", found[1])
+
+
+def resolve_context_window_in_background() -> None:
+    """For startup: the lookup may need the network, and startup must not wait."""
+    threading.Thread(target=resolve_context_window, name="native-context-window", daemon=True).start()
+
+
 def apply_saved() -> dict:
     with _lock:
         settings = load()
@@ -76,6 +126,7 @@ def save(model: str, providers: list[str]) -> dict:
         temporary.write_text(json.dumps(settings, indent=2), encoding="utf-8")
         os.replace(temporary, path)
         _apply(settings)
+    resolve_context_window()
     return settings
 
 
@@ -83,6 +134,7 @@ def clear() -> None:
     with _lock:
         _path().unlink(missing_ok=True)
         _apply({})
+    resolve_context_window()
 
 
 def current() -> dict:
@@ -94,5 +146,9 @@ def current() -> dict:
         "providers": normalize_providers(provider if isinstance(provider, (list, tuple)) else [provider] if provider else []),
         "source": "settings" if saved else "config",
         "config_model": _CONFIG_DEFAULTS["MODEL"],
-        "openrouter": utils.build_openrouter_provider_preferences(configured_provider=["x"]) is not None,
+        "openrouter": _is_openrouter(),
+        "context_window": utils.CONTEXT_LIMIT_TOKENS,
+        "compact_threshold": utils.COMPACT_THRESHOLD_TOKENS,
+        "context_source": _context["source"],
+        "context_detail": _context["detail"],
     }
