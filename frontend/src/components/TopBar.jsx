@@ -31,18 +31,20 @@ export default function TopBar() {
 
   return (
     <div className="flex items-center gap-4 pl-9 pr-8 pt-6 pb-3 min-h-[64px]">
+      {/* The sidebar carries the logo; it moves up here, before the Show sidebar button, only while the sidebar is hidden. */}
       {!state.sidebarOpen && (
-        <button
-          onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
-          className="-ml-6 p-1 rounded text-muted hover:text-accent hover:bg-surface-hover transition-colors"
-          title={`Show sidebar (${shortcutLabel('B')})`}
-          aria-label="Show sidebar"
-        >
-          <SidebarIcon />
-        </button>
+        <div className="-ml-6 flex shrink-0 items-center gap-2">
+          <BrandMark name={state.appName} className="h-7 w-7" />
+          <button
+            onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
+            className="p-1 rounded text-muted hover:text-accent hover:bg-surface-hover transition-colors"
+            title={`Show sidebar (${shortcutLabel('B')})`}
+            aria-label="Show sidebar"
+          >
+            <SidebarIcon />
+          </button>
+        </div>
       )}
-      {/* The sidebar carries the logo; it moves up here only while the sidebar is hidden. */}
-      {!state.sidebarOpen && <BrandMark name={state.appName} className="-ml-2 h-7 w-7" />}
       {meta ? (
         <>
           <SessionBreadcrumb meta={meta} />
