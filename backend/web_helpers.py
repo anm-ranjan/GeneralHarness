@@ -414,6 +414,22 @@ def _save_native_context(session_id: str, workspace_root: str, messages: list) -
     })
 
 
+def _save_compacted_native_context(session_id: str, workspace_root: str, messages: list) -> bool:
+    """Replace the checkpoint body after /compact, keeping its event anchor.
+
+    Events after the anchor are only slash commands and status lines (replay
+    skips them), so the compacted body is still the state at that anchor.
+    """
+    checkpoint = web_app._store.load_native_context(session_id)
+    body = messages[1:]
+    if (checkpoint.get("schema") != "myharness-native-context-v1"
+            or checkpoint.get("workspace_root") != workspace_root
+            or not _valid_native_context(body)):
+        return False
+    web_app._store.save_native_context(session_id, {**checkpoint, "messages": body})
+    return True
+
+
 def _restore_session_messages(session_id: str, workspace_root: str, include_codex: bool = False) -> list:
     meta = web_app._store.load_session(session_id)
     if meta and meta.provider == "codex-app-server" and not include_codex:

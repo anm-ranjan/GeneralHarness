@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { esc, localImageUrl, renderMarkdown, sanitizeHref } from './utils.js'
+import { esc, localImageUrl, renderInline, renderMarkdown, sanitizeHref } from './utils.js'
 
 test('esc escapes html without browser globals', () => {
   assert.equal(esc('<script>"x"</script>'), '&lt;script&gt;&quot;x&quot;&lt;/script&gt;')
@@ -167,4 +167,10 @@ test('html previews point CDN Chart.js at the bundled copy', async () => {
   }
   const other = htmlPreviewDocument('<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>')
   assert.ok(other.includes('https://cdn.plot.ly/plotly-2.35.2.min.js'), 'other libraries are left alone')
+})
+
+test('markdown images render with a collapse toggle labelled by name', () => {
+  const html = renderInline('![](/ws/out/plot.png)', '/ws')
+  assert.match(html, /class="md-image" data-image-src="[^"]*\/api\/files\/image\?path=%2Fws%2Fout%2Fplot\.png"/)
+  assert.match(html, /<button type="button" class="md-image-toggle"[^>]*>plot\.png<\/button><img /)
 })

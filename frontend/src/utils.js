@@ -1,5 +1,6 @@
 import { apiUrl } from './api.js'
 import { artifactPath } from './artifacts.js'
+import { imageLabel } from './imageCollapse.js'
 import katex from 'katex'
 
 export function esc(s) {
@@ -291,7 +292,11 @@ export function renderInline(text, workspaceRoot) {
     .replace(/!\[([^\]]*)\]\(([^\s)]+)\)/g, (_match, alt, src) => {
       const imageSrc = localImageUrl(src, workspaceRoot)
       if (!imageSrc && !/^https?:\/\//i.test(src)) return _match
-      return `<img src="${esc(imageSrc || src)}" alt="${esc(alt)}" loading="lazy">`
+      const finalSrc = imageSrc || src
+      // MessageBubble applies the remembered collapsed state and handles the toggle.
+      return `<span class="md-image" data-image-src="${esc(finalSrc)}">`
+        + `<button type="button" class="md-image-toggle" aria-expanded="true" title="Collapse image">${esc(imageLabel(finalSrc, alt))}</button>`
+        + `<img src="${esc(finalSrc)}" alt="${esc(alt)}" loading="lazy"></span>`
     })
     .replace(/\[([^\]]+)\]\(([^\s)]+)\)/g, (_match, label, href) => {
       const path = artifactPath(href.replace(/&amp;/g, '&'), workspaceRoot)

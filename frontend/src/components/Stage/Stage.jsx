@@ -149,9 +149,9 @@ export default function Stage() {
   const renderItem = useCallback(function renderItem(item) {
     switch (item.type) {
       case 'user_message':
-        return <MessageBubble role="user" text={item.text} images={item.images} attachments={item.attachments} steering={item.steering} />
+        return <MessageBubble role="user" text={item.text} images={item.images} attachments={item.attachments} steering={item.steering} historical={Boolean(item.historical)} />
       case 'assistant_message':
-        return <MessageBubble role="assistant" markdown={item.markdown} />
+        return <MessageBubble role="assistant" markdown={item.markdown} historical={Boolean(item.historical)} />
       case 'assistant_stream':
         return <MessageBubble role="assistant" markdown={item.text} streaming />
       case 'aside':

@@ -29,8 +29,12 @@ four clients (React web UI, Electron shell, Rust TUI, CLI).
 - `web_runs.py` — **provider dispatch and run orchestration.** Every run flows
   through here: it picks the provider from `SessionMeta.provider`, builds the
   system prompt, streams events, records change manifests, computes run metrics,
-  and implements the idle-only slash commands (`/clear`, `/chdir`, `/approve`,
-  `/verbose`, `/maxiters`, `/thinking`, `/model`).
+  and implements the idle-only slash commands (`/help`, `/compact`, `/clear`,
+  `/chdir`, `/approve`, `/verbose`, `/maxiters`, `/thinking`, `/model`).
+  `backend/slash_commands.py` is the single command registry (served by
+  `GET /api/commands`, printed by `/help`); keep it, `_handle_slash_command`,
+  `SLASH_CMDS` in `frontend/src/constants.js` and `command_help_lines` in
+  `tui-rs/src/ui.rs` in step.
 - `web_session.py` — active-run registry, cancellation, approval futures, and
   WebSocket connection bookkeeping.
 - `web_ui_adapter.py` — translates agent UI protocol events into persisted,
@@ -170,6 +174,23 @@ if the user should be asked about it.
   progress indicators for idle sessions.
 - **Thinking traces** are stripped from context and shown as collapsible blocks
   only in verbose mode.
+- **Context accounting** (`backend/agent/history_tokens.py`): native context
+  usage is the gateway's own `prompt_tokens` from the latest response (a private
+  `_usage_anchor` on the last sent message) plus a local estimate of what
+  changed since. Locally, inline images count by pixel size (not base64
+  length), `reasoning_details` are not counted, and tool definitions are
+  included. This one figure drives the context % display, end-of-turn
+  compaction (75% of the window, see `native_settings.py`), the mid-turn guard
+  (`memory.context_guard_percent`: compress read tool output, then compact
+  completed turns; root thread only) and each request's `max_tokens` =
+  min(`limits.max_output_tokens`, window − input − margin). Inconsistent memory
+  settings are startup warnings and `/api/health` `config_warnings`. Automatic
+  compaction keeps older images; `/compact` (native only) compacts on demand
+  and replaces older images with a text note.
+- **Transcript images** (user attachments and assistant Markdown images)
+  collapse to a name chip. Replayed messages start collapsed, live ones
+  expanded; a user toggle is remembered per image in the browser
+  (`frontend/src/imageCollapse.js`).
 - **Search, export, and metrics** read persisted events as the source of truth —
   keep event changes compatible with all three.
 - **File editing** is desktop-only: `PUT /api/workspace/file` requires the
@@ -220,7 +241,8 @@ if the user should be asked about it.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/health` | Status, models, app name/splash, provider availability, audio config |
+| GET | `/api/health` | Status, models, app name/splash, provider availability, audio config, `config_warnings` |
+| GET | `/api/commands` | Slash command reference (`backend/slash_commands.py`), shown in the Workspace Commands tab |
 | POST | `/api/shutdown` | Stop the server |
 | GET | `/api/codex/status` | Codex app-server availability |
 | GET | `/api/claude/status` | Claude provider availability |

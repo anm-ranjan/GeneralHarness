@@ -2,6 +2,7 @@
 commands, and the /chdir handler."""
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import threading
@@ -18,6 +19,8 @@ from web_ui_adapter import SubagentUI, WebUI
 
 import web_app
 import web_helpers
+import performance_log
+import slash_commands
 from web_helpers import _emit_session_event, _emit_queue_updated
 
 
@@ -257,7 +260,7 @@ def _emit_run_metrics(web_ui, session_id: str, meta, started_monotonic: float) -
             if hasattr(web_ui, "api_usage"):
                 metrics["api_usage"] = web_ui.api_usage.snapshot()
             messages = web_app._session_messages.get(session_id) or []
-            used = agent.estimate_tokens(messages) if messages else 0
+            used = agent.context_tokens(messages) if messages else 0
             metrics["context_used"] = used
             metrics["context_source"] = "native"
             if utils.CONTEXT_LIMIT_TOKENS and utils.CONTEXT_LIMIT_TOKENS > 0:
@@ -440,7 +443,7 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
                 web_ui.show_context_usage(usage)
             except Exception as e:
                 run_failed = True
-                del messages[turn_start_index:]
+                agent.rollback_turn(messages, turn_start_index)
                 web_app._session_messages[session_id] = messages
                 web_ui.show_error(f"Agent error: {e}")
             finally:
@@ -468,6 +471,57 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
     return run
 
 
+class _CommandUI:
+    """Minimal agent UI for idle commands: emits persisted session events."""
+
+    def __init__(self, session_id: str):
+        self._sid = session_id
+
+    def show_status(self, text: str, style: str = "") -> None:
+        _emit_session_event(self._sid, EventType.STATUS, {"text": text})
+
+    def show_compaction(self, before_tokens: int, after_tokens: int) -> None:
+        _emit_session_event(self._sid, EventType.COMPACTION, {"before": before_tokens, "after": after_tokens})
+
+    def show_api_metrics(self, metrics: dict) -> None:
+        _emit_session_event(self._sid, EventType.API_METRICS, metrics)
+
+
+def _compact_session_now(session_id: str, workspace_root: str) -> tuple[str, str]:
+    """Run /compact. Returns (event kind, text): kind is "status" or "error"."""
+    meta = web_app._store.load_session(session_id)
+    if meta is None:
+        return "error", "Session not found."
+    if meta.provider != "native":
+        return "error", (f"/compact is only available for native sessions; {_provider_label(meta.provider)} "
+                         "manages its own context. Use /clear to start over.")
+    if session_id not in web_app._session_messages:
+        web_app._session_messages[session_id] = web_helpers._restore_session_messages(session_id, workspace_root)
+    messages = web_app._session_messages[session_id]
+    snapshot = list(messages)
+    compacted, reason = agent.compact_agent_history(
+        list(messages),
+        ui=_CommandUI(session_id),
+        workspace_root=workspace_root,
+        kind=getattr(meta, "kind", "project"),
+        session_identity=web_helpers._session_identity(meta),
+        force=True,
+        drop_images=True,
+    )
+    if reason is not None:
+        return "error", f"Nothing was compacted: {reason}."
+    # The summary call can take a while; never overwrite a run that started meanwhile.
+    if (web_app._manager.get_active_run(session_id)
+            or web_app._session_messages.get(session_id) is not messages or messages != snapshot):
+        return "error", "A run started while compacting; the context was left unchanged."
+    web_app._session_messages[session_id] = compacted
+    try:
+        web_helpers._save_compacted_native_context(session_id, workspace_root, compacted)
+    except Exception:
+        performance_log.record("native_context_save", time.perf_counter(), outcome="error")
+    return "status", "Context compacted."
+
+
 async def _handle_slash_command(session_id: str, text: str, workspace_root: str) -> bool:
     command = text.strip()
     lowered = command.lower()
@@ -491,6 +545,21 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
         return True
 
     _emit_session_event(session_id, EventType.USER_MESSAGE, {"text": text})
+
+    if lowered == "/help":
+        _emit_session_event(session_id, EventType.STATUS, {"text": slash_commands.help_text()})
+        _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
+        return True
+
+    if lowered == "/compact":
+        _emit_session_event(session_id, EventType.STATUS, {"text": "Compacting context…"})
+        kind, message = await asyncio.to_thread(_compact_session_now, session_id, workspace_root)
+        _emit_session_event(session_id, EventType.ERROR if kind == "error" else EventType.STATUS, {"text": message})
+        if kind == "status":
+            _emit_session_event(session_id, EventType.CONTEXT_USAGE, {
+                "usage_str": agent.format_context_usage(web_app._session_messages[session_id])})
+        _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
+        return True
 
     if lowered == "/chdir" or (lowered.startswith("/chdir") and len(lowered) > 6 and lowered[6].isspace()):
         await _handle_chdir_command(session_id, command, workspace_root)

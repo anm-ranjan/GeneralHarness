@@ -5,6 +5,7 @@ import FileTree from './FileTree'
 import DiagnosticsPanel from './DiagnosticsPanel'
 import SourceControl from './SourceControl'
 import UsagePanel from './UsagePanel'
+import CommandsPanel from './CommandsPanel'
 import FileEditor from './FileEditor'
 import ArtifactViewer from './ArtifactViewer'
 import { isDesktopApp } from '../../desktop'
@@ -16,6 +17,7 @@ const TABS = [
   { id: 'files', label: 'Files' },
   { id: 'usage', label: 'Usage' },
   { id: 'diagnostics', label: 'Diagnostics' },
+  { id: 'commands', label: 'Commands' },
 ]
 
 export default function WorkspacePanel() {
@@ -61,6 +63,7 @@ export default function WorkspacePanel() {
         {tab === 'files' && <FileTree />}
         {tab === 'usage' && <UsagePanel />}
         {tab === 'diagnostics' && <DiagnosticsPanel />}
+        {tab === 'commands' && <CommandsPanel />}
       </div>
     </div>
   )

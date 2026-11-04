@@ -1,5 +1,6 @@
-import { memo, useMemo } from 'react'
+import { memo, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { renderMarkdown } from '../../utils'
+import { isImageCollapsed, setImageCollapsed } from '../../imageCollapse'
 import { useAppSelector, useAppDispatch } from '../../context/AppContext'
 
 const selectWorkspaceRoot = state => state.currentWorkspaceRoot
@@ -45,8 +46,64 @@ function handleMarkdownClick(e) {
   })
 }
 
-function MessageBubble({ role, text, markdown, images = [], attachments = [], streaming = false, steering = false }) {
+function applyImageState(wrapper, collapsed) {
+  wrapper.classList.toggle('collapsed', collapsed)
+  const toggle = wrapper.querySelector('.md-image-toggle')
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(!collapsed))
+    toggle.title = collapsed ? 'Show image' : 'Collapse image'
+  }
+}
+
+function toggleMarkdownImage(button) {
+  const wrapper = button.closest('.md-image')
+  if (!wrapper) return
+  const collapsed = !wrapper.classList.contains('collapsed')
+  applyImageState(wrapper, collapsed)
+  setImageCollapsed(wrapper.dataset.imageSrc, collapsed)
+}
+
+function ChevronIcon({ open }) {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+      className={`shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} aria-hidden="true">
+      <polyline points="9 6 15 12 9 18" />
+    </svg>
+  )
+}
+
+// Image attachment on a user message: a name chip when collapsed, the
+// thumbnail (opening the full image) when expanded.
+function AttachmentImage({ attachment, name, defaultCollapsed }) {
+  const [collapsed, setCollapsed] = useState(() => isImageCollapsed(attachment.url, defaultCollapsed))
+  const toggle = () => {
+    setCollapsed(!collapsed)
+    setImageCollapsed(attachment.url, !collapsed)
+  }
+  return (
+    <div className={`rounded-lg border border-line text-[12px] text-muted ${collapsed ? '' : 'p-2'}`}>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={!collapsed}
+        title={collapsed ? 'Show image' : 'Collapse image'}
+        className={`flex w-full min-w-0 items-center gap-1.5 text-left hover:text-accent ${collapsed ? 'px-2 py-1.5' : 'mb-1.5'}`}
+      >
+        <ChevronIcon open={!collapsed} />
+        <span className="min-w-0 truncate">{name}</span>
+      </button>
+      {!collapsed && (
+        <a href={attachment.url} target="_blank" rel="noreferrer" title={name} className="block">
+          <img src={attachment.url} alt={name} className="max-h-44 rounded-md object-contain" />
+        </a>
+      )}
+    </div>
+  )
+}
+
+function MessageBubble({ role, text, markdown, images = [], attachments = [], streaming = false, steering = false, historical = false }) {
   const dispatch = useAppDispatch()
+  const markdownRef = useRef(null)
   const workspaceRoot = useAppSelector(selectWorkspaceRoot)
   const displayAttachments = attachments.length ? attachments : images
 
@@ -55,15 +112,28 @@ function MessageBubble({ role, text, markdown, images = [], attachments = [], st
     return null
   }, [role, text, markdown, workspaceRoot, streaming])
 
+  // Markdown is injected as HTML, so apply each image's collapsed state after
+  // render: replayed (historical) messages start collapsed, live ones expanded.
+  useLayoutEffect(() => {
+    const root = markdownRef.current
+    if (!root) return
+    for (const wrapper of root.querySelectorAll('.md-image')) {
+      applyImageState(wrapper, isImageCollapsed(wrapper.dataset.imageSrc, historical))
+    }
+  }, [html, historical])
+
   return (
     <article className={`min-w-0 max-w-full ${role === 'user' ? 'mb-4' : 'mb-5'} ${streaming ? '' : 'animate-fade-up'}`}>
       {steering && <div className="text-[12px] text-faint mb-0.5">You added, while it was working:</div>}
       {role === 'assistant' ? (
         <div
+          ref={markdownRef}
           className={`markdown-body max-w-full overflow-x-auto text-[15px] leading-relaxed ${streaming ? 'stream-caret' : ''}`}
           onClick={e => {
             const link = e.target.closest('[data-artifact-path]')
             if (link) { e.preventDefault(); dispatch({ type: 'OPEN_ARTIFACT', payload: link.dataset.artifactPath }); return }
+            const imageToggle = e.target.closest('.md-image-toggle')
+            if (imageToggle) { toggleMarkdownImage(imageToggle); return }
             handleMarkdownClick(e)
           }}
           dangerouslySetInnerHTML={{ __html: html }}
@@ -73,7 +143,14 @@ function MessageBubble({ role, text, markdown, images = [], attachments = [], st
           {text && <div>{text}</div>}
           {displayAttachments.length > 0 && (
             <div className="mt-3 grid grid-cols-2 gap-2 font-normal">
-              {displayAttachments.map((attachment, i) => (
+              {displayAttachments.map((attachment, i) => attachment.mime?.startsWith('image/') ? (
+                <AttachmentImage
+                  key={`${attachment.url || attachment.name || 'attachment'}_${i}`}
+                  attachment={attachment}
+                  name={attachment.name || `Attachment ${i + 1}`}
+                  defaultCollapsed={historical}
+                />
+              ) : (
                 <a
                   key={`${attachment.url || attachment.name || 'attachment'}_${i}`}
                   href={attachment.url}
@@ -82,16 +159,12 @@ function MessageBubble({ role, text, markdown, images = [], attachments = [], st
                   className="block rounded-lg border border-line p-2 text-[12px] text-muted hover:border-line-hover hover:text-accent"
                   title={attachment.name || `Attachment ${i + 1}`}
                 >
-                  {attachment.mime?.startsWith('image/') ? (
-                    <img src={attachment.url} alt={attachment.name || `Attachment ${i + 1}`} className="max-h-44 rounded-md object-contain" />
-                  ) : (
-                    <div className="flex min-h-16 items-center gap-2">
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-line/70 text-[10px] font-semibold">
-                        {fileExtension(attachment.name)}
-                      </span>
-                      <span className="min-w-0 truncate">{attachment.name || `Attachment ${i + 1}`}</span>
-                    </div>
-                  )}
+                  <div className="flex min-h-16 items-center gap-2">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-line/70 text-[10px] font-semibold">
+                      {fileExtension(attachment.name)}
+                    </span>
+                    <span className="min-w-0 truncate">{attachment.name || `Attachment ${i + 1}`}</span>
+                  </div>
                 </a>
               ))}
             </div>

@@ -493,6 +493,42 @@ html, body, #root {
     border-radius: var(--radius-sm);
     margin: 0.5em 0;
   }
+  /* Collapsible images: a name toggle above the image; collapsed shows only the name. */
+  .markdown-body .md-image {
+    display: block;
+    margin: 0.5em 0;
+  }
+  .markdown-body .md-image img { margin: 0.25em 0 0; }
+  .markdown-body .md-image.collapsed img { display: none; }
+  .markdown-body .md-image-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+    max-width: 100%;
+    font-size: 12px;
+    color: var(--color-muted);
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .markdown-body .md-image-toggle::before {
+    content: '';
+    flex-shrink: 0;
+    width: 0.4em;
+    height: 0.4em;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(45deg);
+    transition: transform 0.15s;
+  }
+  .markdown-body .md-image.collapsed .md-image-toggle {
+    padding: 0.3em 0.6em;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-sm);
+  }
+  .markdown-body .md-image.collapsed .md-image-toggle::before { transform: rotate(-45deg); }
+  .markdown-body .md-image-toggle:hover { color: var(--color-accent); }
   .markdown-body table {
     border-collapse: collapse;
     margin: 0.6em 0;

@@ -443,12 +443,13 @@ def call_api(
     model: str = None,
     ui=None,
     cancel_event=None,
-    max_tokens: int = 65000,
+    max_tokens: int | None = None,
     cache_session_key: str | None = None,
 ) -> dict:
     _set_api_failure(None)
     _set_api_metrics({})
     selected_model = choose_model_for_tools(tools, model or _thread_model(ui))
+    max_tokens = output_token_budget(messages, tools, max_tokens)
     payload = {
         "model": selected_model,
         "messages": history_tokens.wire_messages(messages),
@@ -566,10 +567,27 @@ _TOKEN_COUNT_CACHE_MAX = history_tokens.TOKEN_COUNT_CACHE_MAX
 _count_tokens = history_tokens.count_text
 estimate_tokens = history_tokens.estimate_messages
 estimate_input_categories = history_tokens.input_categories
+context_tokens = history_tokens.context_tokens
+
+
+def output_token_budget(messages: list, tools=None, requested: int | None = None) -> int:
+    """max_tokens for one call: the configured maximum, capped by the room left.
+
+    Gateways that only publish a total context limit count input + output
+    against it, so a fixed max_tokens fails once the input grows. A margin
+    absorbs estimate error; the floor keeps short replies possible.
+    """
+    requested = int(requested or utils.MAX_OUTPUT_TOKENS)
+    limit = utils.CONTEXT_LIMIT_TOKENS
+    if limit <= 0:
+        return requested
+    margin = max(1024, limit // 20)
+    room = limit - context_tokens(messages, tools) - margin
+    return max(min(requested, utils.MIN_OUTPUT_TOKENS), min(requested, room))
 
 
 def format_context_usage(messages: list) -> str:
-    token_count = estimate_tokens(messages)
+    token_count = context_tokens(messages)
     if utils.CONTEXT_LIMIT_TOKENS <= 0:
         return f"{token_count} estimated tokens"
     usage_percent = min(999.9, (token_count / utils.CONTEXT_LIMIT_TOKENS) * 100)
@@ -877,24 +895,42 @@ def deterministic_restore_payload(messages: list) -> str:
 
 
 def compact_history_if_needed(messages: list, ui=None, deterministic: bool = False) -> list:
-    token_count = estimate_tokens(messages)
-    if token_count <= utils.COMPACT_THRESHOLD_TOKENS:
-        return messages
+    return compact_history(messages, ui=ui, deterministic=deterministic)[0]
 
-    system_message, existing_memory, old_history, recent_history = split_history_for_compaction(messages)
-    if not old_history:
-        return messages
-    if any(message.get("_preserve_evidence") for message in old_history):
-        # Do not discard the only copy after an archive failure.
-        return messages
-    if not deterministic and any(
+
+def _old_history_has_images(old_history: list) -> bool:
+    return any(
         isinstance(message.get("content"), list) and any(
             isinstance(part, dict) and part.get("type") == "image_url" for part in message["content"])
         for message in old_history
-    ):
-        # Text synthesis cannot preserve constraints carried only in pixels.
-        # Keep visual evidence until a versioned image-retention path exists.
-        return messages
+    )
+
+
+def compact_history(messages: list, ui=None, deterministic: bool = False,
+                    force: bool = False, drop_images: bool = False) -> tuple:
+    """Return (messages, reason). reason is None when history was compacted.
+
+    force skips the threshold check (manual /compact and the mid-turn guard).
+    drop_images lets older image attachments be replaced by a text note; it is
+    only used when compaction was asked for explicitly or the context is full.
+    """
+    display_before = context_tokens(messages)
+    if not force and display_before <= utils.COMPACT_THRESHOLD_TOKENS:
+        return messages, "below threshold"
+    token_count = estimate_tokens(messages)
+
+    system_message, existing_memory, old_history, recent_history = split_history_for_compaction(messages)
+    if not old_history:
+        return messages, "nothing older than the recent messages to compact"
+    if any(message.get("_preserve_evidence") for message in old_history):
+        # Do not discard the only copy after an archive failure.
+        return messages, "older tool output could not be archived yet"
+    if not deterministic and _old_history_has_images(old_history):
+        if not drop_images:
+            # Text synthesis cannot preserve constraints carried only in pixels.
+            # Automatic compaction keeps visual evidence; /compact may drop it.
+            return messages, "older messages contain images (use /compact to drop them)"
+        old_history = strip_image_blocks_for_summary(old_history)
 
     retained_skills = utils.retained_skill_instructions(messages, recent_history)
     def compose(summary):
@@ -907,10 +943,11 @@ def compact_history_if_needed(messages: list, ui=None, deterministic: bool = Fal
     else:
         fallback = build_native_task_state(existing_memory, old_history)
         if fallback is None:
-            return messages
+            return messages, ("your earlier requests alone exceed memory.task_state_tokens "
+                              f"({utils.TASK_STATE_TOKENS}); raise it to allow compaction")
         fallback_history = compose(json.dumps(fallback, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
         if estimate_tokens(fallback_history) >= token_count:
-            return messages
+            return messages, "compaction would not make the context smaller"
         try:
             synthesis = summarize_history(existing_memory, old_history, ui=ui)
         except Exception:
@@ -925,14 +962,16 @@ def compact_history_if_needed(messages: list, ui=None, deterministic: bool = Fal
         # A valid synthesis can still be too expensive once mandatory skills
         # and recent exchanges are added. Reuse the proven-cheaper fallback.
         if deterministic:
-            return messages
+            return messages, "compaction would not make the context smaller"
         compacted = fallback_history
         after_tokens = estimate_tokens(compacted)
+    # Report in the same units as the context display (provider-anchored).
+    display_after = max(1, display_before - (token_count - after_tokens))
     if ui:
-        ui.show_compaction(token_count, after_tokens)
+        ui.show_compaction(display_before, display_after)
     else:
-        ui_print(f"Compacted to {after_tokens} estimated tokens.", style="green")
-    return compacted
+        ui_print(f"Compacted to {display_after} estimated tokens.", style="green")
+    return compacted, None
 
 
 # ---------------------------------------------------------------------------
@@ -1653,6 +1692,57 @@ def _tool_status_line(func_name: str, func_args: dict) -> str:
     return func_name
 
 
+TURN_START_KEY = "_turn_start"
+
+
+def rollback_turn(messages: list, fallback_index: int) -> None:
+    """Delete the in-progress turn, even if the guard compacted earlier turns."""
+    for index in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[index], dict) and messages[index].get(TURN_START_KEY):
+            del messages[index:]
+            return
+    del messages[fallback_index:]
+
+
+def _status(ui, text: str) -> None:
+    if ui:
+        ui.show_status(text)
+    else:
+        ui_print(text, style="yellow")
+
+
+def guard_context_before_call(messages: list, turn_start_index: int, tools=None, ui=None,
+                              allow_compaction: bool = True) -> tuple:
+    """Keep the next request under the guard share of CONTEXT_LIMIT_TOKENS.
+
+    Step 1 compresses tool output from this turn that the model has already
+    read (results after the latest assistant message are still unread and are
+    left alone). Step 2 compacts the completed turns before this one. Returns
+    (turn_start_index, compacted) since step 2 shortens the list in place.
+    """
+    limit = utils.CONTEXT_LIMIT_TOKENS
+    if limit <= 0:
+        return turn_start_index, False
+    trigger = limit * utils.CONTEXT_GUARD_PERCENT / 100
+    used = context_tokens(messages, tools)
+    if used < trigger:
+        return turn_start_index, False
+    _status(ui, f"Context at {used * 100 // limit}% of the {limit}-token limit; compressing older tool output…")
+    last_assistant = next((i for i in range(len(messages) - 1, turn_start_index - 1, -1)
+                           if messages[i].get("role") == "assistant"), None)
+    if last_assistant is not None:
+        utils.compress_turn_tool_results(messages, turn_start_index, last_assistant)
+    if context_tokens(messages, tools) < trigger or not allow_compaction or turn_start_index <= 1:
+        return turn_start_index, False
+    prefix = messages[:turn_start_index]
+    compacted, reason = compact_history(prefix, ui=ui, force=True, drop_images=True)
+    if reason is not None:
+        _status(ui, f"Context is still near the limit; earlier turns were not compacted ({reason}).")
+        return turn_start_index, False
+    messages[:] = [*compacted, *messages[turn_start_index:]]
+    return len(compacted), True
+
+
 def run_agent(
     user_query: str,
     messages: list,
@@ -1689,7 +1779,8 @@ def run_agent(
     elif not ui:
         ui_panel("User", user_query, style="blue")
 
-    user_msg = {"role": "user", "content": user_content if user_content is not None else user_query}
+    user_msg = {"role": "user", "content": user_content if user_content is not None else user_query,
+                TURN_START_KEY: True}
     turn_start_index = len(messages)
     messages.append(user_msg)
     turn_messages = [user_msg]
@@ -1716,7 +1807,12 @@ def run_agent(
         model_call = api_caller
     else:
         def model_call(msgs, tools=None, ui=None):
-            return call_api(msgs, tools=tools, ui=ui, cancel_event=cancel_event)
+            result = call_api(msgs, tools=tools, ui=ui, cancel_event=cancel_event)
+            if result is not None:
+                history_tokens.record_provider_usage(
+                    msgs, (get_last_api_metrics() or {}).get("prompt_tokens"), tools)
+            return result
+    guard_compacted = False
 
     for iteration in range(max_iterations):
         if cancel_event and cancel_event.is_set():
@@ -1745,6 +1841,13 @@ def run_agent(
             active_tools = [tool for tool in active_tools if tool.get("function", {}).get("name") != "ask_user"]
         if orchestrator is not None:
             active_tools = active_tools + COLLABORATION_TOOLS
+        if api_caller is None:
+            # Only the root thread's own context is worth a summary call; an
+            # /aside works on a throwaway copy and subagents are short-lived.
+            turn_start_index, compacted_now = guard_context_before_call(
+                messages, turn_start_index, active_tools, ui,
+                allow_compaction=agent_path == "/root" and not guard_compacted)
+            guard_compacted = guard_compacted or compacted_now
         result = model_call(messages, tools=active_tools, ui=ui)
         if cancel_event and cancel_event.is_set():
             interrupted = True
@@ -2163,9 +2266,10 @@ def run_agent(
 
     log_interaction(messages[0], turn_messages, turn_model or utils.MODEL, ui=ui)
     if interrupted or failed:
-        del messages[turn_start_index:]
+        rollback_turn(messages, turn_start_index)
     else:
         utils.compress_turn_tool_results(messages, turn_start_index)
+        user_msg.pop(TURN_START_KEY, None)
     return messages
 
 
@@ -2177,14 +2281,31 @@ def compact_agent_history_if_needed(
     kind: str = "project",
     session_identity: dict | None = None,
 ) -> list:
-    compacted = compact_history_if_needed(messages, ui=ui, deterministic=deterministic)
+    return compact_agent_history(
+        messages, ui=ui, workspace_root=workspace_root, deterministic=deterministic, kind=kind,
+        session_identity=session_identity,
+    )[0]
+
+
+def compact_agent_history(
+    messages: list,
+    ui=None,
+    workspace_root: str | None = None,
+    deterministic: bool = False,
+    kind: str = "project",
+    session_identity: dict | None = None,
+    force: bool = False,
+    drop_images: bool = False,
+) -> tuple:
+    compacted, reason = compact_history(messages, ui=ui, deterministic=deterministic,
+                                        force=force, drop_images=drop_images)
     if compacted and compacted[0].get("role") == "system":
         compacted[0] = build_system_message(
             workspace_root,
             kind=kind,
             session_identity=session_identity,
         )
-    return compacted
+    return compacted, reason
 
 
 # ---------------------------------------------------------------------------

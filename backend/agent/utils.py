@@ -171,7 +171,40 @@ KEEP_RECENT_MESSAGES = config_int(CONFIG, ["memory", "keep_recent_messages"], 8)
 CONTEXT_LIMIT_TOKENS = config_int(CONFIG, ["memory", "context_limit_tokens"], 200000)
 TASK_STATE_TOKENS = max(512, min(16000, config_int(CONFIG, ["memory", "task_state_tokens"], 4096)))
 SUMMARY_TARGET_TOKENS = max(128, min(TASK_STATE_TOKENS // 2, config_int(CONFIG, ["memory", "summary_target_tokens"], 1024)))
+# Mid-turn guard: before a model call, if input would exceed this share of
+# CONTEXT_LIMIT_TOKENS, read tool output is compressed and, if still needed,
+# completed turns are compacted. Clamped to 50..98 percent.
+CONTEXT_GUARD_PERCENT = max(50, min(98, config_int(CONFIG, ["memory", "context_guard_percent"], 88)))
+# Largest reply requested per call. The effective max_tokens is also capped so
+# input + output stays within CONTEXT_LIMIT_TOKENS.
+MAX_OUTPUT_TOKENS = max(256, config_int(CONFIG, ["limits", "max_output_tokens"], 65000))
+MIN_OUTPUT_TOKENS = 4096
 MEMORY_SUMMARY_MARKER = "SESSION_MEMORY_SUMMARY"
+
+
+def memory_config_warnings() -> list[str]:
+    """Memory settings that silently defeat compaction or output.
+
+    Computed on demand: native_settings replaces CONTEXT_LIMIT_TOKENS and
+    COMPACT_THRESHOLD_TOKENS at runtime (OpenRouter window, 75% compaction).
+    """
+    warnings = []
+    limit = CONTEXT_LIMIT_TOKENS
+    if limit > 0:
+        if COMPACT_THRESHOLD_TOKENS >= limit:
+            warnings.append(
+                f"the compaction point ({COMPACT_THRESHOLD_TOKENS} tokens) is not below the context limit "
+                f"({limit}); end-of-turn compaction will not run before the context is full.")
+        elif COMPACT_THRESHOLD_TOKENS >= limit * CONTEXT_GUARD_PERCENT / 100:
+            warnings.append(
+                f"memory.context_guard_percent ({CONTEXT_GUARD_PERCENT}%) is at or below the end-of-turn "
+                f"compaction point ({COMPACT_THRESHOLD_TOKENS} of {limit} tokens); the mid-turn guard will do "
+                "most of the compaction.")
+        if limit <= MIN_OUTPUT_TOKENS * 2:
+            warnings.append(f"the context limit ({limit} tokens) leaves almost no room for input and output.")
+    if KEEP_RECENT_MESSAGES <= 0:
+        warnings.append("memory.keep_recent_messages is 0; compaction keeps no recent messages verbatim.")
+    return warnings
 
 ALLOWED_PATHS = normalize_allowed_paths(nested_get(CONFIG, ["permissions", "allowed_paths"], []))
 if not ALLOWED_PATHS:
@@ -669,6 +702,7 @@ def _fleet_warnings() -> list:
                 "URL the browser can reach, e.g. http://127.0.0.1:8421."
             )
 
+    warnings.extend(memory_config_warnings())
     return warnings
 
 

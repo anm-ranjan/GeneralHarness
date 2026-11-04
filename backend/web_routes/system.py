@@ -21,6 +21,7 @@ import fleet_bridge
 import web_helpers
 import credential_store
 import performance_log
+import slash_commands
 import utils
 from web_desktop import _is_desktop_request
 from web_models import AudioTranscriptionRequest, BrowseDirectoryRequest, CreateDirectoryRequest, CredentialUpdateRequest
@@ -110,7 +111,13 @@ def health():
         "electron_only": utils.DESKTOP_ELECTRON_ONLY,
         "git_writes_enabled": utils.GIT_WRITES_ENABLED,
         "audio": audio_transcription.public_config(audio_config),
+        "config_warnings": utils.memory_config_warnings(),
     }
+
+
+@router.get("/api/commands")
+def list_commands():
+    return {"commands": slash_commands.SLASH_COMMANDS, "notes": slash_commands.COMMAND_NOTES}
 
 
 @router.get("/api/desktop/credentials")

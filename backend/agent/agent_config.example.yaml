@@ -36,19 +36,38 @@ permissions:
   allowed_paths: []
 
 memory:
-  # Native on OpenRouter takes the context window from the model's providers;
-  # this value is the fallback. History compacts at 75% of the window.
+  # Total context window (input + output). Native on OpenRouter takes it from
+  # the model's providers; this value is the fallback. It drives the context %
+  # display, caps each request's max_tokens so input + output fits, and sets
+  # the compaction points below. Context usage is the gateway's own
+  # prompt_tokens from the last response plus a local estimate of what changed.
   context_limit_tokens: 200000
-  # Used only when context_limit_tokens is 0 (no window).
+  # End-of-turn compaction runs at 75% of the window. This value is used only
+  # when context_limit_tokens is 0 (no window). /compact compacts on demand.
   compact_threshold_tokens: 50000
+  # Mid-turn guard, percent of the window: before each model call above this,
+  # read tool output is compressed and earlier turns compacted. Keep it above
+  # 75 so end-of-turn compaction normally gets there first.
+  context_guard_percent: 88
+  # Messages (not turns) kept verbatim when compacting.
   keep_recent_messages: 8
+  # Not part of compaction: after every turn, tool results and file-write
+  # arguments longer than this are replaced by a short summary + evidence id.
   tool_compress_threshold_chars: 500
-  task_state_tokens: 4096        # bounded native task state kept after compaction
-  summary_target_tokens: 1024    # model synthesis budget inside that state
+  # Budget for the memory block that replaces older history: your requests
+  # verbatim, tool facts, and the summary. If your requests alone cannot fit,
+  # compaction is skipped rather than silently dropping them.
+  task_state_tokens: 4096
+  # Output cap for the model-written summary inside that block (clamped to at
+  # most half of task_state_tokens).
+  summary_target_tokens: 1024
 
 limits:
   max_file_size: 8000000
   max_tool_output: 10000
+  # Largest reply requested per call; also capped by the room left in the
+  # context window. Raise it for models with large output limits.
+  max_output_tokens: 65000
 
 search:
   max_results: 100

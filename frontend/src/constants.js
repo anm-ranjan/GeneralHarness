@@ -1,4 +1,5 @@
-export const SLASH_CMDS = ['/verbose', '/approve', '/clear', '/chdir', '/model', '/maxiters', '/thinking', '/skills', '/reconnect']
+// Keep in step with backend/slash_commands.py (served at /api/commands).
+export const SLASH_CMDS = ['/help', '/compact', '/verbose', '/approve', '/clear', '/chdir', '/model', '/maxiters', '/thinking', '/skills']
 
 // Reserved project id that holds general (project-less) chat sessions.
 export const CHATS_PROJECT_ID = '__chats__'
@@ -11,6 +12,7 @@ export const SUGGESTED_SLASH_COMMANDS = [
   '/approve shell_only',
   '/approve auto_approve',
   '/verbose',
+  '/compact',
   '/clear',
   '/chdir ./subdir',
   '/chdir --reset',
@@ -18,7 +20,7 @@ export const SUGGESTED_SLASH_COMMANDS = [
   '/thinking medium',
   '/skills',
   '/skills frontend-design',
-  '/reconnect',
+  '/help',
 ]
 
 // Detect macOS so keyboard hints match the platform: ⌘ on Mac, Ctrl elsewhere.

@@ -69,11 +69,14 @@ export default function Composer() {
       previousDraftRef.current = { input, attachments }
       sendRestoredRef.current = true
     }
-    const keepDraft = !restoreRequest.send && (input.trim() || attachments.length)
+    // replace: a command from the Commands tab overwrites the text but keeps attachments.
+    const keepDraft = !restoreRequest.send && !restoreRequest.replace && (input.trim() || attachments.length)
     setInput(keepDraft && input.trim() ? `${input.trimEnd()}\n\n${restoreRequest.text || ''}` : (restoreRequest.text || ''))
-    setAttachments(keepDraft ? [...attachments, ...(restoreRequest.attachments || [])] : (restoreRequest.attachments || []))
+    setAttachments(restoreRequest.replace ? attachments
+      : keepDraft ? [...attachments, ...(restoreRequest.attachments || [])] : (restoreRequest.attachments || []))
     setAttachmentError('')
     setSendTick(tick => tick + 1)
+    if (restoreRequest.replace) requestAnimationFrame(() => inputRef.current?.focus())
   }, [restoreRequest])
 
   useEffect(() => {

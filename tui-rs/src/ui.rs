@@ -798,6 +798,12 @@ fn command_help_lines() -> Vec<Line<'static>> {
         Line::styled("/commands", command),
         Line::raw("Open this local command reference. Available even while a run is active."),
         Line::default(),
+        Line::styled("/compact", command),
+        Line::raw("Compact the session's model context now, regardless of the threshold. Older image attachments become a text note. Native sessions only."),
+        Line::default(),
+        Line::styled("/help", command),
+        Line::raw("Print the backend's command list into the transcript."),
+        Line::default(),
         Line::styled("/clear", command),
         Line::raw("Clear the session's model context."),
         Line::default(),
@@ -1145,6 +1151,8 @@ mod tests {
 
         for command in [
             "/commands",
+            "/compact",
+            "/help",
             "/clear",
             "/chdir <directory>",
             "/approve [always_ask|shell_only|auto_approve]",
