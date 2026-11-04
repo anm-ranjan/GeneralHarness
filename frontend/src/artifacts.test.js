@@ -71,3 +71,23 @@ test('linksToPath matches Windows paths across slash styles and case', async () 
   assert.equal(linksToPath('See `out\\report.html`', path), true)
   assert.equal(linksToPath('[r](D:/Work/out/report.html)', path), false)
 })
+
+
+test('URL-style Windows drive paths match the backslash path', async () => {
+  const { linksToPath, embedsImage } = await import('./artifacts.js')
+  const path = 'U:\\03_Projects\\Data\\exp_green.png'
+  assert.equal(linksToPath('[g](/U:/03_Projects/Data/exp_green.png)', path), true)
+  assert.equal(embedsImage('![Green](/U:/03_Projects/Data/exp_green.png)', path), true)
+  assert.equal(embedsImage('![Green](file:///u:/03_Projects/Data/exp_green.png)', path), true)
+  assert.equal(embedsImage('![Green](exp_green.png)', path), true)
+})
+
+test('embedsImage counts only image embeds, not mentions or links', async () => {
+  const { embedsImage } = await import('./artifacts.js')
+  const path = '/ws/out/plot.png'
+  assert.equal(embedsImage('![plot](/ws/out/plot.png?v=1)', path), true)
+  assert.equal(embedsImage('![plot](</ws/out/my%20plot.png>)', '/ws/out/my plot.png'), true)
+  assert.equal(embedsImage('Saved `out/plot.png`', path), false)
+  assert.equal(embedsImage('[plot](/ws/out/plot.png)', path), false)
+  assert.equal(embedsImage('![other](/ws/out/other.png)', path), false)
+})

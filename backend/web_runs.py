@@ -243,7 +243,8 @@ def _finish_run_and_start_next(session_id: str, start_queued: bool = True) -> No
             if detail:
                 _emit_session_event(session_id, EventType.ERROR, {"text": detail})
                 continue
-            _start_agent_run_locked(session_id, meta_next, queued.text, queued_attachments, workspace_root)
+            _start_agent_run_locked(session_id, meta_next, queued.text, queued_attachments, workspace_root,
+                                    queued.display_text)
             return
 
 
@@ -273,7 +274,8 @@ def _emit_run_metrics(web_ui, session_id: str, meta, started_monotonic: float) -
         pass
 
 
-def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments: list[dict], workspace_root: str):
+def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments: list[dict], workspace_root: str,
+                            display_text: str = ""):
     run = web_app._manager.start_run(session_id)
     meta.status = "running"
     web_app._store.update_session(meta)
@@ -295,6 +297,7 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
 
         def worker():
             web_ui = WebUI(session_id, web_app._manager, run, web_app._store, run_settings=run_settings)
+            web_ui.display_text = display_text
             if outside_notice:
                 _emit_session_event(session_id, EventType.STATUS, {"text": outside_notice})
             run_started = time.monotonic()
@@ -324,6 +327,7 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
     elif meta.provider == CLAUDE_PROVIDER_ID:
         def worker():
             web_ui = WebUI(session_id, web_app._manager, run, web_app._store, run_settings=run_settings)
+            web_ui.display_text = display_text
             run_started = time.monotonic()
             try:
                 import asyncio as _aio
@@ -372,6 +376,7 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
 
         def worker():
             web_ui = WebUI(session_id, web_app._manager, run, web_app._store, run_settings=run_settings)
+            web_ui.display_text = display_text
             run_started = time.monotonic()
             run_failed = False
             orchestrator = None
@@ -480,8 +485,11 @@ class _CommandUI:
     def show_status(self, text: str, style: str = "") -> None:
         _emit_session_event(self._sid, EventType.STATUS, {"text": text})
 
-    def show_compaction(self, before_tokens: int, after_tokens: int) -> None:
-        _emit_session_event(self._sid, EventType.COMPACTION, {"before": before_tokens, "after": after_tokens})
+    def show_compaction(self, before_tokens: int, after_tokens: int, memory: dict | None = None) -> None:
+        data = {"before": before_tokens, "after": after_tokens}
+        if memory:
+            data["memory"] = memory
+        _emit_session_event(self._sid, EventType.COMPACTION, data)
 
     def show_api_metrics(self, metrics: dict) -> None:
         _emit_session_event(self._sid, EventType.API_METRICS, metrics)

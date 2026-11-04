@@ -57,7 +57,8 @@ export function localImageUrl(src, workspaceRoot) {
   const versionIndex = raw.search(/[?#]/)
   const sourcePath = versionIndex === -1 ? raw : raw.slice(0, versionIndex)
   const version = versionIndex === -1 ? '' : raw.slice(versionIndex + 1)
-  const path = sourcePath.startsWith('file://') ? sourcePath.slice(7) : sourcePath
+  // `file:///C:/x` and URL-style `/C:/x` name the Windows path `C:/x`.
+  const path = (sourcePath.startsWith('file://') ? sourcePath.slice(7) : sourcePath).replace(/^\/(?=[A-Za-z]:[\\/])/, '')
   const isAbsolute = path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\\\')
   const routedUrl = resolvedPath => {
     const params = new URLSearchParams({ path: resolvedPath })

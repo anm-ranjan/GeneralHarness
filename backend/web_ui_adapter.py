@@ -117,6 +117,11 @@ class WebUI:
 
     def show_user_message(self, text: str, images: list[dict] | None = None) -> None:
         data = {"text": text}
+        # Formatted rendering of the prompt that started this run, if any.
+        display_text = getattr(self, "display_text", "")
+        if display_text:
+            data["display_text"] = display_text
+            self.display_text = ""
         attachments = images or []
         if attachments:
             data["attachments"] = attachments
@@ -154,7 +159,10 @@ class WebUI:
             import web_helpers
             web_helpers._emit_queue_updated(self._sid, meta)
             for item in items:
-                self._emit(EventType.USER_MESSAGE, {"text": item.text, "steering": True})
+                data = {"text": item.text, "steering": True}
+                if item.display_text:
+                    data["display_text"] = item.display_text
+                self._emit(EventType.USER_MESSAGE, data)
 
     def take_steering(self, close_if_empty=False, peek=False):
         import web_app
@@ -258,10 +266,12 @@ class WebUI:
             },
         )
 
-    def show_compaction(self, before_tokens: int, after_tokens: int) -> None:
-        self._emit(
-            EventType.COMPACTION, {"before": before_tokens, "after": after_tokens}
-        )
+    def show_compaction(self, before_tokens: int, after_tokens: int, memory: dict | None = None) -> None:
+        data = {"before": before_tokens, "after": after_tokens}
+        if memory:
+            # The memory block the model now sees, for verification in the UI.
+            data["memory"] = memory
+        self._emit(EventType.COMPACTION, data)
 
     def show_context_usage(self, usage_str: str) -> None:
         self._emit(EventType.CONTEXT_USAGE, {"usage_str": usage_str})

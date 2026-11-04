@@ -995,7 +995,14 @@ impl App {
             self.assistant_delta_index = Some(self.transcript.len() - 1);
             return;
         }
-        if event.event_type == "assistant_message" {
+        // Streamed text is live-only: the commentary before a tool call is
+        // never persisted, and a reply replaces it. Drop it at every event
+        // that ends it (matching the web UI), wherever it now sits, since a
+        // thinking entry or steering message can land after it.
+        if matches!(
+            event.event_type.as_str(),
+            "assistant_message" | "tool_call" | "question_required" | "error" | "run_finished"
+        ) {
             if let Some(index) = self.assistant_delta_index.take() {
                 if index < self.transcript.len() {
                     let removed = self.transcript.remove(index);
@@ -1219,7 +1226,9 @@ fn initial_replay_verbose(events: &[EventEnvelope], fallback: bool) -> bool {
 fn context_percent(event: &EventEnvelope) -> Option<f64> {
     let percent = match event.event_type.as_str() {
         "run_metrics" => event.data.get("context_percent")?.as_f64(),
-        "context_usage" => event
+        // Native api_metrics carry usage_str after every main-agent model
+        // call, so the figure moves during a turn, not only at its end.
+        "context_usage" | "api_metrics" => event
             .data
             .get("usage_str")?
             .as_str()?
@@ -2069,6 +2078,30 @@ mod tests {
     }
 
     #[test]
+    fn api_metrics_with_usage_updates_context_mid_turn() {
+        let mut app = empty_app();
+        app.apply_event(&EventEnvelope {
+            event_type: "context_usage".to_owned(),
+            data: serde_json::json!({"usage_str": "32.5% context (85129/262000 estimated tokens)"}),
+            ..EventEnvelope::default()
+        });
+        app.apply_event(&EventEnvelope {
+            event_type: "api_metrics".to_owned(),
+            data: serde_json::json!({"prompt_tokens": 102434,
+                "usage_str": "39.1% context (102434/262000 estimated tokens)"}),
+            ..EventEnvelope::default()
+        });
+        assert_eq!(app.context_percent, Some(39.1));
+        // Metrics without usage_str (other providers, older events) leave it alone.
+        app.apply_event(&EventEnvelope {
+            event_type: "api_metrics".to_owned(),
+            data: serde_json::json!({"completion_tokens": 5}),
+            ..EventEnvelope::default()
+        });
+        assert_eq!(app.context_percent, Some(39.1));
+    }
+
+    #[test]
     fn replay_restores_latest_context_percent() {
         let mut app = empty_app();
         app.apply_loaded(SessionLoaded {
@@ -2340,6 +2373,32 @@ mod tests {
         });
         assert_eq!(app.transcript.len(), 3);
         assert!(app.transcript[2].text.contains("streaming more"));
+    }
+
+    #[test]
+    fn streamed_commentary_is_dropped_at_the_tool_call() {
+        let mut app = empty_app();
+        let event = |kind: &str, data: serde_json::Value| EventEnvelope {
+            event_type: kind.to_owned(),
+            data,
+            ..EventEnvelope::default()
+        };
+        app.apply_event(&event("assistant_delta", serde_json::json!({"text": "Let me run it"})));
+        app.apply_event(&event("thinking", serde_json::json!({"markdown": "plan"})));
+        app.apply_event(&event(
+            "tool_call",
+            serde_json::json!({"call_id": "c1", "name": "shell_run", "args": {"command": "dir"}}),
+        ));
+        assert!(app.transcript.iter().all(|entry| !entry.text.contains("Let me run it")));
+        // The next step's commentary starts a fresh entry, not the old one.
+        app.apply_event(&event("assistant_delta", serde_json::json!({"text": "Now it has"})));
+        let streamed: Vec<_> = app
+            .transcript
+            .iter()
+            .filter(|entry| entry.text.starts_with("Assistant\n"))
+            .collect();
+        assert_eq!(streamed.len(), 1);
+        assert_eq!(streamed[0].text, "Assistant\nNow it has");
     }
 
     #[test]

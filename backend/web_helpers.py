@@ -604,6 +604,7 @@ def _queue_payload(meta) -> dict:
             {
                 "id": item.id,
                 "text": item.text,
+                "display_text": item.display_text,
                 "image_count": len(item.images or []),
                 "attachment_count": len(item.attachments or item.images or []),
                 "created_at": item.created_at.isoformat(),
@@ -617,9 +618,11 @@ def _emit_queue_updated(session_id: str, meta) -> None:
     _emit_session_event(session_id, EventType.QUEUE_UPDATED, _queue_payload(meta))
 
 
-def _enqueue_message_locked(session_id: str, meta, text: str, saved_attachments: list[dict]) -> QueuedMessage:
+def _enqueue_message_locked(session_id: str, meta, text: str, saved_attachments: list[dict],
+                            display_text: str = "") -> QueuedMessage:
     queued = QueuedMessage(
         text=text,
+        display_text=display_text,
         images=[a for a in saved_attachments if _is_supported_inline_image(a.get("mime", ""))],
         attachments=saved_attachments,
     )

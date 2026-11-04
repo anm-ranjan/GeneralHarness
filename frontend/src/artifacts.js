@@ -17,26 +17,18 @@ export function artifactUrl(path) {
 }
 
 // Compare paths with forward slashes; Windows drive paths case-insensitively.
+// URL-style drive paths (`/C:/x`, `file:///C:/x`) lose the leading slash.
 function comparablePath(value) {
   let path = String(value || '').trim().replace(/^file:\/\/\/?(?=[a-z]:)/i, '').replace(/^file:\/\//, '')
-  path = path.replace(/[?#].*$/, '').replace(/\\/g, '/').replace(/^\.\//, '')
+  path = path.replace(/[?#].*$/, '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/(?=[a-z]:\/)/i, '')
   return /^[a-z]:\//i.test(path) ? path.toLowerCase() : path
 }
 
-/**
- * Whether Markdown points at `path` in a way the transcript renders clickable:
- * a link (plain, URL-encoded, <bracketed> or file://) or an inline code span,
- * either absolute or relative to the file's folder or workspace. Windows
- * backslash and forward-slash spellings of the same path match.
- */
-export function linksToPath(markdown, path) {
+// Whether any Markdown target names `path`, absolute or relative to its folder
+// or workspace.
+function anyTargetIs(targets, path) {
   const wanted = comparablePath(path)
-  if (!wanted || !markdown) return false
-  const text = String(markdown)
-  const targets = [
-    ...[...text.matchAll(/\]\(\s*(?:<([^>]+)>|([^)\s]+))/g)].map(match => match[1] || match[2]),
-    ...[...text.matchAll(/(?<!`)`([^`\n]+)`(?!`)/g)].map(match => match[1]),
-  ]
+  if (!wanted) return false
   const wantedLower = wanted.toLowerCase()
   const windows = /^[a-z]:\//.test(wanted)
   for (let target of targets) {
@@ -48,4 +40,30 @@ export function linksToPath(markdown, path) {
     if (!isAbsolute && (windows ? wantedLower.endsWith(`/${target.toLowerCase()}`) : wanted.endsWith(`/${target}`))) return true
   }
   return false
+}
+
+/**
+ * Whether Markdown points at `path` in a way the transcript renders clickable:
+ * a link (plain, URL-encoded, <bracketed> or file://) or an inline code span,
+ * either absolute or relative to the file's folder or workspace. Windows
+ * backslash, forward-slash and `/C:/` spellings of the same path match.
+ */
+export function linksToPath(markdown, path) {
+  if (!path || !markdown) return false
+  const text = String(markdown)
+  return anyTargetIs([
+    ...[...text.matchAll(/\]\(\s*(?:<([^>]+)>|([^)\s]+))/g)].map(match => match[1] || match[2]),
+    ...[...text.matchAll(/(?<!`)`([^`\n]+)`(?!`)/g)].map(match => match[1]),
+  ], path)
+}
+
+/**
+ * Whether Markdown embeds `path` as an image (`![alt](path)`), matched the same
+ * way as linksToPath. Only an embed shows the picture, so a mere mention or
+ * link does not count.
+ */
+export function embedsImage(markdown, path) {
+  if (!path || !markdown) return false
+  const targets = [...String(markdown).matchAll(/!\[[^\]]*\]\(\s*(?:<([^>]+)>|([^)\s]+))/g)].map(match => match[1] || match[2])
+  return anyTargetIs(targets, path)
 }

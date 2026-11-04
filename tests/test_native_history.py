@@ -239,6 +239,122 @@ class CompactionTests(unittest.TestCase):
                 self.assertEqual(api.call_args.kwargs["max_tokens"], utils.SUMMARY_TARGET_TOKENS + 256)
 
 
+def nudge(count=52):
+    return {"role": "user", agent.SYSTEM_NUDGE_FLAG: True,
+            "content": agent.SYSTEM_NUDGE_PREFIX + f"{count} tool calls. Pause briefly."}
+
+
+def long_session(turns=6, reads=12):
+    """Shape of a long real session: many reads/runs per turn, an answered
+    question, a tool-call nudge mid-turn, and a final report per turn."""
+    history = []
+    for turn in range(turns):
+        history.append({"role": "user", "content": f"Request {turn}: keep outputs in folder {turn}."})
+        for read in range(reads):
+            history += exchange("file_read", {"file_path": f"t{turn}_r{read}.txt"},
+                                f"observed {turn}-{read} " + "data " * 80, call_id=f"r{turn}_{read}")
+        history += exchange("shell_run", {"command": f"run case {turn}"}, f"Exit code: 0\ncase {turn} ok",
+                            call_id=f"s{turn}")
+        if turn == 1:
+            history += exchange("ask_user", {"question": "Which contour range?", "options": ["auto", "fixed"]},
+                                "The user answered: minimum 0, maximum 0.5", call_id="q1")
+        if turn == 2:
+            history += exchange("shell_run", {"command": "check log"}, "Exit code: 1\nFATAL at t=0.994",
+                                call_id="fail2")
+            history.append({"role": "assistant", "content": "Probing further."})
+            history.append(nudge())
+        history.append({"role": "assistant", "content": f"Turn {turn} done: wrote report {turn}."})
+    return history
+
+
+class LongSessionTaskStateTests(unittest.TestCase):
+    def test_question_answers_are_kept_as_requests(self):
+        with patch.object(utils, "TASK_STATE_TOKENS", 1500):
+            state = agent.build_native_task_state([], long_session())
+        self.assertIsNotNone(state)
+        self.assertIn("[Answer to agent question] Which contour range?\nminimum 0, maximum 0.5", state["requests"])
+        # Answers sit in chronological order between the user's requests.
+        answer_index = next(i for i, r in enumerate(state["requests"]) if r.startswith("[Answer"))
+        self.assertTrue(state["requests"][answer_index - 1].startswith("Request 1:"))
+        self.assertTrue(state["requests"][answer_index + 1].startswith("Request 2:"))
+
+    def test_nudge_is_not_a_request_and_does_not_split_the_turn(self):
+        state = agent.build_native_task_state([], long_session())
+        self.assertFalse(any(agent.SYSTEM_NUDGE_PREFIX in r for r in state["requests"]))
+        reports = [fact["assistant_report"] for fact in state["facts"] if "assistant_report" in fact]
+        self.assertEqual(reports, [f"Turn {turn} done: wrote report {turn}." for turn in range(6)])
+
+    def test_nudge_saved_before_the_flag_existed_is_still_recognised(self):
+        legacy = {"role": "user", "content": agent.SYSTEM_NUDGE_PREFIX + "52 tool calls. Pause briefly."}
+        state = agent.build_native_task_state([], [{"role": "user", "content": "Do it."}, legacy,
+                                                   {"role": "assistant", "content": "Done."}])
+        self.assertEqual(state["requests"], ["Do it."])
+        prior = {**state, "requests": ["Do it.", legacy["content"]]}
+        memory = [{"role": "system", "content": utils.MEMORY_SUMMARY_MARKER + "\n" + json.dumps(prior)}]
+        merged = agent.build_native_task_state(memory, [{"role": "user", "content": "Next."}])
+        self.assertEqual(merged["requests"], ["Do it.", "Next."])
+
+    def test_nudge_flag_is_not_sent_to_the_provider(self):
+        self.assertNotIn(agent.SYSTEM_NUDGE_FLAG, history_tokens.wire_messages([nudge()])[0])
+
+    def test_valid_summary_survives_by_trimming_facts(self):
+        summary = json.dumps({"decisions": ["Range fixed at 0-0.5"], "unfinished_work": []})
+        with patch.object(utils, "TASK_STATE_TOKENS", 1500):
+            state = agent.build_native_task_state([], long_session(), summary)
+        self.assertEqual(state["summary"], summary)
+        self.assertGreater(state["omitted_facts"], 0)
+        self.assertLessEqual(history_tokens.count_value(state), 1500)
+
+    def test_summary_that_cannot_fit_beside_requests_falls_back(self):
+        summary = json.dumps({"decisions": [" ".join(f"detail{i}" for i in range(1500))]})
+        with patch.object(utils, "TASK_STATE_TOKENS", 1000):
+            state = agent.build_native_task_state([], long_session(), summary)
+        self.assertEqual(state["summary"], "")
+        self.assertLessEqual(history_tokens.count_value(state), 1000)
+
+    def test_trimming_drops_reads_before_reports_runs_and_failures(self):
+        with patch.object(utils, "TASK_STATE_TOKENS", 1500):
+            state = agent.build_native_task_state([], long_session())
+        facts = state["facts"]
+        self.assertGreater(state["omitted_facts"], 0)
+        # Every report and the failure survive; reads go first.
+        self.assertEqual(sum("assistant_report" in f for f in facts), 6)
+        self.assertTrue(any(f.get("exit_code") == 1 for f in facts))
+        # Only low-priority facts were dropped (72 reads plus the ask_user
+        # fact, whose answer is already a request): every shell run remains.
+        self.assertEqual(sum(f.get("name") == "shell_run" for f in facts), 7)
+        low = sum(f.get("name") in ("file_read", "ask_user") for f in facts)
+        self.assertEqual(state["omitted_facts"], 73 - low)
+        # Survivors keep their chronological order.
+        reports = [f["assistant_report"] for f in facts if "assistant_report" in f]
+        self.assertEqual(reports, sorted(reports, key=lambda r: int(r.split()[1])))
+
+    def test_compaction_end_to_end_keeps_answers_and_summary(self):
+        messages = [{"role": "system", "content": "rules"}, *long_session(),
+                    {"role": "user", "content": "Latest request"}, {"role": "assistant", "content": "Latest answer"}]
+        summary = json.dumps({"decisions": ["Range fixed at 0-0.5"]})
+        with patch.object(utils, "COMPACT_THRESHOLD_TOKENS", 1), patch.object(utils, "KEEP_RECENT_MESSAGES", 2), \
+                patch.object(utils, "TASK_STATE_TOKENS", 1500), patch.object(agent, "summarize_history", return_value=summary):
+            compacted = agent.compact_history_if_needed(messages, ui=Mock())
+        state = json.loads(compacted[1]["content"].split("\n", 1)[1])
+        self.assertEqual(state["summary"], summary)
+        self.assertIn("[Answer to agent question] Which contour range?\nminimum 0, maximum 0.5", state["requests"])
+
+    def test_compaction_event_carries_the_memory_the_model_sees(self):
+        messages = [{"role": "system", "content": "rules"}, *long_session(),
+                    {"role": "user", "content": "Latest request"}, {"role": "assistant", "content": "Latest answer"}]
+        ui = Mock()
+        with patch.object(utils, "COMPACT_THRESHOLD_TOKENS", 1), patch.object(utils, "KEEP_RECENT_MESSAGES", 2), \
+                patch.object(utils, "TASK_STATE_TOKENS", 1500), patch.object(agent, "summarize_history", return_value=""):
+            compacted = agent.compact_history_if_needed(messages, ui=ui)
+        before, after, memory = ui.show_compaction.call_args.args
+        self.assertGreater(before, after)
+        self.assertEqual(memory, json.loads(compacted[1]["content"].split("\n", 1)[1]))
+        self.assertIsNone(agent.compaction_memory([{"role": "system", "content": "rules"}]))
+        self.assertEqual(compacted[-2:], messages[-2:])
+        self.assertTrue(web_helpers._valid_native_context(compacted[1:]))
+
+
 class EvidenceAndRestoreTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

@@ -47,7 +47,7 @@ class CliUI:
     def show_iteration(self, n: int) -> None:
         ui_print(f"Iteration {n}", style="dim")
 
-    def show_compaction(self, before_tokens: int, after_tokens: int) -> None:
+    def show_compaction(self, before_tokens: int, after_tokens: int, memory: dict | None = None) -> None:
         if after_tokens == 0:
             ui_print(
                 f"\nCompacting session history ({before_tokens} estimated tokens)...",

@@ -118,6 +118,39 @@ test('compaction usage does not replace visible answer throughput', () => {
   assert.deepEqual(ctx.actions, [])
 })
 
+test('native model calls move the context display mid-turn', () => {
+  const ctx = collect()
+  handleSessionEvent({ type: 'api_metrics', data: {
+    prompt_tokens: 102434, usage_str: '39.1% context (102434/262000 estimated tokens)',
+  } }, ctx.dispatch, ctx.stateRef)
+  const context = ctx.actions.find(a => a.type === 'SET_CONTEXT')
+  assert.ok(context, 'usage_str on api_metrics updates the context display')
+  assert.equal(context.payload.percent, 39.1)
+  const compaction = collect()
+  handleSessionEvent({ type: 'api_metrics', data: {
+    purpose: 'history_compaction', usage_str: '40.0% context (104800/262000 estimated tokens)',
+  } }, compaction.dispatch, compaction.stateRef)
+  assert.deepEqual(compaction.actions, [], 'the hidden summary call never moves the display')
+})
+
+test('compaction events become a notice that carries the kept memory', () => {
+  const ctx = collect()
+  const memory = { schema: 'myharness-native-task-state-v1', requests: ['Keep units in mm.'] }
+  handleSessionEvent({ type: 'compaction', data: { before: 102434, after: 16221, memory } }, ctx.dispatch, ctx.stateRef)
+  assert.deepEqual(ctx.actions, [{ type: 'APPEND_STAGE_ITEM', payload: { type: 'compaction', before: 102434, after: 16221, memory } }])
+  const old = collect()
+  handleSessionEvent({ type: 'compaction', data: { before: 10, after: 5 } }, old.dispatch, old.stateRef)
+  assert.equal(old.actions[0].payload.memory, null, 'events stored before this change have no memory')
+})
+
+test('user messages keep their formatted display text', () => {
+  const ctx = collect({ isReplaying: true })
+  handleSessionEvent({ type: 'user_message', data: { text: 'see this', display_text: 'see **this**' } }, ctx.dispatch, ctx.stateRef)
+  const item = flatten(ctx.actions).find(a => a.type === 'APPEND_STAGE_ITEM').payload
+  assert.equal(item.text, 'see this')
+  assert.equal(item.displayText, 'see **this**')
+})
+
 test('child agent progress is hidden unless verbose', () => {
   const ctx = collect()
   handleSessionEvent({
@@ -199,14 +232,15 @@ test('session_loaded replays events and settles idle sessions', () => {
     'SET_REPLAYING',
     'SET_EVENT_WINDOW',
     'INCREMENT_REPLAYED_EVENTS',
+    'FLUSH_AUTO_PREVIEWS',
     'APPEND_STAGE_ITEM',
     'INCREMENT_REPLAYED_EVENTS',
     'CLEAR_ASSISTANT_STREAM',
     'FINALIZE_WORK_GROUP',
     'HIDE_CODEX_RUNNING',
     'CLEAR_ITERATION',
-    'DROP_SHOWN_GENERATED_IMAGES',
     'APPEND_STAGE_ITEM',
+    'FLUSH_AUTO_PREVIEWS',
     'SET_REPLAYING',
     'SET_REPLAY_IDLE',
   ])
@@ -279,6 +313,7 @@ test('run_finished clears running indicators and silent command state', () => {
     'CLEAR_ASSISTANT_STREAM',
     'CLEAR_THINKING_STREAM',
     'FINALIZE_WORK_GROUP',
+    'FLUSH_AUTO_PREVIEWS',
     'APPEND_STAGE_ITEM',
     'APPEND_STAGE_ITEM',
     'SET_IDLE',
@@ -292,7 +327,7 @@ test('run_finished clears running indicators and silent command state', () => {
   assert.ok(!command.actions.some(a => a.payload?.type === 'run_end'))
 })
 
-test('generated artifacts render as replayable assistant images', () => {
+test('generated artifacts are held as replayable assistant images', () => {
   const ctx = collect()
   handleSessionEvent({
     type: 'generated_artifact',
@@ -300,9 +335,50 @@ test('generated artifacts render as replayable assistant images', () => {
   }, ctx.dispatch, ctx.stateRef)
 
   assert.deepEqual(ctx.actions, [{
-    type: 'APPEND_STAGE_ITEM',
+    type: 'HOLD_AUTO_PREVIEW',
     payload: { type: 'assistant_message', markdown: '![result.png](/workspace/result.png?myharness_v=42-10)', generatedPath: '/workspace/result.png' },
   }])
+})
+
+async function liveStage() {
+  const { reducer, initialState } = await import('./context/appReducer.js')
+  const box = { state: initialState }
+  const ctx = { dispatch: action => { box.state = reducer(box.state, action) }, stateRef: { get current() { return box.state } } }
+  const send = (type, data) => handleSessionEvent({ type, session_id: 's1', data }, ctx.dispatch, ctx.stateRef)
+  return { box, send }
+}
+
+test('generated images wait for the reply and follow it only if it does not embed them', async () => {
+  const { box, send } = await liveStage()
+  send('user_message', { text: 'Plot it' })
+  send('generated_artifact', { path: '/w/a b.png', name: 'a b.png', media_type: 'image/png', version: '1' })
+  send('generated_artifact', { path: '/w/other.png', name: 'other.png', media_type: 'image/png', version: '1' })
+  // The same image written again within the turn is held once, latest version.
+  send('generated_artifact', { path: '/w/other.png', name: 'other.png', media_type: 'image/png', version: '2' })
+  assert.equal(box.state.stageItems.length, 1, 'nothing shown before the reply')
+  send('assistant_message', { markdown: 'Chart: ![a](/w/a%20b.png)' })
+  const markdowns = box.state.stageItems.map(item => item.markdown || item.text)
+  assert.equal(markdowns.length, 3)
+  assert.equal(markdowns[1], 'Chart: ![a](/w/a%20b.png)')
+  assert.match(markdowns[2], /other\.png\?myharness_v=2/)
+  assert.deepEqual(box.state.heldPreviews, [])
+})
+
+test('Windows images embedded as /C:/ paths are not repeated after the reply', async () => {
+  const { box, send } = await liveStage()
+  send('user_message', { text: 'Plot it' })
+  send('generated_artifact', { path: 'U:\\Data\\plot.png', name: 'plot.png', media_type: 'image/png' })
+  send('assistant_message', { markdown: '![Plot](/U:/Data/plot.png)' })
+  assert.equal(box.state.stageItems.filter(item => item.generatedPath).length, 0)
+})
+
+test('View links wait for the reply; a run without one still shows them', async () => {
+  const { box, send } = await liveStage()
+  send('user_message', { text: 'Write' })
+  send('file_change', { path: '/w/report.md', action: 'created' })
+  assert.equal(box.state.stageItems.filter(item => item.autoPreviewPath).length, 0)
+  send('run_finished', { reason: 'interrupted' })
+  assert.equal(box.state.stageItems[1].autoPreviewPath, '/w/report.md', 'shown right after the stopped work')
 })
 
 test('workspace_changed updates the effective session root', () => {
@@ -387,8 +463,9 @@ test('assistant_message and tool_call clear the live stream bubble', () => {
   const ctx = collect()
   handleSessionEvent({ type: 'assistant_message', data: { markdown: 'final' } }, ctx.dispatch, ctx.stateRef)
   assert.equal(ctx.actions[0].type, 'CLEAR_ASSISTANT_STREAM')
-  assert.equal(ctx.actions.at(-1).type, 'APPEND_STAGE_ITEM')
-  assert.equal(ctx.actions.at(-1).payload.markdown, 'final')
+  const reply = ctx.actions.find(a => a.type === 'APPEND_STAGE_ITEM')
+  assert.equal(reply.payload.markdown, 'final')
+  assert.deepEqual(ctx.actions.at(-1), { type: 'FLUSH_AUTO_PREVIEWS', payload: 'final' })
 
   const toolCtx = collect()
   handleSessionEvent({ type: 'tool_call', data: { verbose: false, name: 'file_read' } }, toolCtx.dispatch, toolCtx.stateRef)
@@ -546,19 +623,6 @@ test('completed history keeps tools for its notes while reconnecting active turn
   const calls = actions.filter(a => a.type === 'APPEND_TOOL_CALL')
   assert.deepEqual(calls.map(a => [a.payload.callId, a.payload.historical]), [['old', true], ['live', false]])
   assert.ok(actions.some(a => a.type === 'APPEND_STAGE_ITEM' && a.payload.type === 'approval'))
-})
-
-test('final answer embedding a generated image replaces the early preview', async () => {
-  const { reducer, initialState } = await import('./context/appReducer.js')
-  let state = initialState
-  const ctx = { dispatch: action => { state = reducer(state, action) }, stateRef: { get current() { return state } } }
-  handleSessionEvent({ type: 'generated_artifact', data: { path: '/w/a b.png', name: 'a b.png', media_type: 'image/png' } }, ctx.dispatch, ctx.stateRef)
-  handleSessionEvent({ type: 'generated_artifact', data: { path: '/w/other.png', name: 'other.png', media_type: 'image/png' } }, ctx.dispatch, ctx.stateRef)
-  handleSessionEvent({ type: 'assistant_message', data: { markdown: 'Chart: ![a](/w/a%20b.png)' } }, ctx.dispatch, ctx.stateRef)
-  const markdowns = state.stageItems.map(item => item.markdown)
-  assert.equal(markdowns.length, 2)
-  assert.match(markdowns[0], /other\.png/)
-  assert.equal(markdowns[1], 'Chart: ![a](/w/a%20b.png)')
 })
 
 test('turn_note events become transcript items, empty ones are ignored', () => {

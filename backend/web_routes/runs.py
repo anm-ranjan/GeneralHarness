@@ -172,6 +172,10 @@ async def send_message(session_id: str, req: SendMessageRequest):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"status": "aside", "session_id": session_id, "aside_id": aside_id}
 
+    # Rendering-only copy; dropped when it adds nothing or is implausibly large.
+    display_text = req.display_text if req.display_text and req.display_text != req.text \
+        and len(req.display_text) <= 2 * len(req.text) + 10_000 else ""
+
     if req.mode == "steer":
         if not req.text.strip() or req.text.lstrip().startswith("/") or req_attachments:
             raise HTTPException(status_code=400, detail="Steering accepts a text prompt without attachments or slash commands")
@@ -181,7 +185,7 @@ async def send_message(session_id: str, req: SendMessageRequest):
                 raise HTTPException(status_code=409, detail="This run has finished or is closing. Send the prompt as a new message.")
             meta_now = web_app._store.load_session(session_id)
             from web_models import QueuedMessage
-            meta_now.steering_queue.append(QueuedMessage(text=req.text))
+            meta_now.steering_queue.append(QueuedMessage(text=req.text, display_text=display_text))
             web_app._store.update_session(meta_now)
             web_helpers._emit_queue_updated(session_id, meta_now)
             _emit_session_event(session_id, EventType.STATUS, {"text": "Steering saved; it will be applied at the next tool or model boundary."})
@@ -199,9 +203,10 @@ async def send_message(session_id: str, req: SendMessageRequest):
             if meta_now is None:
                 raise HTTPException(status_code=404, detail="Session not found")
             if not web_app._manager.get_active_run(session_id):
-                web_runs._start_agent_run_locked(session_id, meta_now, req.text, saved_attachments, web_helpers._workspace_root_for_session(meta_now))
+                web_runs._start_agent_run_locked(session_id, meta_now, req.text, saved_attachments,
+                                                 web_helpers._workspace_root_for_session(meta_now), display_text)
                 return {"status": "started", "session_id": session_id}
-            web_helpers._enqueue_message_locked(session_id, meta_now, req.text, saved_attachments)
+            web_helpers._enqueue_message_locked(session_id, meta_now, req.text, saved_attachments, display_text)
         return {"status": "queued", "session_id": session_id}
 
     if req.text.strip().startswith("/") and not req_attachments and await web_runs._handle_slash_command(session_id, req.text, workspace_root):
@@ -225,9 +230,9 @@ async def send_message(session_id: str, req: SendMessageRequest):
             meta_now = web_app._store.load_session(session_id)
             if meta_now is None:
                 raise HTTPException(status_code=404, detail="Session not found")
-            web_helpers._enqueue_message_locked(session_id, meta_now, req.text, saved_attachments)
+            web_helpers._enqueue_message_locked(session_id, meta_now, req.text, saved_attachments, display_text)
             return {"status": "queued", "session_id": session_id}
-        web_runs._start_agent_run_locked(session_id, meta, req.text, saved_attachments, workspace_root)
+        web_runs._start_agent_run_locked(session_id, meta, req.text, saved_attachments, workspace_root, display_text)
     return {"status": "started", "session_id": session_id}
 
 
@@ -281,6 +286,7 @@ def steer_queued_message(session_id: str, message_id: str):
 class _QueuedMessageEdit(_PydanticBaseModel):
     text: str
     expected_text: str
+    display_text: str = ""
 
 
 @router.patch("/api/sessions/{session_id}/queue/{message_id}")
@@ -303,6 +309,7 @@ def edit_pending_message(session_id: str, message_id: str, req: _QueuedMessageEd
         if item.text != req.expected_text:
             raise HTTPException(status_code=409, detail="This message changed in another window. Reopen it to edit the latest version")
         item.text = req.text
+        item.display_text = req.display_text if req.display_text != req.text else ""
         web_app._store.update_session(meta)
         web_helpers._emit_queue_updated(session_id, meta)
         return {"status": "updated", **_queue_payload(meta)}

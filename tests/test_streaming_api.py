@@ -95,6 +95,43 @@ class AssembleStreamedResponseTests(unittest.TestCase):
         self.assertEqual(message["content"], "2B||!2B — local-first")
 
 
+    def test_collects_reasoning_content_privately(self):
+        # vLLM/DeepSeek stream thinking as reasoning_content, outside content.
+        message, *_ = agent._assemble_streamed_response([
+            _sse({"choices": [{"delta": {"reasoning_content": "The user "}}]}),
+            _sse({"choices": [{"delta": {"reasoning_content": "wants hi"}}]}),
+            _content_chunk("hi"),
+            "data: [DONE]",
+        ])
+        self.assertEqual(message["content"], "hi")
+        self.assertEqual(message[agent.REASONING_TEXT_KEY], "The user wants hi")
+        self.assertNotIn("reasoning_content", message)
+        from history_tokens import wire_messages
+        self.assertNotIn(agent.REASONING_TEXT_KEY, wire_messages([message])[0])
+
+
+class ThinkingDisplayTests(unittest.TestCase):
+    def _run(self, verbose):
+        from unittest.mock import Mock
+        ui = Mock(run_settings={"verbose_tools": verbose})
+        reply = {"choices": [{"message": {"role": "assistant", "content": "<think>tagged</think>answer",
+                                          agent.REASONING_TEXT_KEY: "streamed thought"},
+                              "finish_reason": "stop"}]}
+        messages = agent.run_agent("q", [{"role": "system", "content": "Test"}], max_iterations=1,
+                                   ui=ui, api_caller=lambda *a, **kw: reply)
+        return ui, messages
+
+    def test_streamed_reasoning_is_shown_only_in_verbose_mode(self):
+        ui, messages = self._run(True)
+        ui.show_thinking.assert_called_once_with("streamed thought\n\ntagged")
+        ui, messages = self._run(False)
+        ui.show_thinking.assert_not_called()
+        # Either way the thinking never stays in model context.
+        answer = [m for m in messages if m.get("role") == "assistant"][-1]
+        self.assertEqual(answer["content"], "answer")
+        self.assertNotIn(agent.REASONING_TEXT_KEY, answer)
+
+
 class DeltaStreamerTests(unittest.TestCase):
     def test_filters_think_blocks_including_split_tags(self):
         ui = _RecordingUI()

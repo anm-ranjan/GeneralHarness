@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { useApp } from '../../context/AppContext'
+import { messageBody } from '../../textFormat'
 import { api } from '../../api'
+
+// Same split as sending: the model gets plain text, the marked draft is kept
+// for display (an empty display_text clears it on the server).
+function editBody(draft) {
+  const { text, display_text: displayText = '' } = messageBody(draft)
+  return { text, display_text: displayText }
+}
 
 function previewText(item) {
   const text = (item.text || '').trim()
@@ -50,7 +58,7 @@ export default function QueuedMessages() {
     setSaving(true); setEditError('')
     const sessionId = state.currentSessionId
     try {
-      await api('PATCH', `/api/sessions/${encodeURIComponent(sessionId)}/${editing.steering ? 'steering' : 'queue'}/${encodeURIComponent(editing.id)}`, { text: draft, expected_text: editing.text })
+      await api('PATCH', `/api/sessions/${encodeURIComponent(sessionId)}/${editing.steering ? 'steering' : 'queue'}/${encodeURIComponent(editing.id)}`, { ...editBody(draft), expected_text: editing.text })
       setEditing(null)
     } catch (err) {
       if (err?.status === 404) { setEditing(null); await refreshQueue(sessionId); return }
@@ -162,7 +170,7 @@ export default function QueuedMessages() {
             >
               <span className="inline-flex items-center justify-center h-4 min-w-4 px-1 mr-1.5 rounded-full bg-accent-soft text-accent text-[10px] font-semibold align-middle">{i + 1}</span>
               <button type="button" className="min-w-0 truncate text-text-default hover:text-accent text-left" aria-label={`Edit ${item.steering ? 'pending steering' : 'queued message'} ${i + 1}`}
-                onClick={() => { setEditing(item); setDraft(item.text); setEditError('') }}>{item.steering ? 'Steering: ' : ''}{previewText(item)}</button>
+                onClick={() => { setEditing(item); setDraft(item.displayText || item.text); setEditError('') }}>{item.steering ? 'Steering: ' : ''}{previewText(item)}</button>
               {item.attachmentCount > 0 && (
                 <span className="ml-2 text-faint">
                   +{item.attachmentCount} file{item.attachmentCount === 1 ? '' : 's'}

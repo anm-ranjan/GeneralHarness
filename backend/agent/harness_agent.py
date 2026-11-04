@@ -268,6 +268,23 @@ class _DeltaStreamer:
         self._flush()
 
 
+REASONING_TEXT_KEY = "_reasoning_text"
+
+
+def _emit_api_metrics(ui, context_of=None) -> None:
+    """Send the latest call's metrics to the UI. context_of (main agent loop
+    only) adds usage_str so the context display updates after every call."""
+    if not (ui and hasattr(ui, "show_api_metrics")):
+        return
+    metrics = get_last_api_metrics()
+    if context_of is not None:
+        try:
+            metrics["usage_str"] = context_of(metrics)
+        except Exception:
+            pass
+    ui.show_api_metrics(metrics)
+
+
 def _assemble_streamed_response(lines, streamer: "_DeltaStreamer | None" = None, response_metadata=None):
     """Fold OpenAI-style SSE chunks into a non-streaming response shape."""
     content_parts: list[str] = []
@@ -276,6 +293,10 @@ def _assemble_streamed_response(lines, streamer: "_DeltaStreamer | None" = None,
     usage: dict = {}
     model_name = None
     reasoning_details = {}
+    # Plain-text thinking streamed outside the content (vLLM/DeepSeek send
+    # reasoning_content, OpenRouter also sends reasoning). Kept only for
+    # display; it is never sent back to the model.
+    reasoning_text: list[str] = []
     for raw in lines:
         if not raw:
             continue
@@ -303,6 +324,9 @@ def _assemble_streamed_response(lines, streamer: "_DeltaStreamer | None" = None,
         choice = choices[0]
         finish_reason = choice.get("finish_reason") or finish_reason
         delta = choice.get("delta") or {}
+        reasoning_piece = delta.get("reasoning_content") or delta.get("reasoning")
+        if isinstance(reasoning_piece, str) and reasoning_piece:
+            reasoning_text.append(reasoning_piece)
         for detail in delta.get("reasoning_details") or []:
             index = detail.get("index", 0)
             block = reasoning_details.setdefault(index, {})
@@ -338,18 +362,32 @@ def _assemble_streamed_response(lines, streamer: "_DeltaStreamer | None" = None,
         message["tool_calls"] = tool_calls
     if reasoning_details:
         message["reasoning_details"] = list(reasoning_details.values())
+    if reasoning_text:
+        # Private key: wire_messages strips it from requests; run_agent pops it.
+        message[REASONING_TEXT_KEY] = "".join(reasoning_text)
     return message, finish_reason, usage, model_name
 
 
 _STREAM_UNSUPPORTED = object()
+# Base URLs that rejected stream_options but accepted the same streamed
+# request without it. They are streamed without usage for this process.
+_STREAM_USAGE_REJECTED: set = set()
 
 
-def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int, headers=None):
+def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int, headers=None,
+                        include_usage: bool | None = None, context_of=None):
     """Streaming variant of call_api. Returns _STREAM_UNSUPPORTED when the
-    provider rejects the streaming request so the caller can retry plainly."""
+    provider rejects the streaming request so the caller can retry plainly.
+
+    OpenAI-compatible servers only send token usage on a stream when asked
+    with stream_options.include_usage, so it is requested from every endpoint.
+    A gateway that rejects the option is retried once without it.
+    """
     import time
+    if include_usage is None:
+        include_usage = utils.BASE_URL not in _STREAM_USAGE_REJECTED
     stream_payload = {**payload, "stream": True}
-    if prompt_cache.endpoint_kind(utils.BASE_URL) in {"openrouter", "xai"}:
+    if include_usage:
         stream_payload["stream_options"] = {"include_usage": True}
     t0 = time.monotonic()
     try:
@@ -378,7 +416,17 @@ def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int, head
         return None
 
     if response.status_code != 200:
+        status = response.status_code
         response.close()
+        if include_usage and status in (400, 422):
+            # Possibly the option itself was rejected: retry without it, and
+            # stop sending it only if that retry is accepted. Any other error
+            # keeps the option and falls back to a plain request as before.
+            result = _call_api_streaming(payload, ui, cancel_event, payload_size, headers,
+                                         include_usage=False, context_of=context_of)
+            if isinstance(result, dict):
+                _STREAM_USAGE_REJECTED.add(utils.BASE_URL)
+            return result
         return _STREAM_UNSUPPORTED
 
     streamer = _DeltaStreamer(ui)
@@ -426,8 +474,7 @@ def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int, head
         "model": model_name or payload.get("model") or "",
     }
     _set_api_metrics(metrics)
-    if ui and hasattr(ui, "show_api_metrics"):
-        ui.show_api_metrics(metrics)
+    _emit_api_metrics(ui, context_of)
 
     return {
         **response_metadata,
@@ -445,6 +492,7 @@ def call_api(
     cancel_event=None,
     max_tokens: int | None = None,
     cache_session_key: str | None = None,
+    report_context: bool = False,
 ) -> dict:
     _set_api_failure(None)
     _set_api_metrics({})
@@ -482,8 +530,16 @@ def call_api(
     import time
     payload_size = len(json.dumps(payload, ensure_ascii=False))
 
+    context_of = None
+    if report_context:
+        def context_of(metrics):
+            # The input of this call: the gateway's own count when reported,
+            # otherwise the same local estimate the mid-turn guard uses.
+            reported = metrics.get("prompt_tokens") or 0
+            return format_context_count(reported if reported > 0 else context_tokens(messages, tools))
+
     if utils.API_STREAMING and ui is not None and hasattr(ui, "show_assistant_delta"):
-        result = _call_api_streaming(payload, ui, cancel_event, payload_size, headers)
+        result = _call_api_streaming(payload, ui, cancel_event, payload_size, headers, context_of=context_of)
         if result is not _STREAM_UNSUPPORTED:
             return result
         # Streaming rejected by the provider — retry as a plain request.
@@ -551,8 +607,7 @@ def call_api(
     }
     _set_api_metrics(metrics)
 
-    if ui and hasattr(ui, "show_api_metrics"):
-        ui.show_api_metrics(metrics)
+    _emit_api_metrics(ui, context_of)
 
     return data
 
@@ -587,11 +642,31 @@ def output_token_budget(messages: list, tools=None, requested: int | None = None
 
 
 def format_context_usage(messages: list) -> str:
-    token_count = context_tokens(messages)
+    return format_context_count(context_tokens(messages))
+
+
+def format_context_count(token_count: int) -> str:
     if utils.CONTEXT_LIMIT_TOKENS <= 0:
         return f"{token_count} estimated tokens"
     usage_percent = min(999.9, (token_count / utils.CONTEXT_LIMIT_TOKENS) * 100)
     return f"{usage_percent:.1f}% context ({token_count}/{utils.CONTEXT_LIMIT_TOKENS} estimated tokens)"
+
+
+def compaction_memory(messages: list):
+    """The memory block a compaction left in place, parsed, for display.
+
+    This is exactly what the model sees from now on in place of the older
+    history; None when there is no parseable block.
+    """
+    for message in messages:
+        if is_memory_summary_message(message):
+            raw = message["content"][len(utils.MEMORY_SUMMARY_MARKER):].strip()
+            try:
+                value = json.loads(raw)
+            except (TypeError, ValueError):
+                return None
+            return value if isinstance(value, dict) else None
+    return None
 
 
 def is_memory_summary_message(message: dict) -> bool:
@@ -693,12 +768,76 @@ def summarize_history(existing_memory: list, old_history: list, ui=None) -> str:
         return ""
 
 
+# The tool-call nudge is a system message sent with the user role. It carries
+# this private flag (stripped from provider requests); the prefix catches
+# nudges saved in checkpoints written before the flag existed.
+SYSTEM_NUDGE_FLAG = "_system_nudge"
+SYSTEM_NUDGE_PREFIX = "[SYSTEM CHECKPOINT] You have made "
+ASK_USER_ANSWER_PREFIX = "The user answered: "
+
+
+def _is_system_nudge(message) -> bool:
+    if not isinstance(message, dict) or message.get("role") != "user":
+        return False
+    return bool(message.get(SYSTEM_NUDGE_FLAG)) or _text_from_content(message.get("content")).startswith(SYSTEM_NUDGE_PREFIX)
+
+
+def _ask_user_answers(old_history) -> dict:
+    """Return request text for each answered ask_user call.
+
+    Answers are the user's own decisions, so they are kept like user messages
+    rather than as trimmable tool facts. Keyed by tool_call_id.
+    """
+    questions = {}
+    answers = {}
+    for message in old_history:
+        if message.get("role") == "assistant":
+            for call in message.get("tool_calls") or []:
+                function = call.get("function") or {}
+                if function.get("name") != "ask_user":
+                    continue
+                try:
+                    arguments = json.loads(function.get("arguments") or "{}")
+                except (TypeError, ValueError):
+                    arguments = {}
+                question = arguments.get("question", "") if isinstance(arguments, dict) else ""
+                questions[str(call.get("id") or "")] = str(question).strip()
+        elif message.get("role") == "tool":
+            call_id = str(message.get("tool_call_id") or "")
+            question = questions.pop(call_id, None)
+            content = str(message.get("content") or "")
+            if question is not None and content.startswith(ASK_USER_ANSWER_PREFIX):
+                answer = content[len(ASK_USER_ANSWER_PREFIX):].strip()
+                answers[call_id] =f"[Answer to agent question] {question}\n{answer}" if question else (
+                    f"[Answer to agent question] {answer}")
+    return answers
+
+
+def _fact_keep_priority(fact) -> int:
+    """Higher survives budget trimming longer; ties drop oldest first.
+
+    Turn reports and failures carry outcomes and unresolved problems; writes,
+    shell runs and job control record changes; reads and searches can be
+    repeated or retrieved from archived evidence.
+    """
+    if "assistant_report" in fact or fact.get("ok") is False:
+        return 2
+    name = fact.get("name")
+    if name in WRITE_TOOL_NAMES or name == "shell_run" or name in JOB_CONTROL_TOOL_NAMES:
+        return 1
+    return 0
+
+
 def build_native_task_state(existing_memory, old_history, summary=""):
     """Bound evidence/narrative, but never silently truncate user constraints.
 
     When protected requests alone exceed the budget, return None: retaining
     history is safer than claiming a bounded summary preserved instructions.
     """
+    answers = _ask_user_answers(old_history)
+    # Drop nudges before building the ledger as well: a user-role message
+    # would otherwise start a new turn and split the real one in two.
+    old_history = [message for message in old_history if not _is_system_nudge(message)]
     state = {"schema": "myharness-native-task-state-v1", "requests": [],
              "prior_memory": [], "facts": [], "summary": "", "omitted_facts": 0,
              "evidence_note": "Historical observations only. Reread current files before exact edits. "
@@ -716,6 +855,9 @@ def build_native_task_state(existing_memory, old_history, summary=""):
         if valid_prior:
             for key in ("requests", "prior_memory", "facts"):
                 state[key].extend(prior.get(key) or [])
+            # Earlier states may hold a nudge saved as a request; drop it.
+            state["requests"] = [item for item in state["requests"]
+                                 if not (isinstance(item, str) and item.startswith(SYSTEM_NUDGE_PREFIX))]
             state["summary"] = prior.get("summary") or ""
             state["omitted_facts"] += prior.get("omitted_facts", 0)
         elif raw:
@@ -727,6 +869,8 @@ def build_native_task_state(existing_memory, old_history, summary=""):
             text = _text_from_content(msg.get("content"))
             if text:
                 state["requests"].append(text)
+        elif msg.get("role") == "tool" and str(msg.get("tool_call_id") or "") in answers:
+            state["requests"].append(answers[str(msg.get("tool_call_id") or "")])
     ledger = build_deterministic_context_ledger(old_history)
     for turn in ledger["completed_turns"]:
         for tool in turn["tools"]:
@@ -745,17 +889,35 @@ def build_native_task_state(existing_memory, old_history, summary=""):
         unique = {json.dumps(item, ensure_ascii=False, sort_keys=True): item for item in state[key]}
         state[key] = list(unique.values())
     previous_summary = state["summary"]
-    if summary:
-        state["summary"] = summary
+    all_facts = state["facts"]
+    base_omitted = state["omitted_facts"]
+
     def size():
         return history_tokens.count_value(state)
-    # Keep the model synthesis only when it fits alongside protected state.
-    if size() > utils.TASK_STATE_TOKENS and summary:
+
+    def fits_after_trimming():
+        # Drop the least useful facts first (see _fact_keep_priority), oldest
+        # first within a level, and keep the survivors in their original order.
+        order = sorted(range(len(all_facts)), key=lambda i: (_fact_keep_priority(all_facts[i]), i))
+        dropped = set()
+        state["facts"] = list(all_facts)
+        for index in order:
+            if size() <= utils.TASK_STATE_TOKENS:
+                break
+            dropped.add(index)
+            state["facts"] = [fact for i, fact in enumerate(all_facts) if i not in dropped]
+        state["omitted_facts"] = base_omitted + len(dropped)
+        return size() <= utils.TASK_STATE_TOKENS
+
+    # A model synthesis covers the whole older history, so it is worth more
+    # than the individual facts it summarises: trim facts to make room for it.
+    # It is dropped only when it cannot fit next to the protected requests.
+    if summary:
+        state["summary"] = summary
+        if fits_after_trimming():
+            return state
         state["summary"] = previous_summary
-    while state["facts"] and size() > utils.TASK_STATE_TOKENS:
-        state["facts"].pop(0)
-        state["omitted_facts"] += 1
-    return state if size() <= utils.TASK_STATE_TOKENS else None
+    return state if fits_after_trimming() else None
 
 
 def _bounded_ledger_text(value, limit: int = 400) -> str:
@@ -968,7 +1130,7 @@ def compact_history(messages: list, ui=None, deterministic: bool = False,
     # Report in the same units as the context display (provider-anchored).
     display_after = max(1, display_before - (token_count - after_tokens))
     if ui:
-        ui.show_compaction(display_before, display_after)
+        ui.show_compaction(display_before, display_after, compaction_memory(compacted))
     else:
         ui_print(f"Compacted to {display_after} estimated tokens.", style="green")
     return compacted, None
@@ -1807,7 +1969,10 @@ def run_agent(
         model_call = api_caller
     else:
         def model_call(msgs, tools=None, ui=None):
-            result = call_api(msgs, tools=tools, ui=ui, cancel_event=cancel_event)
+            # Subagents report through their own UI; only the main agent's
+            # calls move the session's context display.
+            result = call_api(msgs, tools=tools, ui=ui, cancel_event=cancel_event,
+                              report_context=agent_path == "/root")
             if result is not None:
                 history_tokens.record_provider_usage(
                     msgs, (get_last_api_metrics() or {}).get("prompt_tokens"), tools)
@@ -1886,17 +2051,24 @@ def run_agent(
         assistant_msg = choice["message"]
         finish_reason = choice.get("finish_reason", "")
         turn_model = turn_model or result.get("model", utils.MODEL)
+        # Thinking can arrive outside the content: streamed reasoning text is
+        # collected under a private key, a plain response may carry
+        # reasoning_content. Neither is model context; both are display-only.
+        think_parts = [assistant_msg.pop(REASONING_TEXT_KEY, "") or ""]
+        if not think_parts[0] and isinstance(assistant_msg.get("reasoning_content"), str):
+            think_parts[0] = assistant_msg["reasoning_content"]
         if isinstance(assistant_msg.get("content"), str):
             think_match = _THINK_RE.search(assistant_msg["content"])
             if think_match:
-                think_text = think_match.group(1).strip()
+                think_parts.append(think_match.group(1))
                 assistant_msg["content"] = _THINK_RE.sub("", assistant_msg["content"]).strip()
-                if think_text and verbose_tools:
-                    if ui:
-                        ui.show_thinking(think_text)
-                    else:
-                        ui_panel("Thinking", "", style="dim")
-                        ui_print(think_text, style="dim")
+        think_text = "\n\n".join(part.strip() for part in think_parts if part and part.strip())
+        if think_text and verbose_tools:
+            if ui:
+                ui.show_thinking(think_text)
+            else:
+                ui_panel("Thinking", "", style="dim")
+                ui_print(think_text, style="dim")
         messages.append(assistant_msg)
         turn_messages.append(assistant_msg)
 
@@ -2196,8 +2368,9 @@ def run_agent(
                 checkpoint_injected = True
                 checkpoint_msg = {
                     "role": "user",
+                    SYSTEM_NUDGE_FLAG: True,
                     "content": (
-                        "[SYSTEM CHECKPOINT] You have made {n} tool calls. Pause briefly and decide whether you "
+                        SYSTEM_NUDGE_PREFIX + "{n} tool calls. Pause briefly and decide whether you "
                         "already have enough information to answer or make the requested change. If yes, finish now. "
                         "If no, continue with the smallest next tool call needed; avoid rereading the same files or "
                         "repeating failed approaches."

@@ -63,6 +63,9 @@ class CompactCommandTests(unittest.TestCase):
             events = store.load_events(meta.id)
             types = [e.type for e in events]
             self.assertIn(EventType.COMPACTION, types)
+            # The stored event carries the memory block the model now sees.
+            compaction = next(e for e in events if e.type == EventType.COMPACTION)
+            self.assertTrue(compaction.data["memory"]["requests"][0].startswith("Keep the API stable."))
             self.assertIn("Context compacted.", [e.data.get("text") for e in events])
             self.assertEqual(events[-1].type, EventType.RUN_FINISHED)
 

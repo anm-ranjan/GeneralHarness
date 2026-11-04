@@ -14,6 +14,9 @@ export default function SearchModal() {
   const [error, setError] = useState('')
   const inputRef = useRef(null)
   const debounceRef = useRef(null)
+  // Opened from the thread header: only that thread's transcript.
+  const scopeId = state.searchSessionId
+  const scopeTitle = scopeId ? (state.sessionsById[scopeId]?.title || state.currentMeta?.title || 'this thread') : ''
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -28,7 +31,8 @@ export default function SearchModal() {
     setLoading(true)
     setError('')
     try {
-      const res = await api('GET', `/api/search?q=${encodeURIComponent(q)}`)
+      const scope = scopeId ? `&session_id=${encodeURIComponent(scopeId)}&limit=500` : ''
+      const res = await api('GET', `/api/search?q=${encodeURIComponent(q)}${scope}`)
       setHits(res.hits || [])
       setTruncated(!!res.truncated)
     } catch (err) {
@@ -37,7 +41,7 @@ export default function SearchModal() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scopeId])
 
   useEffect(() => {
     clearTimeout(debounceRef.current)
@@ -57,7 +61,9 @@ export default function SearchModal() {
           payload: { sessionId: hit.session_id, eventIndex: hit.event_index },
         })
       }
-      await selectSession(hit.session_id)
+      // The open thread only needs to scroll; selecting it again would
+      // clear the transcript without replaying it.
+      if (hit.session_id !== state.currentSessionId) await selectSession(hit.session_id)
       close()
     } catch (err) {
       dispatch({ type: 'CLEAR_SCROLL_TARGET' })
@@ -83,7 +89,7 @@ export default function SearchModal() {
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search all thread transcripts…"
+            placeholder={scopeId ? `Search in ${scopeTitle}…` : 'Search all thread transcripts…'}
             className="w-full bg-transparent text-[14px] text-text-bright placeholder:text-faint outline-none"
           />
         </div>
@@ -94,16 +100,18 @@ export default function SearchModal() {
           )}
           {!query.trim() && (
             <p className="px-4 py-6 text-[13px] text-faint text-center italic">
-              Search prompts, responses, tool calls, and file paths across every thread.
+              {scopeId
+                ? 'Search prompts, responses, tool calls, and file paths in this thread.'
+                : 'Search prompts, responses, tool calls, and file paths across every thread.'}
             </p>
           )}
           {grouped.map((group) => (
             <div key={group.session.session_id} className="border-b border-line/50">
-              <div className="px-4 pt-2.5 pb-1 text-[11px] text-muted">
+              {!scopeId && <div className="px-4 pt-2.5 pb-1 text-[11px] text-muted">
                 <span className="font-medium text-text-default">{group.session.project_name}</span>
                 <span className="text-faint"> / {group.session.task_name} / </span>
                 <span className="font-medium text-text-default">{group.session.session_title}</span>
-              </div>
+              </div>}
               {group.items.map((hit, i) => (
                 <button
                   key={hit.session_id + '-' + hit.event_index + '-' + i}

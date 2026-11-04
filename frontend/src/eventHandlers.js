@@ -57,7 +57,7 @@ const HISTORICAL_ITEM_TYPES = new Set([
 function indexedDispatch(dispatch, eventIndex, historical = false) {
   return (action) => {
     if (historical && action.type === 'APPEND_STAGE_ITEM' && !HISTORICAL_ITEM_TYPES.has(action.payload.type)) return
-    if (action.type === 'APPEND_STAGE_ITEM' || action.type === 'APPEND_TOOL_CALL') {
+    if (action.type === 'APPEND_STAGE_ITEM' || action.type === 'APPEND_TOOL_CALL' || action.type === 'HOLD_AUTO_PREVIEW') {
       dispatch({ ...action, payload: { ...action.payload, eventIndex, historical } })
     } else {
       dispatch(action)
@@ -122,6 +122,8 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
 
     case 'user_message': {
       if (stateRef.current.silentCommand || isSlashCommand(data.text)) break
+      // Anything an earlier turn still holds belongs before the new prompt.
+      if (!data.steering) dispatch({ type: 'FLUSH_AUTO_PREVIEWS', payload: '' })
       // A new prompt starts a fresh set of agents; the last turn's are done with.
       if (!data.steering && Object.keys(stateRef.current.agentsById || {}).length) dispatch({ type: 'CLEAR_AGENTS' })
       const isLiveRunStart = !stateRef.current.isReplaying && !stateRef.current.isRunning
@@ -134,6 +136,8 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
           type: 'user_message',
           steering: !!data.steering,
           text: data.text,
+          // Formatted version for display only (the model got text).
+          displayText: data.display_text || '',
           images: data.images || [],
           attachments: data.attachments || data.images || [],
         },
@@ -198,10 +202,10 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       dispatch({ type: 'FINALIZE_WORK_GROUP' })
       dispatch({ type: 'HIDE_CODEX_RUNNING' })
       dispatch({ type: 'CLEAR_ITERATION' })
-      // A final answer that embeds an image already shown when the tool wrote
-      // it replaces that early preview instead of repeating it.
-      dispatch({ type: 'DROP_SHOWN_GENERATED_IMAGES', payload: data.markdown || '' })
       dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'assistant_message', markdown: data.markdown } })
+      // Files and images the run produced follow the reply, unless it already
+      // links or embeds them.
+      dispatch({ type: 'FLUSH_AUTO_PREVIEWS', payload: data.markdown || '' })
       break
 
     case 'tool_call':
@@ -327,7 +331,9 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       break
 
     case 'compaction':
-      dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'status', text: `Compacting: ${data.before} → ${data.after} tokens` } })
+      // memory (newer events only) is the block the model now sees in place
+      // of the older history; the notice shows it on demand.
+      dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'compaction', before: data.before, after: data.after, memory: data.memory || null } })
       break
 
     case 'file_change':
@@ -336,24 +342,24 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
         payload: { path: data.path, action: data.action, tool: data.tool, timestamp: evt.created_at || new Date().toISOString() },
       })
       if (data.action === 'created' && artifactPath(data.path)) {
-        // Shown at once in case the reply never mentions the file; dropped if
-        // the reply links it itself (see APPEND_STAGE_ITEM).
-        dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'assistant_message', markdown: previewLink(data.path), autoPreviewPath: data.path } })
+        // Held until the reply, then shown only if the reply does not link it.
+        dispatch({ type: 'HOLD_AUTO_PREVIEW', payload: { type: 'assistant_message', markdown: previewLink(data.path), autoPreviewPath: data.path } })
       }
       break
 
     case 'generated_artifact': {
       const name = data.name || String(data.path || '').split('/').pop() || 'generated image'
       if (data.media_type?.startsWith('text/')) {
-        dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'assistant_message', markdown: previewLink(data.path, name), autoPreviewPath: data.path } })
+        dispatch({ type: 'HOLD_AUTO_PREVIEW', payload: { type: 'assistant_message', markdown: previewLink(data.path, name), autoPreviewPath: data.path } })
         dispatch({ type: 'APPEND_FILE_CHANGE', payload: { path: data.path, action: 'generated', tool: 'shell_run', timestamp: evt.created_at } })
         break
       }
       const version = data.version || evt.created_at || Date.now()
       const separator = String(data.path || '').includes('?') ? '&' : '?'
       const path = `${data.path}${separator}myharness_v=${encodeURIComponent(version)}`
+      // Held until the reply, then shown only if the reply does not embed it.
       dispatch({
-        type: 'APPEND_STAGE_ITEM',
+        type: 'HOLD_AUTO_PREVIEW',
         payload: { type: 'assistant_message', markdown: `![${name}](${path})`, generatedPath: data.path || '' },
       })
       break
@@ -428,6 +434,9 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       dispatch({ type: 'CLEAR_THINKING_STREAM' })
       dispatch({ type: 'FINALIZE_WORK_GROUP' })
       if (Object.keys(stateRef.current.agentsById || {}).length) dispatch({ type: 'FINALIZE_AGENTS' })
+      // A run that ended without a reply (error, stop, max iterations) still
+      // shows the files it produced.
+      dispatch({ type: 'FLUSH_AUTO_PREVIEWS', payload: '' })
       // Slash commands also finish a run; only a prompt's own run says how it ended.
       if (data.reason && data.reason !== 'command') dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'run_end', reason: data.reason } })
       if (data.reason === 'max iterations reached') {

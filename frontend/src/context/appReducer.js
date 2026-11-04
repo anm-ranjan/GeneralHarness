@@ -3,7 +3,7 @@
 import { effectiveWorkspaceRoot } from '../sessionWorkspace.js'
 import { applyRunState, snapshotRunStates, trackUnseenFinished, withoutSession } from '../runStates.js'
 import { sidebarPrefs } from '../sidebarState.js'
-import { linksToPath } from '../artifacts.js'
+import { embedsImage, linksToPath } from '../artifacts.js'
 
 export const initialState = {
   currentSessionId: null,
@@ -40,6 +40,9 @@ export const initialState = {
   taskNames: {},
 
   stageItems: [],
+  // "View <file>" links and generated images from the current turn, held back
+  // until its reply (see FLUSH_AUTO_PREVIEWS).
+  heldPreviews: [],
   queuedMessages: [],
   pendingSteering: [],
   plan: [],
@@ -54,6 +57,7 @@ export const initialState = {
   showDirectoryPicker: false,
   showProviderPicker: null,
   showSearch: false,
+  searchSessionId: null,
   showSettings: false,
   gitWritesEnabled: false,
   audioEnabled: false,
@@ -158,18 +162,26 @@ function appendStageItem(items, item) {
   return [...base, { ...item, _id: item._id || `si_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }]
 }
 
-// MyHarness adds a "View <file>" message when a run creates a previewable file.
-// Once the turn's reply links that file itself, the added one is a duplicate
-// shown ahead of the reply, so it is dropped. Only the current turn is searched.
-function dropLinkedAutoPreviews(items, markdown) {
-  let start = items.length
-  while (start > 0) {
-    const item = items[start - 1]
-    if (item.type === 'user_message' && !item.steering) break
-    start -= 1
+// When a run creates a previewable file or an image, a "View <file>" link or
+// the image itself is held until the turn's reply. Then only the ones the
+// reply does not already show are added, below it: a View link when the reply
+// does not link or name the file, an image when the reply does not embed it.
+function previewPath(item) {
+  return item.autoPreviewPath || item.generatedPath || ''
+}
+
+function previewCovered(item, markdown) {
+  if (!markdown) return false
+  return item.generatedPath ? embedsImage(markdown, item.generatedPath) : linksToPath(markdown, item.autoPreviewPath)
+}
+
+function flushHeldPreviews(state, markdown = '') {
+  if (!state.heldPreviews.length) return state
+  let items = state.stageItems
+  for (const item of state.heldPreviews) {
+    if (!previewCovered(item, markdown)) items = appendStageItem(items, item)
   }
-  const kept = items.filter((item, index) => index < start || !item.autoPreviewPath || !linksToPath(markdown, item.autoPreviewPath))
-  return kept.length === items.length ? items : kept
+  return { ...state, stageItems: items, heldPreviews: [] }
 }
 
 function finalizeLastWorkGroup(items) {
@@ -206,6 +218,8 @@ function queueItemView(item) {
   return {
     id: item.id,
     text: item.text || '',
+    // Formatted (marker) version for display and editing; text is what is sent.
+    displayText: item.display_text || item.displayText || '',
     imageCount: item.image_count ?? item.imageCount ?? (item.images || []).length ?? 0,
     attachmentCount,
     createdAt: item.created_at || item.createdAt || '',
@@ -357,6 +371,7 @@ export function reducer(state, action) {
         isRunning: meta.status === 'running',
         isCancelling: false,
         stageItems: [],
+        heldPreviews: [],
         queuedMessages: (meta.message_queue || []).map(queueItemView),
         pendingSteering: (meta.steering_queue || []).map(queueItemView),
         plan: [],
@@ -390,6 +405,7 @@ export function reducer(state, action) {
         workspaceEditorFile: null,
         workspaceEditorExpanded: false,
         stageItems: [],
+        heldPreviews: [],
         queuedMessages: [],
         pendingSteering: [],
         plan: [],
@@ -410,6 +426,8 @@ export function reducer(state, action) {
       return { ...state, isRunning: false, isCancelling: false, lastActivityTime: Date.now(), showCodexRunning: false, iterationN: null, iterationMax: null }
 
     case 'SET_REPLAY_IDLE':
+      // A stored turn cut off before its reply still shows its files.
+      state = flushHeldPreviews(state)
       return {
         ...state,
         isRunning: false,
@@ -462,6 +480,7 @@ export function reducer(state, action) {
       return {
         ...state,
         stageItems: items.slice(0, index),
+        heldPreviews: [],
         plan: [],
         eventTotal: state.eventTotal == null ? null : Math.max(0, state.eventTotal - removed),
       }
@@ -574,11 +593,22 @@ export function reducer(state, action) {
     case 'APPEND_STAGE_ITEM': {
       const item = action.payload
       if (item.type === 'aside') return { ...state, stageItems: insertAside(state.stageItems, item) }
-      const items = item.type === 'assistant_message' && !item.autoPreviewPath && item.markdown
-        ? dropLinkedAutoPreviews(state.stageItems, item.markdown)
-        : state.stageItems
-      return { ...state, stageItems: appendStageItem(items, item) }
+      return { ...state, stageItems: appendStageItem(state.stageItems, item) }
     }
+
+    // Held until the reply; a file written again replaces its earlier entry,
+    // so only the latest version of an image is shown.
+    case 'HOLD_AUTO_PREVIEW': {
+      const item = action.payload
+      const path = previewPath(item)
+      const kind = item.generatedPath ? 'image' : 'view'
+      const held = state.heldPreviews.filter(other => previewPath(other) !== path || (other.generatedPath ? 'image' : 'view') !== kind)
+      return { ...state, heldPreviews: [...held, item] }
+    }
+
+    // payload: the reply's Markdown ('' when the turn ended without one).
+    case 'FLUSH_AUTO_PREVIEWS':
+      return flushHeldPreviews(state, action.payload || '')
 
     case 'RESOLVE_ASIDE': {
       const { asideId, markdown, error } = action.payload
@@ -603,10 +633,12 @@ export function reducer(state, action) {
     }
 
     case 'CLEAR_ASSISTANT_STREAM': {
+      // A streamed bubble is live-only and never persisted. Other items (a
+      // thinking block, a steering message) can land after it before the
+      // event that ends it, so drop it wherever it is, not only when last.
       const items = state.stageItems
-      const last = items[items.length - 1]
-      if (!last || last.type !== 'assistant_stream') return state
-      return { ...state, stageItems: items.slice(0, -1) }
+      if (!items.some(item => item.type === 'assistant_stream')) return state
+      return { ...state, stageItems: items.filter(item => item.type !== 'assistant_stream') }
     }
 
     case 'APPEND_THINKING_DELTA': {
@@ -698,7 +730,7 @@ export function reducer(state, action) {
       return { ...state, stageItems: finalizeLastWorkGroup(state.stageItems) }
 
     case 'CLEAR_STAGE':
-      return { ...state, stageItems: [] }
+      return { ...state, stageItems: [], heldPreviews: [] }
 
     // Older events loaded on request, placed before what is on screen. Ignored
     // if the user has since switched threads or the window moved.
@@ -784,11 +816,12 @@ export function reducer(state, action) {
     case 'CLOSE_PROVIDER_PICKER':
       return { ...state, showProviderPicker: null }
 
+    // payload.sessionId limits the search to that session's transcript.
     case 'OPEN_SEARCH':
-      return { ...state, showSearch: true }
+      return { ...state, showSearch: true, searchSessionId: action.payload?.sessionId || null }
 
     case 'CLOSE_SEARCH':
-      return { ...state, showSearch: false }
+      return { ...state, showSearch: false, searchSessionId: null }
 
     case 'OPEN_SETTINGS':
       return { ...state, showSettings: true }
@@ -878,14 +911,6 @@ export function reducer(state, action) {
             }
           : state.sessionsById,
       }
-    }
-
-    case 'DROP_SHOWN_GENERATED_IMAGES': {
-      const markdown = action.payload || ''
-      if (!markdown) return state
-      const shown = path => markdown.includes(path) || markdown.includes(encodeURI(path))
-      const items = state.stageItems.filter(item => !(item.generatedPath && shown(item.generatedPath)))
-      return items.length === state.stageItems.length ? state : { ...state, stageItems: items }
     }
 
     case 'UPDATE_SESSION_META_BY_ID': {

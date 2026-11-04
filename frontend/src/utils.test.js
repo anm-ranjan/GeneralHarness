@@ -37,6 +37,11 @@ test('localImageUrl keeps cache-busters out of filesystem paths', () => {
   assert.equal(url, '/api/files/image?path=%2Fworkspace%2Fresult.png&v=myharness_v%3D123')
 })
 
+test('localImageUrl strips the slash from URL-style Windows drive paths', () => {
+  assert.equal(localImageUrl('/U:/Data/plot.png', ''), '/api/files/image?path=U%3A%2FData%2Fplot.png')
+  assert.equal(localImageUrl('file:///U:/Data/plot.png?v=2', ''), '/api/files/image?path=U%3A%2FData%2Fplot.png&v=v%3D2')
+})
+
 test('localImageUrl leaves already-routed API images alone', () => {
   const url = localImageUrl('/api/files/image?path=%2Fworkspace%2Fresult.png&v=123', '')
   assert.equal(url, '/api/files/image?path=%2Fworkspace%2Fresult.png&v=123')

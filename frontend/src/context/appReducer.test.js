@@ -433,34 +433,37 @@ test('FINALIZE_AGENTS stops what was still going, CLEAR_AGENTS empties, and sess
   assert.deepEqual(reducer({ ...initialState, agentsById: agents }, { type: 'CLEAR_SESSION' }).agentsById, {})
 })
 
-test('the reply linking a created file replaces the automatic View link', () => {
+test('held View links follow the reply only when it does not link the file', () => {
   const path = '/archive/App/DECISIONS.md'
-  const append = (state, payload) => reducer(state, { type: 'APPEND_STAGE_ITEM', payload })
+  const act = (state, type, payload) => reducer(state, { type, payload })
   const view = { type: 'assistant_message', markdown: `[View DECISIONS.md](${path})`, autoPreviewPath: path }
 
-  let state = append(initialState, { type: 'user_message', text: 'Write it' })
-  state = append(state, view)
-  state = append(state, { type: 'assistant_message', markdown: `Created [DECISIONS.md](${path}).` })
+  let state = act(initialState, 'APPEND_STAGE_ITEM', { type: 'user_message', text: 'Write it' })
+  state = act(state, 'HOLD_AUTO_PREVIEW', view)
+  state = act(state, 'APPEND_STAGE_ITEM', { type: 'assistant_message', markdown: `Created [DECISIONS.md](${path}).` })
+  state = act(state, 'FLUSH_AUTO_PREVIEWS', `Created [DECISIONS.md](${path}).`)
   assert.deepEqual(state.stageItems.map(item => item.markdown || item.text), ['Write it', `Created [DECISIONS.md](${path}).`])
 
-  // A reply that does not link the file keeps the automatic link.
-  state = append(state, { type: 'user_message', text: 'Another' })
-  state = append(state, view)
-  state = append(state, { type: 'assistant_message', markdown: 'Done.' })
-  assert.equal(state.stageItems.filter(item => item.autoPreviewPath).length, 1)
+  // A reply that does not link the file gets the View link after it.
+  state = act(state, 'APPEND_STAGE_ITEM', { type: 'user_message', text: 'Another' })
+  state = act(state, 'HOLD_AUTO_PREVIEW', view)
+  state = act(state, 'APPEND_STAGE_ITEM', { type: 'assistant_message', markdown: 'Done.' })
+  state = act(state, 'FLUSH_AUTO_PREVIEWS', 'Done.')
+  assert.deepEqual(state.stageItems.slice(-2).map(item => item.markdown), ['Done.', view.markdown])
 
-  // A later turn's reply never removes an earlier turn's link.
-  state = append(state, { type: 'user_message', text: 'Third' })
-  state = append(state, { type: 'assistant_message', markdown: `See [it](${path}).` })
-  assert.equal(state.stageItems.filter(item => item.autoPreviewPath).length, 1)
+  // Switching sessions forgets anything still held.
+  state = act(state, 'HOLD_AUTO_PREVIEW', view)
+  assert.deepEqual(act(state, 'CLEAR_STAGE').heldPreviews, [])
 })
 
-test('a reply naming a Windows file in inline code replaces its View link', () => {
+test('a reply naming a Windows file in inline code covers its held View link', () => {
   const path = 'V:\\StopUlcus\\Status.md'
-  const append = (state, payload) => reducer(state, { type: 'APPEND_STAGE_ITEM', payload })
-  let state = append(initialState, { type: 'user_message', text: 'Update the status' })
-  state = append(state, { type: 'assistant_message', markdown: '[View Status.md](V:%5CStopUlcus%5CStatus.md)', autoPreviewPath: path })
-  state = append(state, { type: 'assistant_message', markdown: 'Updated `v:/StopUlcus/Status.md`.' })
+  const reply = 'Updated `v:/StopUlcus/Status.md`.'
+  const act = (state, type, payload) => reducer(state, { type, payload })
+  let state = act(initialState, 'APPEND_STAGE_ITEM', { type: 'user_message', text: 'Update the status' })
+  state = act(state, 'HOLD_AUTO_PREVIEW', { type: 'assistant_message', markdown: '[View Status.md](V:%5CStopUlcus%5CStatus.md)', autoPreviewPath: path })
+  state = act(state, 'APPEND_STAGE_ITEM', { type: 'assistant_message', markdown: reply })
+  state = act(state, 'FLUSH_AUTO_PREVIEWS', reply)
   assert.equal(state.stageItems.filter(item => item.autoPreviewPath).length, 0)
 })
 
@@ -474,4 +477,21 @@ test('a run finishing out of view is marked until its thread is opened or focuse
   assert.deepEqual(state.unseenFinished, { other: true })
   state = reducer(state, { type: 'SELECT_SESSION', payload: { meta: { id: 'other' }, workspaceRoot: '' } })
   assert.deepEqual(state.unseenFinished, {})
+})
+
+test('CLEAR_ASSISTANT_STREAM drops a streamed bubble that is no longer the last item', () => {
+  // Commentary streams, then a thinking block lands before the tool call.
+  let state = reducer(initialState, { type: 'APPEND_ASSISTANT_DELTA', payload: 'Let me run it' })
+  state = reducer(state, { type: 'APPEND_STAGE_ITEM', payload: { type: 'thinking', markdown: 'plan' } })
+  state = reducer(state, { type: 'CLEAR_ASSISTANT_STREAM' })
+  assert.deepEqual(state.stageItems.map(item => item.type), ['thinking'])
+  assert.equal(reducer(state, { type: 'CLEAR_ASSISTANT_STREAM' }), state)
+})
+
+test('search opened from the thread header is scoped to that thread', () => {
+  const scoped = reducer(initialState, { type: 'OPEN_SEARCH', payload: { sessionId: 'ses_1' } })
+  assert.equal(scoped.showSearch, true)
+  assert.equal(scoped.searchSessionId, 'ses_1')
+  assert.equal(reducer(scoped, { type: 'CLOSE_SEARCH' }).searchSessionId, null)
+  assert.equal(reducer(scoped, { type: 'OPEN_SEARCH' }).searchSessionId, null, 'Cmd/Ctrl+K stays global')
 })

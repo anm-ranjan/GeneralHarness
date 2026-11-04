@@ -6,6 +6,17 @@ import ComposerToolbar from './ComposerToolbar'
 import { api } from '../../api'
 import { hostStorageKey } from '../../fleet'
 import { audioBlobToWav } from '../../audioWav'
+import { continueList, toggleMarker } from '../../textFormat'
+
+// Formatting is appearance only: markers are stripped before the model sees
+// the message (see textFormat.js). Underline uses ++ because __ is common in
+// code and file names.
+const FORMATS = [
+  { key: 'b', marker: '**', label: 'B', title: 'Bold (Ctrl/Cmd+B)', className: 'font-bold' },
+  { key: 'i', marker: '*', label: 'I', title: 'Italic (Ctrl/Cmd+I)', className: 'italic' },
+  { key: 'u', marker: '++', label: 'U', title: 'Underline (Ctrl/Cmd+U)', className: 'underline' },
+  { key: 'x', shift: true, marker: '~~', label: 'S', title: 'Strikethrough (Ctrl/Cmd+Shift+X)', className: 'line-through' },
+]
 
 export default function Composer() {
   const { state, dispatch } = useApp()
@@ -409,8 +420,45 @@ export default function Composer() {
     }
   }
 
+  // Apply an edit computed from the textarea's value, then restore the caret.
+  function applyEdit(result) {
+    if (!result) return false
+    setInput(result.value)
+    requestAnimationFrame(() => {
+      const el = inputRef.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(result.start ?? result.cursor, result.end ?? result.cursor)
+      resizeInput()
+    })
+    return true
+  }
+
+  function applyFormat(marker) {
+    const el = inputRef.current
+    if (!el || sending) return
+    applyEdit(toggleMarker(el.value, el.selectionStart, el.selectionEnd, marker))
+  }
+
   function handleKeyDown(e) {
-    if (e.key === 'Enter' && e.isComposing) return
+    if (e.isComposing || e.nativeEvent?.isComposing) return
+    if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+      const format = FORMATS.find(f => f.key === e.key.toLowerCase() && Boolean(f.shift) === e.shiftKey)
+      if (format) {
+        e.preventDefault()
+        applyFormat(format.marker)
+        return
+      }
+    }
+    if (e.key === 'Enter' && e.shiftKey && !e.metaKey && !e.ctrlKey) {
+      // Shift+Enter continues a list ((a) → (b), i) → ii)) or indents after
+      // a line ending in ":"; elsewhere it is a plain new line.
+      const el = e.currentTarget
+      if (el.selectionStart === el.selectionEnd && applyEdit(continueList(el.value, el.selectionStart))) {
+        e.preventDefault()
+      }
+      return
+    }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault()
       handleSend()
@@ -582,6 +630,23 @@ export default function Composer() {
                   )}
                 </button>
               )}
+              <div className="flex items-center" role="group" aria-label="Text formatting">
+                {FORMATS.map(f => (
+                  <button
+                    key={f.marker}
+                    type="button"
+                    // Keep the textarea's selection: format on click, not on focus.
+                    onMouseDown={e => e.preventDefault()}
+                    onClick={() => applyFormat(f.marker)}
+                    disabled={sending}
+                    title={f.title}
+                    aria-label={f.title}
+                    className={`h-7 w-6 rounded text-[13px] text-muted hover:text-accent hover:bg-accent-soft transition disabled:opacity-40 ${f.className}`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
               <button
                 type="button"
                 onClick={() => fileRef.current?.click()}

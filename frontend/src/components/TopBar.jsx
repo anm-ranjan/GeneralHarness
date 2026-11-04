@@ -62,6 +62,17 @@ export default function TopBar() {
               {copyState === 'Copied' ? <path d="m5 12 4 4L19 6" /> : copyState === 'Copy failed' ? <><circle cx="12" cy="12" r="9" /><path d="M12 8v5m0 3h.01" /></> : <><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" /></>}
             </svg>
           </button>
+          <button
+            type="button"
+            className="shrink-0 -ml-3 inline-flex items-center justify-center rounded p-1 text-faint hover:text-accent focus-visible:ring-1 focus-visible:ring-accent"
+            aria-label="Search this thread"
+            title="Search this thread"
+            onClick={() => dispatch({ type: 'OPEN_SEARCH', payload: { sessionId: meta.id } })}
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" />
+            </svg>
+          </button>
           <span className="sr-only" role="status">{copyState}</span>
         </>
       ) : (

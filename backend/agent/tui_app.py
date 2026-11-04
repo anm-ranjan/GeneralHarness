@@ -172,7 +172,7 @@ class TuiUI:
     def show_iteration(self, n: int) -> None:
         self._app.post_message(AgentEvent("iteration", {"n": n}))
 
-    def show_compaction(self, before_tokens: int, after_tokens: int) -> None:
+    def show_compaction(self, before_tokens: int, after_tokens: int, memory: dict | None = None) -> None:
         self._app.post_message(AgentEvent("compaction", {
             "before": before_tokens, "after": after_tokens,
         }))

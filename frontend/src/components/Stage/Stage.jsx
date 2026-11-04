@@ -9,6 +9,7 @@ import useApi from '../../hooks/useApi'
 import SplashScreen from './SplashScreen'
 import MessageBubble from './MessageBubble'
 import StatusMessage from './StatusMessage'
+import CompactionNotice from './CompactionNotice'
 import ErrorMessage from './ErrorMessage'
 import InlineIndicator from './InlineIndicator'
 import TurnNotes from './TurnNotes'
@@ -149,7 +150,7 @@ export default function Stage() {
   const renderItem = useCallback(function renderItem(item) {
     switch (item.type) {
       case 'user_message':
-        return <MessageBubble role="user" text={item.text} images={item.images} attachments={item.attachments} steering={item.steering} historical={Boolean(item.historical)} />
+        return <MessageBubble role="user" text={item.text} displayText={item.displayText} images={item.images} attachments={item.attachments} steering={item.steering} historical={Boolean(item.historical)} />
       case 'assistant_message':
         return <MessageBubble role="assistant" markdown={item.markdown} historical={Boolean(item.historical)} />
       case 'assistant_stream':
@@ -158,6 +159,8 @@ export default function Stage() {
         return <AsideBox question={item.question} answer={item.answer} error={item.error} pending={item.pending} />
       case 'status':
         return <StatusMessage text={item.text} />
+      case 'compaction':
+        return <CompactionNotice before={item.before} after={item.after} memory={item.memory} />
       case 'error':
         return <ErrorMessage text={item.text} />
       case 'indicator':

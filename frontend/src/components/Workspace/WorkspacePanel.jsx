@@ -6,6 +6,7 @@ import DiagnosticsPanel from './DiagnosticsPanel'
 import SourceControl from './SourceControl'
 import UsagePanel from './UsagePanel'
 import CommandsPanel from './CommandsPanel'
+import ScratchNotes from './ScratchNotes'
 import FileEditor from './FileEditor'
 import ArtifactViewer from './ArtifactViewer'
 import { isDesktopApp } from '../../desktop'
@@ -18,6 +19,7 @@ const TABS = [
   { id: 'usage', label: 'Usage' },
   { id: 'diagnostics', label: 'Diagnostics' },
   { id: 'commands', label: 'Commands' },
+  { id: 'notes', label: 'Notes' },
 ]
 
 export default function WorkspacePanel() {
@@ -32,7 +34,7 @@ export default function WorkspacePanel() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-1 px-3 py-2 border-b border-line">
+      <div className="flex flex-wrap items-center gap-1 px-3 py-2 border-b border-line">
         {TABS.map(t => (
           <button
             key={t.id}
@@ -64,6 +66,7 @@ export default function WorkspacePanel() {
         {tab === 'usage' && <UsagePanel />}
         {tab === 'diagnostics' && <DiagnosticsPanel />}
         {tab === 'commands' && <CommandsPanel />}
+        {tab === 'notes' && <ScratchNotes />}
       </div>
     </div>
   )

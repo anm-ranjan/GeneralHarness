@@ -1,5 +1,6 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { renderMarkdown } from '../../utils'
+import FormattedText from './FormattedText'
 import { isImageCollapsed, setImageCollapsed } from '../../imageCollapse'
 import { useAppSelector, useAppDispatch } from '../../context/AppContext'
 
@@ -101,7 +102,7 @@ function AttachmentImage({ attachment, name, defaultCollapsed }) {
   )
 }
 
-function MessageBubble({ role, text, markdown, images = [], attachments = [], streaming = false, steering = false, historical = false }) {
+function MessageBubble({ role, text, displayText = '', markdown, images = [], attachments = [], streaming = false, steering = false, historical = false }) {
   const dispatch = useAppDispatch()
   const markdownRef = useRef(null)
   const workspaceRoot = useAppSelector(selectWorkspaceRoot)
@@ -140,7 +141,7 @@ function MessageBubble({ role, text, markdown, images = [], attachments = [], st
         />
       ) : (
         <div className={`whitespace-pre-wrap [overflow-wrap:anywhere] text-[15px] leading-relaxed ${steering ? 'text-muted' : 'font-medium text-text-bright'}`}>
-          {text && <div>{text}</div>}
+          {text && <div><FormattedText text={displayText || text} /></div>}
           {displayAttachments.length > 0 && (
             <div className="mt-3 grid grid-cols-2 gap-2 font-normal">
               {displayAttachments.map((attachment, i) => attachment.mime?.startsWith('image/') ? (

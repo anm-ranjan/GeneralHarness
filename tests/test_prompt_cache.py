@@ -97,6 +97,14 @@ class UsageTests(unittest.TestCase):
                                        "prompt_tokens_details": {"cached_tokens": 70, "cache_write_tokens": 20}})
         self.assertEqual(usage, {"input_tokens": 100, "output_tokens": 2, "cache_read_tokens": 70, "cache_write_tokens": 20, "cost_usd": .001})
 
+    def test_reasoning_tokens_are_reported_when_present(self):
+        # Shape returned by a vLLM gateway for a thinking model.
+        usage = cache.normalize_usage({"completion_tokens": 5, "prompt_tokens": 37, "total_tokens": 42,
+                                       "completion_tokens_details": {"reasoning_tokens": 5}})
+        self.assertEqual(usage, {"input_tokens": 37, "output_tokens": 5, "reasoning_tokens": 5})
+        self.assertNotIn("reasoning_tokens", cache.normalize_usage({"completion_tokens": 5}))
+        self.assertNotIn("reasoning_tokens", cache.normalize_usage({"completion_tokens_details": None}))
+
     def test_deepseek_miss_is_not_a_write(self):
         usage = cache.normalize_usage({"prompt_tokens": 100, "prompt_cache_hit_tokens": 80, "prompt_cache_miss_tokens": 20})
         self.assertEqual(usage, {"input_tokens": 100, "cache_read_tokens": 80})
@@ -183,6 +191,90 @@ class NativeIntegrationTests(unittest.TestCase):
                 self.assertEqual(ui.show_api_metrics.call_args.args[0]["cache_read_tokens"], 900)
                 if streaming:
                     self.assertTrue(payload["stream_options"]["include_usage"])
+
+    def _stream(self, base_url, responses):
+        """Run one streamed call_api against queued responses; return the posted payloads."""
+        ui = Mock(_sid="session", agent_path="/root")
+        with patch.object(utils, "BASE_URL", base_url), patch.object(utils, "API_STREAMING", True), \
+                patch.object(utils, "NATIVE_CACHING", {}), patch.object(utils, "API_PROVIDER", None), \
+                patch.object(agent.requests, "post", side_effect=responses) as post:
+            agent.call_api([{"role": "user", "content": "hello"}], model="gateway-model", ui=ui)
+        return [call.kwargs["json"] for call in post.call_args_list], ui
+
+    def _ok_stream(self, usage=None):
+        response = Mock(status_code=200)
+        chunk = {"choices": [{"delta": {"content": "ok"}}]}
+        lines = ["data: " + json.dumps(chunk)]
+        if usage:
+            lines.append("data: " + json.dumps({"choices": [{"index": 0, "delta": {}}], "usage": usage}))
+        response.iter_lines.return_value = [*lines, "data: [DONE]"]
+        return response
+
+    def test_stream_requests_usage_from_any_openai_compatible_gateway(self):
+        # Shape seen from an OpenAI-compatible vLLM gateway: usage arrives in a
+        # final chunk whose choice has an empty delta.
+        usage = {"prompt_tokens": 37, "completion_tokens": 5, "total_tokens": 42}
+        gateway = "https://gateway.example.org/v1"
+        self.addCleanup(agent._STREAM_USAGE_REJECTED.discard, gateway)
+        payloads, ui = self._stream(gateway, [self._ok_stream(usage)])
+        self.assertEqual(payloads[0]["stream_options"], {"include_usage": True})
+        metrics = ui.show_api_metrics.call_args.args[0]
+        self.assertEqual((metrics["prompt_tokens"], metrics["completion_tokens"]), (37, 5))
+
+    def test_gateway_rejecting_stream_options_is_retried_streamed_without_it(self):
+        gateway = "https://strict.example.org/v1"
+        self.addCleanup(agent._STREAM_USAGE_REJECTED.discard, gateway)
+        payloads, ui = self._stream(gateway, [Mock(status_code=400), self._ok_stream()])
+        self.assertEqual(len(payloads), 2)
+        self.assertIn("stream_options", payloads[0])
+        self.assertTrue(payloads[1]["stream"])
+        self.assertNotIn("stream_options", payloads[1])
+        # Later calls skip the option instead of paying for the rejection again.
+        payloads, _ = self._stream(gateway, [self._ok_stream()])
+        self.assertEqual(len(payloads), 1)
+        self.assertNotIn("stream_options", payloads[0])
+
+    def test_unrelated_stream_error_keeps_option_and_falls_back_to_plain(self):
+        gateway = "https://flaky.example.org/v1"
+        self.addCleanup(agent._STREAM_USAGE_REJECTED.discard, gateway)
+        plain = Mock(status_code=200)
+        plain.json.return_value = {"choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                                   "usage": {"prompt_tokens": 10, "completion_tokens": 1}}
+        payloads, _ = self._stream(gateway, [Mock(status_code=400), Mock(status_code=400), plain])
+        self.assertEqual(len(payloads), 3)
+        self.assertNotIn("stream", payloads[2])
+        self.assertNotIn(gateway, agent._STREAM_USAGE_REJECTED)
+
+    def test_main_agent_metrics_carry_live_context_usage(self):
+        gateway = "https://gateway.example.org/v1"
+        self.addCleanup(agent._STREAM_USAGE_REJECTED.discard, gateway)
+        ui = Mock(_sid="session", agent_path="/root")
+        with patch.object(utils, "BASE_URL", gateway), patch.object(utils, "API_STREAMING", True), \
+                patch.object(utils, "NATIVE_CACHING", {}), patch.object(utils, "API_PROVIDER", None), \
+                patch.object(utils, "CONTEXT_LIMIT_TOKENS", 262000), \
+                patch.object(agent.requests, "post", side_effect=[
+                    self._ok_stream({"prompt_tokens": 102434, "completion_tokens": 5}), self._ok_stream(),
+                    self._ok_stream()]):
+            messages = [{"role": "user", "content": "hello"}]
+            agent.call_api(messages, model="m", ui=ui, report_context=True)
+            reported = ui.show_api_metrics.call_args.args[0]["usage_str"]
+            # Without gateway usage, the local estimate is reported instead.
+            agent.call_api(messages, model="m", ui=ui, report_context=True)
+            estimated = ui.show_api_metrics.call_args.args[0]["usage_str"]
+            # Other callers (summary, subagents) never set report_context.
+            agent.call_api(messages, model="m", ui=ui)
+            plain = ui.show_api_metrics.call_args.args[0]
+        self.assertEqual(reported, "39.1% context (102434/262000 estimated tokens)")
+        self.assertRegex(estimated, r"^\d+\.\d% context \(\d+/262000 estimated tokens\)$")
+        self.assertNotIn("usage_str", plain)
+
+    def test_only_the_root_agent_reports_context(self):
+        reply = {"choices": [{"message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}]}
+        for path, expected in (("/root", True), ("/root/worker", False)):
+            with self.subTest(path=path), patch.object(agent, "call_api", return_value=reply) as call:
+                agent.run_agent("q", [{"role": "system", "content": "Test"}], max_iterations=1,
+                                ui=Mock(run_settings={}), agent_path=path)
+            self.assertIs(call.call_args.kwargs["report_context"], expected)
 
     def test_stream_preserves_reasoning_details_for_tool_continuation(self):
         lines = ["data: " + json.dumps({"choices": [{"delta": {"reasoning_details": [block]}}]}) for block in (

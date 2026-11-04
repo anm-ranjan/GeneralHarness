@@ -416,6 +416,11 @@ class SessionStore:
         session_columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
         if "archived" not in session_columns:
             conn.execute("ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+        # Web-only formatted rendering of a pending prompt (never model input).
+        for table in ("queued_messages", "session_prompt_lists"):
+            columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if "display_text" not in columns:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN display_text TEXT NOT NULL DEFAULT ''")
         conn.execute(
             """INSERT OR IGNORE INTO session_labels(session_id,project_id,task_id,is_primary)
                SELECT id,project_id,task_id,1 FROM sessions"""
@@ -888,6 +893,32 @@ class SessionStore:
         from history_evidence import HistoryEvidence
         return HistoryEvidence(self._data_dir / "native_history" / session_id / "evidence")
 
+    def load_scratchpad(self) -> dict:
+        """The user's global scratch note: one text shared by every thread."""
+        path = self._data_dir / "scratchpad.json"
+        with self._lock:
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                value = {}
+        if not isinstance(value, dict):
+            value = {}
+        text = value.get("text")
+        updated_at = value.get("updated_at")
+        return {"text": text if isinstance(text, str) else "",
+                "updated_at": updated_at if isinstance(updated_at, str) else ""}
+
+    def save_scratchpad(self, text: str, updated_at: str) -> None:
+        path = self._data_dir / "scratchpad.json"
+        with self._lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f".{uuid.uuid4().hex}.tmp")
+            try:
+                tmp.write_text(json.dumps({"text": text, "updated_at": updated_at}, ensure_ascii=False), encoding="utf-8")
+                os.replace(tmp, path)
+            finally:
+                tmp.unlink(missing_ok=True)
+
     def save_native_context(self, session_id: str, checkpoint: dict) -> None:
         """Private recovery state. Never returned as session metadata to clients."""
         path = self._data_dir / "native_history" / session_id / "context.json"
@@ -1021,8 +1052,9 @@ class SessionStore:
         conn.execute("DELETE FROM queued_messages WHERE session_id=?", (meta.id,))
         for position, message in enumerate(meta.message_queue):
             conn.execute(
-                "INSERT INTO queued_messages(id,session_id,position,text,images_json,attachments_json,created_at) VALUES(?,?,?,?,?,?,?)",
-                (message.id, meta.id, position, message.text, _json(message.images), _json(message.attachments), message.created_at.isoformat()),
+                "INSERT INTO queued_messages(id,session_id,position,text,images_json,attachments_json,created_at,display_text) VALUES(?,?,?,?,?,?,?,?)",
+                (message.id, meta.id, position, message.text, _json(message.images), _json(message.attachments), message.created_at.isoformat(),
+                 message.display_text),
             )
         SessionStore._write_prompt_lists(conn, meta)
         conn.execute(
@@ -1036,8 +1068,8 @@ class SessionStore:
         for kind, items in (("stash", meta.prompt_stash), ("steering", meta.steering_queue)):
             for position, message in enumerate(items):
                 conn.execute(
-                    "INSERT OR REPLACE INTO session_prompt_lists(id,session_id,list_kind,position,text,created_at) VALUES(?,?,?,?,?,?)",
-                    (message.id, meta.id, kind, position, message.text, message.created_at.isoformat()),
+                    "INSERT OR REPLACE INTO session_prompt_lists(id,session_id,list_kind,position,text,created_at,display_text) VALUES(?,?,?,?,?,?,?)",
+                    (message.id, meta.id, kind, position, message.text, message.created_at.isoformat(), message.display_text),
                 )
 
     def _load_prompt_lists(self, session_id: str) -> dict[str, list[QueuedMessage]]:
@@ -1046,7 +1078,8 @@ class SessionStore:
             "SELECT * FROM session_prompt_lists WHERE session_id=? ORDER BY list_kind, position", (session_id,)
         ):
             lists.setdefault(item["list_kind"], []).append(
-                QueuedMessage(id=item["id"], text=item["text"], created_at=item["created_at"])
+                QueuedMessage(id=item["id"], text=item["text"], created_at=item["created_at"],
+                              display_text=item["display_text"] or "")
             )
         return lists
 
@@ -1067,6 +1100,7 @@ class SessionStore:
             queue.append(QueuedMessage(
                 id=item["id"], text=item["text"], images=images,
                 attachments=attachments, created_at=item["created_at"],
+                display_text=item["display_text"] or "",
             ))
         prompt_lists = self._load_prompt_lists(row["id"])
         labels = [
@@ -1132,10 +1166,10 @@ class SessionStore:
             self._conn.execute("DELETE FROM queued_messages WHERE session_id=?", (meta.id,))
             for position, message in enumerate(meta.message_queue):
                 self._conn.execute(
-                    "INSERT INTO queued_messages(id,session_id,position,text,images_json,attachments_json,created_at) VALUES(?,?,?,?,?,?,?)",
+                    "INSERT INTO queued_messages(id,session_id,position,text,images_json,attachments_json,created_at,display_text) VALUES(?,?,?,?,?,?,?,?)",
                     (
                         message.id, meta.id, position, message.text, _json(message.images),
-                        _json(message.attachments), message.created_at.isoformat(),
+                        _json(message.attachments), message.created_at.isoformat(), message.display_text,
                     ),
                 )
             self._write_prompt_lists(self._conn, meta)

@@ -25,5 +25,5 @@ test("server items are normalised like queue_updated's", () => {
     type: 'SYNC_QUEUE',
     payload: { sessionId: 'ses_codex', queue: [{ id: 'q2', text: 'next', images: [], attachments: [{}], created_at: 't' }], steering: [] },
   })
-  assert.deepEqual(next.queuedMessages, [{ id: 'q2', text: 'next', imageCount: 0, attachmentCount: 1, createdAt: 't' }])
+  assert.deepEqual(next.queuedMessages, [{ id: 'q2', text: 'next', displayText: '', imageCount: 0, attachmentCount: 1, createdAt: 't' }])
 })

@@ -98,6 +98,7 @@ data/
   attachments/                uploaded and pasted images
   chats/<chat_id>/            sandboxed workspace for a project-less chat
   audio/<session>/<turn>/     recorded voice input
+  scratchpad.json             global scratch note (Workspace > Notes)
 ```
 
 ### Frontend (`frontend/src/`)
@@ -173,7 +174,9 @@ if the user should be asked about it.
   left as `running` back to `idle`; replay must not recreate live thinking or
   progress indicators for idle sessions.
 - **Thinking traces** are stripped from context and shown as collapsible blocks
-  only in verbose mode.
+  only in verbose mode. Plain-text thinking streamed as `reasoning_content` or
+  `reasoning` is collected under a private `_reasoning_text` key for display
+  only and never sent back to the model.
 - **Context accounting** (`backend/agent/history_tokens.py`): native context
   usage is the gateway's own `prompt_tokens` from the latest response (a private
   `_usage_anchor` on the last sent message) plus a local estimate of what
@@ -186,7 +189,29 @@ if the user should be asked about it.
   min(`limits.max_output_tokens`, window − input − margin). Inconsistent memory
   settings are startup warnings and `/api/health` `config_warnings`. Automatic
   compaction keeps older images; `/compact` (native only) compacts on demand
-  and replaces older images with a text note.
+  and replaces older images with a text note. Streamed requests ask every
+  endpoint for usage (`stream_options.include_usage`) and retry once without it
+  when a gateway rejects it with 400/422. The root agent's `api_metrics` carry
+  `usage_str` after every model call, so the display moves mid-turn (subagents
+  and the compaction summary call never move it).
+- **Native compaction memory** (`build_native_task_state`): user requests and
+  `ask_user` answers are kept verbatim; a valid model summary is kept by
+  trimming facts to make room; facts are trimmed reads first, then shell runs
+  and writes, with turn reports and failures last. The tool-call checkpoint
+  nudge (private `_system_nudge` flag) is never a request. The `compaction`
+  event carries the resulting block as `memory`: a collapsible notice in the
+  web UI (`CompactionNotice.jsx`), counts in the TUI and CLI.
+- **Auto previews**: "View <file>" links and images a run produces are held
+  until the turn's reply and added below it only when the reply does not link
+  the file or embed the image. A run that ends without a reply still shows them.
+- **Display-only formatting**: composer B/I/U/S buttons and Ctrl/Cmd+B/I/U,
+  Ctrl/Cmd+Shift+X wrap the selection in `**`, `*`, `++`, `~~`
+  (`frontend/src/textFormat.js`). Markers are stripped before sending; the
+  marked version travels as optional `display_text` on the request, queued and
+  steering items and the `user_message` event and is used only to render the
+  web transcript. Shift+Enter continues a list line in the same style.
+- **Scratch note**: Workspace > Notes is one note shared by every thread and
+  client, stored in `data/scratchpad.json`.
 - **Transcript images** (user attachments and assistant Markdown images)
   collapse to a name chip. Replayed messages start collapsed, live ones
   expanded; a user toggle is remembered per image in the browser
@@ -251,7 +276,8 @@ if the user should be asked about it.
 | GET | `/api/files/image` | Serve an allowed local image |
 | POST | `/api/audio/transcribe` | Transcribe a composer recording |
 | GET | `/api/sessions` | Project/task/session tree |
-| GET | `/api/search` | Cross-session transcript/tool/file search |
+| GET | `/api/search` | Cross-session transcript/tool/file search (`session_id` limits it to one thread) |
+| GET/PUT | `/api/scratchpad` | Global scratch note (Workspace > Notes) |
 | POST/PATCH/DELETE | `/api/projects[/{id}]` | Manage projects |
 | POST/PATCH/DELETE | `/api/tasks`, `/api/projects/{id}/tasks/{task_id}` | Manage tasks |
 | POST | `/api/sessions` | Create a session |

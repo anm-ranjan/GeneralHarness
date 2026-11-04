@@ -87,8 +87,8 @@ def list_sessions():
 
 
 @router.get("/api/search")
-def search_sessions(q: str, project_id: str = "", limit: int = 100):
-    return session_search.search_sessions(web_app._store, q, project_id=project_id, limit=limit)
+def search_sessions(q: str, project_id: str = "", limit: int = 100, session_id: str = ""):
+    return session_search.search_sessions(web_app._store, q, project_id=project_id, limit=limit, session_id=session_id)
 
 
 @router.post("/api/projects")

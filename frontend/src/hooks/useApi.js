@@ -3,6 +3,7 @@ import { api } from '../api'
 import { useAppDispatch, useAppStateRef } from '../context/AppContext'
 import { submitQuestion } from './questionSubmission.js'
 import { isAside } from '../constants.js'
+import { messageBody } from '../textFormat'
 
 // Deliberately non-reactive: these callbacks read state on invocation rather
 // than subscribing, so every component using them keeps stable handlers and
@@ -16,7 +17,7 @@ export default function useApi() {
     const wasRunning = stateRef.current.isRunning || isAside(text)
     if (!wasRunning) dispatch({ type: 'SET_RUNNING' })
     try {
-      return await api('POST', `/api/sessions/${encodeURIComponent(sessionId)}/message`, { text, attachments, mode })
+      return await api('POST', `/api/sessions/${encodeURIComponent(sessionId)}/message`, messageBody(text, attachments, mode))
     } catch (err) {
       if (!wasRunning) dispatch({ type: 'SET_IDLE' })
       dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: err.detail || err.message } })

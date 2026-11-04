@@ -63,6 +63,21 @@ class SearchApiTests(unittest.TestCase):
             self.assertEqual(res["count"], 1)
             self.assertEqual(res["hits"][0]["project_id"], "p1")
 
+    def test_session_scoping_lifts_the_per_session_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(tmp)
+            m1 = _seed(store)
+            m2 = store.create_session("proj", "task", "Other")
+            for i in range(30):
+                _append(store, m1.id, EventType.USER_MESSAGE, {"text": f"needle {i}"})
+            _append(store, m2.id, EventType.USER_MESSAGE, {"text": "needle elsewhere"})
+            with patch.object(web_app, "_store", store):
+                scoped = web_app.search_sessions(q="needle", session_id=m1.id)
+                missing = web_app.search_sessions(q="needle", session_id="ses_missing")
+            self.assertEqual(scoped["count"], 30)
+            self.assertEqual({h["session_id"] for h in scoped["hits"]}, {m1.id})
+            self.assertEqual(missing["hits"], [])
+
     def test_limit_truncates(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = SessionStore(tmp)

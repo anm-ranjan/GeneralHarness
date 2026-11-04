@@ -41,7 +41,8 @@ def search_snippet(text: str, pos: int, length: int, window: int = 60) -> str:
     return prefix + " ".join(text[start:end].split()) + suffix
 
 
-def search_sessions(store, query: str, project_id: str = "", limit: int = 100) -> dict:
+def search_sessions(store, query: str, project_id: str = "", limit: int = 100, session_id: str = "") -> dict:
+    """Search transcripts; with ``session_id`` only that session, without the per-session cap."""
     query = (query or "").strip()
     if not query:
         return {"query": query, "hits": [], "count": 0, "truncated": False}
@@ -54,7 +55,14 @@ def search_sessions(store, query: str, project_id: str = "", limit: int = 100) -
 
     hits: list[dict] = []
     truncated = False
-    for meta in store.list_sessions(project_id or None):
+    if session_id:
+        meta = store.load_session(session_id)
+        sessions = [meta] if meta is not None else []
+        per_session_cap = limit
+    else:
+        sessions = store.list_sessions(project_id or None)
+        per_session_cap = MAX_HITS_PER_SESSION
+    for meta in sessions:
         per_session = 0
         for idx, event in enumerate(store.iter_events(meta.id)):
             field, text = searchable_event_text(event)
@@ -80,7 +88,7 @@ def search_sessions(store, query: str, project_id: str = "", limit: int = 100) -
             if len(hits) >= limit:
                 truncated = True
                 break
-            if per_session >= MAX_HITS_PER_SESSION:
+            if per_session >= per_session_cap:
                 break
         if len(hits) >= limit:
             truncated = True

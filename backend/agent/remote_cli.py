@@ -26,6 +26,16 @@ PROVIDER_ALIASES = {
 }
 
 
+def compaction_detail(memory) -> str:
+    """Short description of what a compaction kept (task-state memory only)."""
+    if not isinstance(memory, dict) or not isinstance(memory.get("requests"), list):
+        return ""
+    facts = memory.get("facts") if isinstance(memory.get("facts"), list) else []
+    summary = "yes" if memory.get("summary") else "no"
+    return (f" ({len(memory['requests'])} requests, {len(facts)} facts kept, "
+            f"{memory.get('omitted_facts', 0)} omitted, model summary: {summary})")
+
+
 class RemoteCliError(RuntimeError):
     pass
 
@@ -489,6 +499,9 @@ class RemoteCliApp:
             print(f"Approval {approved}.")
         elif event_type == "context_usage":
             print(f"Context: {data.get('usage_str', '')}")
+        elif event_type == "compaction":
+            print(f"Context compacted: {data.get('before')} -> {data.get('after')} tokens"
+                  f"{compaction_detail(data.get('memory'))}")
         elif event_type == "run_metrics":
             self._print_run_metrics(data)
         elif event_type == "queue_updated":

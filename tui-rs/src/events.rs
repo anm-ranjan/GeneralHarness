@@ -172,6 +172,7 @@ pub fn render_event(event: &EventEnvelope, verbose_tools: bool) -> Option<Transc
             EntryKind::Tool,
             format!("Generated artifact: {}", text("path")),
         ),
+        "compaction" => TranscriptEntry::new(EntryKind::Status, compaction_text(data, verbose_tools)),
         "agent_event" => {
             let agent = first_text(data, &["agent_path", "agent_id"]).unwrap_or("agent");
             let action = fallback(text("action"), "updated");
@@ -207,6 +208,34 @@ pub fn render_event(event: &EventEnvelope, verbose_tools: bool) -> Option<Transc
     } else {
         Some(entry)
     }
+}
+
+/// One line per compaction; the memory block (newer events) adds what was
+/// kept, and in verbose mode the model summary. Never the raw JSON.
+fn compaction_text(data: &Value, verbose_tools: bool) -> String {
+    let count = |key: &str| {
+        data.get(key)
+            .and_then(Value::as_i64)
+            .map_or_else(|| "?".to_owned(), |n| n.to_string())
+    };
+    let mut line = format!("Context compacted: {} → {} tokens", count("before"), count("after"));
+    let Some(memory) = data.get("memory").filter(|m| m.get("requests").is_some()) else {
+        return line;
+    };
+    let len = |key: &str| memory.get(key).and_then(Value::as_array).map_or(0, Vec::len);
+    let summary = memory.get("summary").and_then(Value::as_str).unwrap_or("");
+    line.push_str(&format!(
+        " ({} requests, {} facts kept, {} omitted, model summary: {})",
+        len("requests"),
+        len("facts"),
+        memory.get("omitted_facts").and_then(Value::as_i64).unwrap_or(0),
+        if summary.is_empty() { "no" } else { "yes" }
+    ));
+    if verbose_tools && !summary.is_empty() {
+        line.push('\n');
+        line.push_str(summary);
+    }
+    line
 }
 
 fn first_text<'a>(data: &'a Value, keys: &[&str]) -> Option<&'a str> {
@@ -374,6 +403,30 @@ mod tests {
             ),
             Some(TranscriptEntry::new(EntryKind::Status, "Answer\nmain"))
         );
+    }
+
+    #[test]
+    fn compaction_shows_counts_not_raw_memory() {
+        let memory = json!({"schema": "myharness-native-task-state-v1",
+            "requests": ["a", "b"], "facts": [{"name": "shell_run"}], "omitted_facts": 160,
+            "summary": "{\"decisions\":[\"Range 0-0.5\"]}"});
+        let quiet = render_event(
+            &event("compaction", json!({"before": 102434, "after": 16221, "memory": memory})),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            quiet.text,
+            "Context compacted: 102434 → 16221 tokens (2 requests, 1 facts kept, 160 omitted, model summary: yes)"
+        );
+        let verbose = render_event(
+            &event("compaction", json!({"before": 10, "after": 5, "memory": memory})),
+            true,
+        )
+        .unwrap();
+        assert!(verbose.text.ends_with("{\"decisions\":[\"Range 0-0.5\"]}"));
+        let old = render_event(&event("compaction", json!({"before": 10, "after": 5})), false).unwrap();
+        assert_eq!(old.text, "Context compacted: 10 → 5 tokens");
     }
 
     #[test]

@@ -115,6 +115,27 @@ def health():
     }
 
 
+SCRATCHPAD_MAX_CHARS = 1_000_000
+
+
+class _ScratchpadUpdate(BaseModel):
+    text: str = Field(default="", max_length=SCRATCHPAD_MAX_CHARS)
+
+
+@router.get("/api/scratchpad")
+def get_scratchpad():
+    """Global scratch note (Workspace > Notes); the same for every session."""
+    return web_app._store.load_scratchpad()
+
+
+@router.put("/api/scratchpad")
+def put_scratchpad(req: _ScratchpadUpdate):
+    from datetime import datetime, timezone
+    updated_at = datetime.now(timezone.utc).isoformat()
+    web_app._store.save_scratchpad(req.text, updated_at)
+    return {"text": req.text, "updated_at": updated_at}
+
+
 @router.get("/api/commands")
 def list_commands():
     return {"commands": slash_commands.SLASH_COMMANDS, "notes": slash_commands.COMMAND_NOTES}

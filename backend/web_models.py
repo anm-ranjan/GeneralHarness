@@ -96,6 +96,8 @@ class SessionMeta(BaseModel):
 class QueuedMessage(BaseModel):
     id: str = Field(default_factory=lambda: f"qmsg_{uuid.uuid4().hex[:8]}")
     text: str = ""
+    # Web-only rendering of text with formatting markers; never model input.
+    display_text: str = ""
     images: list[dict] = Field(default_factory=list)
     attachments: list[dict] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_now)
@@ -156,7 +158,11 @@ class FileAttachment(BaseModel):
 
 
 class SendMessageRequest(BaseModel):
+    # What the model, search, export and other clients see.
     text: str = ""
+    # Optional: the same message with **bold**/*italic*/++underline++/~~strike~~
+    # markers, used only to render it in the web UI. Never sent to the model.
+    display_text: str = ""
     images: list[ImageAttachment] = Field(default_factory=list)
     attachments: list[FileAttachment] = Field(default_factory=list)
     mode: str = "queue"
