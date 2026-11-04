@@ -619,8 +619,9 @@ class SessionStore:
     def _archive_legacy_store(self) -> None:
         """Move an imported flat-file store aside after a verified DB cutover.
 
-        Workspaces and managed scripts remain live filesystem data, so they are
-        copied into the new layout before their legacy sources are archived.
+        Chat workspaces remain live filesystem data, so they are copied into the
+        new layout before their legacy sources are archived. A legacy scripts
+        folder is only archived: nothing uses managed scripts any more.
         The archive is never read automatically and is safe to use for an
         explicit rollback/export tool.
         """
@@ -631,11 +632,6 @@ class SessionStore:
             for source in legacy_chats.iterdir():
                 if source.is_dir():
                     shutil.copytree(source, self._workspaces_dir / source.name, dirs_exist_ok=True)
-        legacy_scripts = self._data_dir / "scripts"
-        if legacy_scripts.is_dir():
-            for source in legacy_scripts.iterdir():
-                if source.is_dir():
-                    shutil.copytree(source, self._workspaces_dir / "_scripts" / source.name, dirs_exist_ok=True)
 
         archive = self._data_dir / "legacy-flat-store"
         archive.mkdir(parents=True, exist_ok=True)
@@ -873,7 +869,6 @@ class SessionStore:
 
     def _cleanup_session_files(self, session_id: str, project_root: str = "") -> None:
         for path in (
-            self._data_dir / "scripts" / session_id,
             self._workspaces_dir / session_id,
             self._materializations_dir / session_id,
             self._data_dir / "chats" / session_id,

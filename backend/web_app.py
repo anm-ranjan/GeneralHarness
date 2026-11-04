@@ -72,7 +72,6 @@ _STATIC_DIR = os.environ.get(
 )
 
 _WORKSPACES_DIR = Path(_DATA_DIR) / "workspaces"
-_SCRIPTS_DIR = _WORKSPACES_DIR / "_scripts"
 _CHATS_DIR = _WORKSPACES_DIR
 _MATERIALIZATIONS_DIR = Path(_DATA_DIR) / "temporary-materializations"
 
@@ -146,17 +145,6 @@ def _discard_run_lock(session_id: str) -> None:
     utils.kill_all_background_jobs(session_id)
 
 
-def _scripts_dir_for_session(session_id: str) -> str:
-    """Per-session managed directory for the helper scripts the agent authors.
-
-    Lives under the web data dir (outside any workspace) and is registered as an
-    allowed path so file_write/shell_run may use it. Cleaned up with the session.
-    """
-    path = _SCRIPTS_DIR / session_id
-    path.mkdir(parents=True, exist_ok=True)
-    return str(path)
-
-
 def _chat_workspace_dir(chat_id: str) -> str:
     """Per-chat sandboxed workspace for the general-purpose agent.
 
@@ -198,8 +186,6 @@ async def _lifespan(app: FastAPI):
     utils.prune_old_logs()
     reset_count = _store.reset_running_sessions()
     performance_log.record("startup_session_recovery", started, reset=reset_count)
-    _SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
-    utils.register_allowed_path(str(_SCRIPTS_DIR))
     _CHATS_DIR.mkdir(parents=True, exist_ok=True)
     utils.register_allowed_path(str(_CHATS_DIR))
     _MATERIALIZATIONS_DIR.mkdir(parents=True, exist_ok=True)

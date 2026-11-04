@@ -785,7 +785,7 @@ def register_allowed_path(path: str) -> str:
     """Add a runtime-managed directory to the allowed paths.
 
     Used for directories the deployment provisions itself (for example the
-    managed scripts directory under the web data dir) so file_write and
+    chat workspaces under the web data dir) so file_write and
     shell_run may use them even when they sit outside the configured
     permissions.allowed_paths. Idempotent; returns the resolved path.
     """
