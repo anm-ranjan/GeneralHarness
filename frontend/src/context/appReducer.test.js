@@ -455,6 +455,15 @@ test('the reply linking a created file replaces the automatic View link', () => 
   assert.equal(state.stageItems.filter(item => item.autoPreviewPath).length, 1)
 })
 
+test('a reply naming a Windows file in inline code replaces its View link', () => {
+  const path = 'V:\\StopUlcus\\Status.md'
+  const append = (state, payload) => reducer(state, { type: 'APPEND_STAGE_ITEM', payload })
+  let state = append(initialState, { type: 'user_message', text: 'Update the status' })
+  state = append(state, { type: 'assistant_message', markdown: '[View Status.md](V:%5CStopUlcus%5CStatus.md)', autoPreviewPath: path })
+  state = append(state, { type: 'assistant_message', markdown: 'Updated `v:/StopUlcus/Status.md`.' })
+  assert.equal(state.stageItems.filter(item => item.autoPreviewPath).length, 0)
+})
+
 test('a run finishing out of view is marked until its thread is opened or focused', () => {
   let state = { ...initialState, currentSessionId: 'open', runStates: { open: 'running', other: 'running' } }
   state = reducer(state, { type: 'SET_SESSION_RUN_STATE', payload: { sessionId: 'other', state: 'idle', windowFocused: true } })

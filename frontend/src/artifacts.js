@@ -16,20 +16,36 @@ export function artifactUrl(path) {
   return '/api/workspace/view/' + path.replace(/\\/g, '/').replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/')
 }
 
+// Compare paths with forward slashes; Windows drive paths case-insensitively.
+function comparablePath(value) {
+  let path = String(value || '').trim().replace(/^file:\/\/\/?(?=[a-z]:)/i, '').replace(/^file:\/\//, '')
+  path = path.replace(/[?#].*$/, '').replace(/\\/g, '/').replace(/^\.\//, '')
+  return /^[a-z]:\//i.test(path) ? path.toLowerCase() : path
+}
+
 /**
- * Whether Markdown links to `path`, as an absolute link (plain, URL-encoded or
- * file://) or as a link relative to the file's folder or workspace.
+ * Whether Markdown points at `path` in a way the transcript renders clickable:
+ * a link (plain, URL-encoded, <bracketed> or file://) or an inline code span,
+ * either absolute or relative to the file's folder or workspace. Windows
+ * backslash and forward-slash spellings of the same path match.
  */
 export function linksToPath(markdown, path) {
-  const wanted = String(path || '')
+  const wanted = comparablePath(path)
   if (!wanted || !markdown) return false
-  for (const match of String(markdown).matchAll(/\]\(\s*(?:<([^>]+)>|([^)\s]+))/g)) {
-    let target = match[1] || match[2]
+  const text = String(markdown)
+  const targets = [
+    ...[...text.matchAll(/\]\(\s*(?:<([^>]+)>|([^)\s]+))/g)].map(match => match[1] || match[2]),
+    ...[...text.matchAll(/(?<!`)`([^`\n]+)`(?!`)/g)].map(match => match[1]),
+  ]
+  const wantedLower = wanted.toLowerCase()
+  const windows = /^[a-z]:\//.test(wanted)
+  for (let target of targets) {
     try { target = decodeURIComponent(target) } catch {}
-    target = target.replace(/^file:\/\//, '').replace(/[?#].*$/, '')
+    target = comparablePath(target)
+    if (!target) continue
     if (target === wanted) return true
-    const relative = target.replace(/^\.\//, '')
-    if (relative && !relative.startsWith('/') && wanted.endsWith(`/${relative}`)) return true
+    const isAbsolute = target.startsWith('/') || /^[a-z]:\//i.test(target)
+    if (!isAbsolute && (windows ? wantedLower.endsWith(`/${target.toLowerCase()}`) : wanted.endsWith(`/${target}`))) return true
   }
   return false
 }

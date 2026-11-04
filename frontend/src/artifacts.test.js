@@ -51,3 +51,23 @@ test('linksToPath recognises absolute, encoded, file:// and relative links', asy
   assert.equal(linksToPath('Mentions DECISIONS.md without a link', path), false)
   assert.equal(linksToPath('[a](/archive/Other/DECISIONS.md)', path), false)
 })
+
+test('linksToPath recognises inline code mentions, which render clickable', async () => {
+  const { linksToPath } = await import('./artifacts.js')
+  const path = '/ws/out/report.html'
+  assert.equal(linksToPath('Saved to `out/report.html`.', path), true)
+  assert.equal(linksToPath('Saved to `/ws/out/report.html`.', path), true)
+  assert.equal(linksToPath('Saved to out/report.html.', path), false)
+  assert.equal(linksToPath('Saved to `other/report.html`.', path), false)
+  assert.equal(linksToPath('```\nout/report.html\n```', path), false)
+})
+
+test('linksToPath matches Windows paths across slash styles and case', async () => {
+  const { linksToPath } = await import('./artifacts.js')
+  const path = 'C:\\Work\\out\\report.html'
+  assert.equal(linksToPath('[r](out/report.html)', path), true)
+  assert.equal(linksToPath('[r](C:/Work/out/report.html)', path), true)
+  assert.equal(linksToPath('[r](file:///c:/work/out/report.html)', path), true)
+  assert.equal(linksToPath('See `out\\report.html`', path), true)
+  assert.equal(linksToPath('[r](D:/Work/out/report.html)', path), false)
+})
