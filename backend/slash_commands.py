@@ -91,6 +91,15 @@ SLASH_COMMANDS: list[dict] = [
         "description": "List the available skills, or show one skill's instructions.",
         "providers": ALL_PROVIDERS,
     },
+    {
+        "name": "/remember",
+        "usage": ["/remember", "/remember <focus>"],
+        "description": (
+            "Save a project memory note written from this session's results and findings (optionally only "
+            "about <focus>). Later sessions in the project see it in their memory index. Not in chats."
+        ),
+        "providers": ALL_PROVIDERS,
+    },
 ]
 
 COMMAND_NOTES = [

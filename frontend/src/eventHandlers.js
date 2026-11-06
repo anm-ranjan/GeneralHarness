@@ -51,7 +51,7 @@ export function isCodexProtocolStatus(text) {
 // just its reasoning. Status lines and protocol items still stay live-only.
 const HISTORICAL_ITEM_TYPES = new Set([
   'user_message', 'assistant_message', 'question', 'error',
-  'codex_command', 'codex_file_change', 'turn_note', 'aside',
+  'codex_command', 'codex_file_change', 'turn_note', 'aside', 'memory_saved',
 ])
 
 function indexedDispatch(dispatch, eventIndex, historical = false) {
@@ -334,6 +334,14 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       // memory (newer events only) is the block the model now sees in place
       // of the older history; the notice shows it on demand.
       dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'compaction', before: data.before, after: data.after, memory: data.memory || null } })
+      break
+
+    case 'memory_saved':
+      // /remember saved a project memory note; the notice offers Edit / Undo.
+      dispatch({
+        type: 'APPEND_STAGE_ITEM',
+        payload: { type: 'memory_saved', memory: data.memory || {}, projectId: data.project_id || '', projectName: data.project_name || '' },
+      })
       break
 
     case 'file_change':

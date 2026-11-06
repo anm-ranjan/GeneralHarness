@@ -14,16 +14,19 @@ READ_ONLY_TOOLS = [
                 "History is text-only: tool calls and text-result previews are included, but historical images "
                 "are never opened or attached. For paged originals in this session, use action='evidence', "
                 "evidence_id, evidence_field. Omit id and supply query to search archived tools/paths/text. "
-                "Originals are historical: reread current files before editing."
+                "Originals are historical: reread current files before editing. "
+                "action='memory_list' lists the current project's saved memory notes (query filters them) and "
+                "action='memory_read' with memory_id returns one note; notes may be stale, so verify before relying."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["current", "list", "search", "read", "evidence"]},
+                    "action": {"type": "string", "enum": ["current", "list", "search", "read", "evidence", "memory_list", "memory_read"]},
+                    "memory_id": {"type": "string", "description": "Required for memory_read."},
                     "evidence_id": {"type": "string", "description": "SHA-256 evidence id for action=evidence."},
                     "evidence_field": {"type": "string", "enum": ["result", "arguments"]},
                     "offset": {"type": "integer", "description": "Character offset for paged evidence."},
-                    "query": {"type": "string", "description": "Title/history query for list or search."},
+                    "query": {"type": "string", "description": "Title/history query for list or search; text filter for memory_list."},
                     "project": {"type": "string", "description": "Optional exact or partial project name/id."},
                     "task": {"type": "string", "description": "Optional task name/id filter for list."},
                     "scope": {

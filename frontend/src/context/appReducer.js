@@ -77,6 +77,8 @@ export const initialState = {
   workspacePanelOpen: false,
   workspacePanelTab: 'changes',
   workspaceEditorFile: null,
+  // Notes tab view to open next ({ view, memoryId }), set by OPEN_NOTES.
+  notesTarget: null,
   artifactFile: null,
   workspaceEditorExpanded: false,
   touchedFiles: [],
@@ -935,6 +937,11 @@ export function reducer(state, action) {
 
     case 'SET_WORKSPACE_TAB':
       return { ...state, workspacePanelTab: action.payload }
+
+    case 'OPEN_NOTES':
+      return { ...state, workspacePanelOpen: true, workspacePanelTab: 'notes', artifactFile: null, notesTarget: action.payload || null }
+    case 'CLEAR_NOTES_TARGET':
+      return state.notesTarget ? { ...state, notesTarget: null } : state
 
     case 'OPEN_WORKSPACE_EDITOR':
       return { ...state, workspaceEditorFile: action.payload }

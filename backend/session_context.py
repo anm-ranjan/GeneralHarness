@@ -84,7 +84,12 @@ def current_identity(store, session_id: str) -> dict[str, Any]:
 def prompt_fragment(identity: dict[str, Any] | None) -> str:
     if not identity:
         return ""
-    payload = json.dumps(identity, ensure_ascii=False, sort_keys=True)
+    # Keys starting with "_" carry prompt text (project instructions/memory
+    # from web_helpers._session_identity), not identity data.
+    payload = json.dumps(
+        {key: value for key, value in identity.items() if not key.startswith("_")},
+        ensure_ascii=False, sort_keys=True,
+    )
     return (
         f"MYHARNESS SESSION IDENTITY: {payload}. "
         "Use the read-only myharness_context tool whenever the user asks about MyHarness projects, tasks, "
@@ -100,6 +105,7 @@ def prompt_fragment(identity: dict[str, Any] | None) -> str:
         "python3 -I -c 'import json; print(json.dumps({...}))' piped into curl --data @- so quoting cannot break it. "
         f"Then GET {utils.local_api_url()}/api/sessions/<session_id> and report its meta.status. "
         "Only message another session when the user asked for it. "
+        + str(identity.get("_project_knowledge") or "")
     )
 
 
@@ -390,6 +396,14 @@ def execute(store, current_session_id: str, arguments: dict) -> str:
             arguments.get("offset", 0), arguments.get("limit", 4000),
         ) if arguments.get("evidence_id") else archive.search(
             arguments.get("query", ""), arguments.get("offset", 0), arguments.get("limit", 20))
+    elif action in {"memory_list", "memory_read"}:
+        import project_knowledge
+
+        # Only the current session's project: memory never crosses projects.
+        meta = store.load_session(current_session_id)
+        project_id = meta.project_id if meta else ""
+        handler = project_knowledge.tool_memory_list if action == "memory_list" else project_knowledge.tool_memory_read
+        payload = handler(store, project_id, arguments)
     else:
         payload = {"error": f"Unknown myharness_context action {action!r}."}
     if payload.get("error"):

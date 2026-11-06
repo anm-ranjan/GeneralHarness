@@ -233,6 +233,7 @@ import web_routes.sessions
 import web_routes.runs
 import web_routes.workspace
 import web_routes.usage
+import web_routes.project_knowledge
 
 # Settings saved from the Native Settings tab override agent_config.yaml.
 native_settings.apply_saved()
@@ -242,6 +243,7 @@ app.include_router(web_routes.sessions.router)
 app.include_router(web_routes.runs.router)
 app.include_router(web_routes.workspace.router)
 app.include_router(web_routes.usage.router)
+app.include_router(web_routes.project_knowledge.router)
 
 
 # ── static frontend ───────────────────────────────────────────────

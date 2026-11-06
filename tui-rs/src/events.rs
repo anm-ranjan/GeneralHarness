@@ -173,6 +173,18 @@ pub fn render_event(event: &EventEnvelope, verbose_tools: bool) -> Option<Transc
             format!("Generated artifact: {}", text("path")),
         ),
         "compaction" => TranscriptEntry::new(EntryKind::Status, compaction_text(data, verbose_tools)),
+        "memory_saved" => {
+            let memory = data.get("memory").cloned().unwrap_or(Value::Null);
+            let field = |key: &str| memory.get(key).and_then(Value::as_str).unwrap_or("").to_owned();
+            let project = fallback(text("project_name"), text("project_id"));
+            let mut line = format!("Saved to Memory - {project}: {}", fallback(&field("title"), "note"));
+            let description = field("description");
+            if !description.is_empty() {
+                line.push('\n');
+                line.push_str(&description);
+            }
+            TranscriptEntry::new(EntryKind::Status, line)
+        }
         "agent_event" => {
             let agent = first_text(data, &["agent_path", "agent_id"]).unwrap_or("agent");
             let action = fallback(text("action"), "updated");
@@ -403,6 +415,20 @@ mod tests {
             ),
             Some(TranscriptEntry::new(EntryKind::Status, "Answer\nmain"))
         );
+    }
+
+    #[test]
+    fn memory_saved_names_the_project_and_note() {
+        let entry = render_event(
+            &event(
+                "memory_saved",
+                json!({"project_id": "p", "project_name": "MyHarness",
+                       "memory": {"id": "mem_1", "title": "Solver dt", "description": "When it diverges"}}),
+            ),
+            false,
+        )
+        .unwrap();
+        assert_eq!(entry.text, "Saved to Memory - MyHarness: Solver dt\nWhen it diverges");
     }
 
     #[test]

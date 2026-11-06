@@ -502,6 +502,12 @@ class RemoteCliApp:
         elif event_type == "compaction":
             print(f"Context compacted: {data.get('before')} -> {data.get('after')} tokens"
                   f"{compaction_detail(data.get('memory'))}")
+        elif event_type == "memory_saved":
+            memory = data.get("memory") or {}
+            print(f"Saved project memory ({data.get('project_name') or data.get('project_id', '')}): "
+                  f"{memory.get('title', '')}")
+            if memory.get("description"):
+                print(f"    {memory['description']}")
         elif event_type == "run_metrics":
             self._print_run_metrics(data)
         elif event_type == "queue_updated":

@@ -30,6 +30,7 @@ class EventType(str, Enum):
     CODEX_FILE_CHANGE = "codex_file_change"
     CODEX_ITEM = "codex_item"
     AGENT_EVENT = "agent_event"
+    MEMORY_SAVED = "memory_saved"
     PROVIDER_WARNING = "provider_warning"
     PROVIDER_SWITCH = "provider_switch"
     FILE_CHANGE = "file_change"

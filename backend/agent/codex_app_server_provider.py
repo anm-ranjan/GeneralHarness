@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -585,7 +586,7 @@ def build_developer_instructions() -> str:
 """
 
 
-def build_first_prompt(meta, user_prompt: str) -> str:
+def build_first_prompt(meta, user_prompt: str, knowledge: str = "") -> str:
     if getattr(meta, "kind", "project") == "chat":
         return f"""General-purpose assistant session.
 
@@ -622,13 +623,13 @@ Rules:
 - End with a short summary: files changed, commands run, test result.
 
 {_web_output_block()}
-
+{knowledge}
 Task:
 {user_prompt}
 """
 
 
-def build_resume_prompt(meta, user_prompt: str, context_summary: str | None = None) -> str:
+def build_resume_prompt(meta, user_prompt: str, context_summary: str | None = None, knowledge: str = "") -> str:
     summary_block = ""
     if context_summary:
         summary_block = f"""
@@ -642,12 +643,18 @@ MyHarness session id: {meta.id}. Local API: {utils.local_api_url()}
 Same rules: read/write/list/search only inside the allowed roots, stay in workspace, be concise, no verbose narration. Don't redo completed work.
 Modify existing files; do NOT create new files unless the task explicitly requires them. Skip verification runs that would produce new files.
 {_web_output_block()}
-{summary_block}
+{summary_block}{_updated_knowledge(knowledge)}
 {user_prompt}
 """
 
 
-def build_fallback_prompt(meta, user_prompt: str, summary: dict[str, Any] | None) -> str:
+def _updated_knowledge(knowledge: str) -> str:
+    if not knowledge:
+        return ""
+    return ("\nThe project instructions and memory changed; these replace any earlier version:" + knowledge)
+
+
+def build_fallback_prompt(meta, user_prompt: str, summary: dict[str, Any] | None, knowledge: str = "") -> str:
     summary_text = json.dumps(summary or {}, indent=2, ensure_ascii=False)
     return f"""Browser-based coding harness - fresh Codex app-server thread.
 
@@ -662,7 +669,7 @@ Rules:
 - Small, focused changes. Be concise, no verbose narration.
 - Modify existing files; do NOT create new files unless the task explicitly requires them. Skip verification runs that would produce new files.
 - Continue from session summary below. Don't redo completed work.
-
+{knowledge}
 Session summary:
 ```json
 {summary_text}
@@ -671,6 +678,18 @@ Session summary:
 Task:
 {user_prompt}
 """
+
+
+def _project_knowledge(store, meta) -> str:
+    """Project instructions + memory text for Codex (no myharness_context tool)."""
+    if getattr(meta, "kind", "project") == "chat":
+        return ""
+    try:
+        import project_knowledge
+
+        return project_knowledge.prompt_fragment(store, meta.project_id, "inline")
+    except Exception:
+        return ""
 
 
 def _workspace_for_meta(meta) -> str:
@@ -909,20 +928,29 @@ class CodexAppServerProvider:
         thread_id = codex_state.get("thread_id")
         is_first = not thread_id and meta.message_count == 0
         run_started_at = time.perf_counter()
+        knowledge = _project_knowledge(store, meta)
+        knowledge_hash = hashlib.sha256(knowledge.encode("utf-8")).hexdigest()
+        # A resumed thread already holds the block from an earlier turn; resend
+        # it only after the user changed the project instructions or memory.
+        knowledge_changed = codex_state.get("project_knowledge_hash") != knowledge_hash
 
         if is_first and not pending_summary:
-            prompt = build_first_prompt(meta, user_prompt)
+            prompt = build_first_prompt(meta, user_prompt, knowledge)
         elif thread_id:
-            prompt = build_resume_prompt(meta, user_prompt, context_summary=pending_summary)
+            prompt = build_resume_prompt(
+                meta, user_prompt, context_summary=pending_summary,
+                knowledge=knowledge if knowledge_changed else "",
+            )
         else:
             summary = store.load_codex_summary(meta.id)
             if pending_summary and summary:
                 summary["working_summary"] = pending_summary
             elif pending_summary:
                 summary = {"working_summary": pending_summary}
-            prompt = build_fallback_prompt(meta, user_prompt, summary)
+            prompt = build_fallback_prompt(meta, user_prompt, summary, knowledge)
 
-        if pending_summary:
+        if pending_summary or knowledge_changed:
+            codex_state["project_knowledge_hash"] = knowledge_hash
             meta.codex_state = codex_state
             store.update_session(meta)
 
@@ -954,7 +982,7 @@ class CodexAppServerProvider:
             await self._run_turn(
                 meta,
                 workspace_path,
-                build_fallback_prompt(meta, user_prompt, store.load_codex_summary(meta.id)),
+                build_fallback_prompt(meta, user_prompt, store.load_codex_summary(meta.id), knowledge),
                 None,
                 ui,
                 cancel_event,

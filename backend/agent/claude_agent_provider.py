@@ -214,7 +214,19 @@ _CLAUDE_QUESTION_RULE = utils.question_tool_rule(
 ).strip()
 
 
-def build_system_prompt_append(meta) -> str:
+def _project_knowledge(store, meta) -> str:
+    """Project instructions + memory text (Claude has no myharness_context tool)."""
+    if store is None or getattr(meta, "kind", "project") == "chat":
+        return ""
+    try:
+        import project_knowledge
+
+        return project_knowledge.prompt_fragment(store, meta.project_id, "inline")
+    except Exception:
+        return ""
+
+
+def build_system_prompt_append(meta, knowledge: str = "") -> str:
     if getattr(meta, "kind", "project") == "chat":
         return f"""You are running inside a local agent harness as a general-purpose assistant.
 Answer clearly and directly; most questions need no tool at all.
@@ -246,7 +258,7 @@ Rules:
   again for each follow-up. Do not use it for anything you can settle by reading the code.
 - {_CLAUDE_QUESTION_RULE}
 - End with a short summary: files changed, commands run, test result.
-"""
+{knowledge}"""
 
 
 def build_prompt(user_prompt: str, context_summary: str | None = None) -> str:
@@ -901,7 +913,7 @@ class ClaudeAgentProvider:
             system_prompt={
                 "type": "preset",
                 "preset": "claude_code",
-                "append": build_system_prompt_append(meta),
+                "append": build_system_prompt_append(meta, _project_knowledge(store, meta)),
             },
             cli_path=self.cli_path,
             # bypassPermissions skips approvals, but AskUserQuestion still needs

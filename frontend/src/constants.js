@@ -1,5 +1,5 @@
 // Keep in step with backend/slash_commands.py (served at /api/commands).
-export const SLASH_CMDS = ['/help', '/compact', '/verbose', '/approve', '/clear', '/chdir', '/model', '/maxiters', '/thinking', '/skills']
+export const SLASH_CMDS = ['/help', '/compact', '/verbose', '/approve', '/clear', '/chdir', '/model', '/maxiters', '/thinking', '/skills', '/remember']
 
 // Reserved project id that holds general (project-less) chat sessions.
 export const CHATS_PROJECT_ID = '__chats__'
@@ -20,6 +20,7 @@ export const SUGGESTED_SLASH_COMMANDS = [
   '/thinking medium',
   '/skills',
   '/skills frontend-design',
+  '/remember',
   '/help',
 ]
 

@@ -7,6 +7,7 @@ export const SEARCH_FIELD_LABELS = {
   tool: 'Tool',
   tool_result: 'Tool result',
   file: 'File',
+  memory: 'Memory',
 }
 
 export function fieldLabel(field) {

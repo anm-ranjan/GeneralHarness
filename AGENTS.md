@@ -26,11 +26,15 @@ four clients (React web UI, Electron shell, Rust TUI, CLI).
     message submission, approvals, queue management, cancellation.
   - `workspace.py` — file tree, previews, saves, diffs, reverts, git status/diff
     and (opt-in) git stage/commit.
+  - `project_knowledge.py` — project instructions and memory notes
+    (`/api/projects/{id}/instructions`, `/api/projects/{id}/memory`) and
+    "Save to memory" (`/api/sessions/{id}/memory/from-reply`).
 - `web_runs.py` — **provider dispatch and run orchestration.** Every run flows
   through here: it picks the provider from `SessionMeta.provider`, builds the
   system prompt, streams events, records change manifests, computes run metrics,
   and implements the idle-only slash commands (`/help`, `/compact`, `/clear`,
-  `/chdir`, `/approve`, `/verbose`, `/maxiters`, `/thinking`, `/model`).
+  `/chdir`, `/approve`, `/verbose`, `/maxiters`, `/thinking`, `/model`,
+  `/remember`).
   `backend/slash_commands.py` is the single command registry (served by
   `GET /api/commands`, printed by `/help`); keep it, `_handle_slash_command`,
   `SLASH_CMDS` in `frontend/src/constants.js` and `command_help_lines` in
@@ -99,6 +103,7 @@ data/
   chats/<chat_id>/            sandboxed workspace for a project-less chat
   audio/<session>/<turn>/     recorded voice input
   scratchpad.json             global scratch note (Workspace > Notes)
+  projects/<project_id>/      project instructions.json and memory.json
 ```
 
 ### Frontend (`frontend/src/`)
@@ -211,7 +216,27 @@ if the user should be asked about it.
   steering items and the `user_message` event and is used only to render the
   web transcript. Shift+Enter continues a list line in the same style.
 - **Scratch note**: Workspace > Notes is one note shared by every thread and
-  client, stored in `data/scratchpad.json`.
+  client, stored in `data/scratchpad.json`. Its "Save as Project Memory" /
+  "Save as Project Instructions" buttons send the selection (or the whole note)
+  to the current project and offer Undo/View/Clear.
+- **Project instructions and memory** (`backend/project_knowledge.py`, stored
+  in `data/projects/<folder>/instructions.json` and `memory.json`, removed with
+  the project; chats have neither). A project id that is not a plain slug maps
+  to a readable folder name plus a stable hash. Instructions (a project
+  description and/or rules) go into every thread's prompt: native and subagents
+  through the `_project_knowledge` key of `web_helpers._session_identity`
+  (appended by `session_context.prompt_fragment`, never serialized as
+  identity), Claude through `build_system_prompt_append` (rebuilt on every run),
+  Codex in the first/fallback prompt and again on resume only when its hash in
+  `codex_state.project_knowledge_hash` changed. Memory notes are possibly stale
+  reference data, not instructions: native sees pinned bodies plus an index and
+  reads the rest with `myharness_context` `memory_list`/`memory_read` (current
+  project only); Codex and Claude (`inline` mode) get bodies within a budget.
+  Notes are saved only by the user: `/remember [focus]` (the summary model
+  drafts one note from the persisted transcript; emits `memory_saved`), "Save to
+  memory" under a finished reply (summary model, 30 s timeout, nothing added to
+  the transcript), the Notes tab's "Instructions - <project>" and
+  "Memory - <project>" views, or the REST API.
 - **Transcript images** (user attachments and assistant Markdown images)
   collapse to a name chip. Replayed messages start collapsed, live ones
   expanded; a user toggle is remembered per image in the browser
@@ -278,6 +303,12 @@ if the user should be asked about it.
 | GET | `/api/sessions` | Project/task/session tree |
 | GET | `/api/search` | Cross-session transcript/tool/file search (`session_id` limits it to one thread) |
 | GET/PUT | `/api/scratchpad` | Global scratch note (Workspace > Notes) |
+| GET/PUT | `/api/projects/{id}/instructions` | Project instructions |
+| POST | `/api/projects/{id}/instructions/append` | Append a section (returns `previous_text` for undo) |
+| GET/POST | `/api/projects/{id}/memory` | List (pinned first, newest first) or add a memory note (`describe: true` asks the summary model for the description) |
+| POST | `/api/projects/{id}/memory/restore` | Re-insert a deleted note (undo) |
+| PATCH/DELETE | `/api/projects/{id}/memory/{memory_id}` | Edit/pin or delete a note (delete returns it for undo) |
+| POST | `/api/sessions/{id}/memory/from-reply` | Condense one assistant reply into a project memory note |
 | POST/PATCH/DELETE | `/api/projects[/{id}]` | Manage projects |
 | POST/PATCH/DELETE | `/api/tasks`, `/api/projects/{id}/tasks/{task_id}` | Manage tasks |
 | POST | `/api/sessions` | Create a session |

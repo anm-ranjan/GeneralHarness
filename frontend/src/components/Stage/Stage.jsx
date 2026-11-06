@@ -10,10 +10,12 @@ import SplashScreen from './SplashScreen'
 import MessageBubble from './MessageBubble'
 import StatusMessage from './StatusMessage'
 import CompactionNotice from './CompactionNotice'
+import MemorySavedNotice from './MemorySavedNotice'
 import ErrorMessage from './ErrorMessage'
 import InlineIndicator from './InlineIndicator'
 import TurnNotes from './TurnNotes'
 import PromptActions from './PromptActions'
+import ReplyActions from './ReplyActions'
 import { buildTurns, sameTurn, unansweredLastTurn } from '../../turnModel'
 import ApprovalCard from './ApprovalCard'
 import { clampNotesWidth, readNotesWidth, saveNotesWidth, BLOCK_WIDTH_KEY } from '../../notesWidth'
@@ -161,6 +163,8 @@ export default function Stage() {
         return <StatusMessage text={item.text} />
       case 'compaction':
         return <CompactionNotice before={item.before} after={item.after} memory={item.memory} />
+      case 'memory_saved':
+        return <MemorySavedNotice memory={item.memory} projectId={item.projectId} projectName={item.projectName} />
       case 'error':
         return <ErrorMessage text={item.text} />
       case 'indicator':
@@ -306,10 +310,12 @@ const Turn = memo(function Turn({ turn, renderItem, live, isLast, unanswered }) 
           const node = renderItem(item)
           if (node === null) return null
           const isPrompt = item === turn.user
+          const isReply = item.type === 'assistant_message'
           return (
-            <div key={item._id || i} className={`flex flex-col ${isPrompt ? 'group/prompt' : ''}`} data-evt-index={item.eventIndex ?? undefined}>
+            <div key={item._id || i} className={`flex flex-col ${isPrompt ? 'group/prompt' : isReply ? 'group/reply' : ''}`} data-evt-index={item.eventIndex ?? undefined}>
               {node}
               {isPrompt && !live && <PromptActions item={item} unanswered={unanswered} />}
+              {isReply && !live && <ReplyActions markdown={item.markdown} prompt={turn.user?.text} />}
             </div>
           )
         })}

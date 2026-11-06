@@ -20,6 +20,7 @@ from web_ui_adapter import SubagentUI, WebUI
 import web_app
 import web_helpers
 import performance_log
+import project_knowledge
 import slash_commands
 from web_helpers import _emit_session_event, _emit_queue_updated
 
@@ -530,6 +531,48 @@ def _compact_session_now(session_id: str, workspace_root: str) -> tuple[str, str
     return "status", "Context compacted."
 
 
+async def _handle_remember_command(session_id: str, focus: str) -> None:
+    """/remember [focus]: save one project-memory note written from this session.
+
+    The note is drafted by the summary model from the persisted transcript (so
+    it works for every provider) and saved straight away; the transcript gets
+    a memory_saved event the clients render with Edit/Undo.
+    """
+    store = web_app._store
+    meta = store.load_session(session_id)
+    if meta is None:
+        _emit_session_event(session_id, EventType.ERROR, {"text": "Session not found."})
+        return
+    if getattr(meta, "kind", "project") == "chat" or not project_knowledge.has_project(meta.project_id):
+        _emit_session_event(session_id, EventType.ERROR, {"text": "Project memory is not available in chats."})
+        return
+    transcript = await asyncio.to_thread(project_knowledge.session_transcript, store, session_id)
+    if not transcript.strip():
+        _emit_session_event(
+            session_id, EventType.ERROR,
+            {"text": "Nothing to remember yet: this session has no completed turns."},
+        )
+        return
+    _emit_session_event(session_id, EventType.STATUS, {"text": "Writing a project memory note…"})
+    try:
+        note = await asyncio.to_thread(
+            project_knowledge.draft_note, transcript, focus, agent.call_api, utils.SUMMARY_MODEL
+        )
+        entry = project_knowledge.add_memory(
+            store, meta.project_id, note, {"session_id": meta.id, "session_title": meta.title}
+        )
+    except ValueError as exc:
+        _emit_session_event(session_id, EventType.ERROR, {"text": f"Memory was not saved. {exc}"})
+        return
+    project = store.get_project(meta.project_id)
+    _emit_session_event(session_id, EventType.MEMORY_SAVED, {
+        "project_id": meta.project_id,
+        "project_name": project.name if project else meta.project_id,
+        "memory": entry,
+        "focus": focus,
+    })
+
+
 async def _handle_slash_command(session_id: str, text: str, workspace_root: str) -> bool:
     command = text.strip()
     lowered = command.lower()
@@ -566,6 +609,11 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
         if kind == "status":
             _emit_session_event(session_id, EventType.CONTEXT_USAGE, {
                 "usage_str": agent.format_context_usage(web_app._session_messages[session_id])})
+        _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
+        return True
+
+    if lowered == "/remember" or (lowered.startswith("/remember") and lowered[9:10].isspace()):
+        await _handle_remember_command(session_id, command[len("/remember"):].strip())
         _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
         return True
 

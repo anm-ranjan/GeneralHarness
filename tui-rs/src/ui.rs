@@ -827,6 +827,9 @@ fn command_help_lines() -> Vec<Line<'static>> {
         Line::styled("/skills [name]", command),
         Line::raw("List installed Harness skills or display one skill's complete instructions."),
         Line::default(),
+        Line::styled("/remember [focus]", command),
+        Line::raw("Save a project memory note written from this thread's findings (optionally only about the focus). Later threads in the project see it. Edit notes in the web Notes tab. Not in chats."),
+        Line::default(),
         Line::styled("/model [native|codex|claude]", command),
         Line::styled("  Codex aliases: app-server | codex-app-server", option),
         Line::styled("  Claude alias: claude-agent", option),
@@ -1161,6 +1164,7 @@ mod tests {
             "/thinking [low|medium|high]",
             "/skills [name]",
             "/model [native|codex|claude]",
+            "/remember [focus]",
         ] {
             assert!(rendered.contains(command), "missing {command}");
         }

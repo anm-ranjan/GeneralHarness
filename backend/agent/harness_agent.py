@@ -493,6 +493,7 @@ def call_api(
     max_tokens: int | None = None,
     cache_session_key: str | None = None,
     report_context: bool = False,
+    timeout: float | None = None,
 ) -> dict:
     _set_api_failure(None)
     _set_api_metrics({})
@@ -550,11 +551,11 @@ def call_api(
             f"{utils.BASE_URL}/chat/completions",
             headers=headers,
             json=payload,
-            timeout=utils.NATIVE_API_TIMEOUT,
+            timeout=timeout or utils.NATIVE_API_TIMEOUT,
         )
     except requests.exceptions.Timeout:
         _set_api_failure("timeout")
-        msg = f"API request timed out after 120s (payload {payload_size // 1024}KB). Try again."
+        msg = f"API request timed out after {timeout or utils.NATIVE_API_TIMEOUT:g}s (payload {payload_size // 1024}KB). Try again."
         if ui:
             ui.show_error(msg)
         else:

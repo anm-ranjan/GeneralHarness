@@ -21,6 +21,7 @@ from fastapi import HTTPException
 
 import utils
 import harness_agent as agent
+import project_knowledge
 import session_context
 from web_models import EventEnvelope, EventType, QueuedMessage
 
@@ -58,6 +59,11 @@ def _session_identity(meta) -> dict:
     identity = session_context.current_identity(web_app._store, meta.id)
     if identity:
         identity["workspace_root"] = _workspace_root_for_session(meta)
+        # Project instructions + memory index, appended to the prompt by
+        # session_context.prompt_fragment (never serialized as identity).
+        identity["_project_knowledge"] = project_knowledge.prompt_fragment(
+            web_app._store, meta.project_id, "native"
+        )
     return identity
 
 

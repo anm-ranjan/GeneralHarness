@@ -30,6 +30,10 @@ def searchable_event_text(event) -> tuple[str, str]:
         return "tool_result", str(data.get("preview") or "")[:2000]
     if etype in {EventType.FILE_CHANGE, EventType.GENERATED_ARTIFACT}:
         return "file", str(data.get("path") or "")
+    if etype == EventType.MEMORY_SAVED:
+        memory = data.get("memory") if isinstance(data.get("memory"), dict) else {}
+        fields = [memory.get("title"), memory.get("description"), memory.get("body")]
+        return "memory", "\n".join(str(value) for value in fields if value)
     return "", ""
 
 

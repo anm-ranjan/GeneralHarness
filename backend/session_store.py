@@ -4,6 +4,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import re
 import shutil
 import sqlite3
 import threading
@@ -24,6 +25,22 @@ CHATS_PROJECT_NAME = "Chats"
 DEFAULT_DATABASE_FILENAME = "myharness.sqlite3"
 SCHEMA_VERSION = 2
 LABEL_COLORS = ("blue", "violet", "teal", "amber", "rose", "indigo")
+
+# Project ids become a data/projects/<folder>/ name. Most ids are slugs, but a
+# project id can also be a path (e.g. "v:\\projects\\01_x"), so anything that
+# is not a plain slug gets a readable part plus a stable hash.
+_SAFE_PROJECT_ID = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,99}")
+
+
+def _project_folder_name(project_id: str) -> str:
+    project_id = project_id or ""
+    if not project_id.strip():
+        raise ValueError("Project id is empty")
+    if _SAFE_PROJECT_ID.fullmatch(project_id) and not project_id.endswith("."):
+        return project_id
+    readable = re.sub(r"[^A-Za-z0-9_-]+", "_", project_id).strip("_")[-60:].strip("_") or "project"
+    digest = hashlib.sha256(project_id.encode("utf-8")).hexdigest()[:12]
+    return f"{readable}_{digest}"
 
 
 def _now() -> datetime:
@@ -802,6 +819,10 @@ class SessionStore:
             self._delete_unreferenced_blobs_conn(self._conn)
         for sid in sessions:
             self._cleanup_session_files(sid, root_row["root"])
+        try:
+            shutil.rmtree(self._project_dir(project_id), ignore_errors=True)
+        except ValueError:
+            pass
         return sessions
 
     def delete_task(self, project_id: str, task_id: str) -> list[str]:
@@ -909,15 +930,55 @@ class SessionStore:
                 "updated_at": updated_at if isinstance(updated_at, str) else ""}
 
     def save_scratchpad(self, text: str, updated_at: str) -> None:
-        path = self._data_dir / "scratchpad.json"
+        self._write_json_file(self._data_dir / "scratchpad.json", {"text": text, "updated_at": updated_at})
+
+    def _read_json_file(self, path: Path) -> dict:
+        with self._lock:
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                value = {}
+        return value if isinstance(value, dict) else {}
+
+    def _write_json_file(self, path: Path, value: dict) -> None:
         with self._lock:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_name(f".{uuid.uuid4().hex}.tmp")
             try:
-                tmp.write_text(json.dumps({"text": text, "updated_at": updated_at}, ensure_ascii=False), encoding="utf-8")
+                tmp.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
                 os.replace(tmp, path)
             finally:
                 tmp.unlink(missing_ok=True)
+
+    # ── project knowledge: instructions + memory (data/projects/<id>/) ──
+    # Raw storage only; validation, ordering and prompt text live in
+    # project_knowledge.py.
+
+    def _project_dir(self, project_id: str) -> Path:
+        return self._data_dir / "projects" / _project_folder_name(project_id)
+
+    def load_project_instructions(self, project_id: str) -> dict:
+        value = self._read_json_file(self._project_dir(project_id) / "instructions.json")
+        text = value.get("text")
+        updated_at = value.get("updated_at")
+        return {"text": text if isinstance(text, str) else "",
+                "updated_at": updated_at if isinstance(updated_at, str) else ""}
+
+    def save_project_instructions(self, project_id: str, text: str, updated_at: str) -> None:
+        self._write_json_file(self._project_dir(project_id) / "instructions.json",
+                              {"text": text, "updated_at": updated_at})
+
+    def load_project_memory(self, project_id: str) -> list[dict]:
+        entries = self._read_json_file(self._project_dir(project_id) / "memory.json").get("entries")
+        return [dict(entry) for entry in entries if isinstance(entry, dict)] if isinstance(entries, list) else []
+
+    def mutate_project_memory(self, project_id: str, mutate):
+        """Atomic read-modify-write: ``mutate(entries) -> (entries, result)``."""
+        path = self._project_dir(project_id) / "memory.json"
+        with self._lock:
+            entries, result = mutate(self.load_project_memory(project_id))
+            self._write_json_file(path, {"entries": entries})
+            return result
 
     def save_native_context(self, session_id: str, checkpoint: dict) -> None:
         """Private recovery state. Never returned as session metadata to clients."""
