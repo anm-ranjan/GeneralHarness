@@ -4,6 +4,7 @@ import { useApp, useAppStateRef } from '../../context/AppContext'
 import { handleSessionEvent } from '../../eventHandlers'
 import { fetchEventsBefore, stageItemsForEvents } from '../../olderEvents'
 import { findAnchorEventIndex } from '../../search'
+import { followNewOutput, isNearBottom } from '../../stageScroll'
 import useWebSocket from '../../hooks/useWebSocket'
 import useApi from '../../hooks/useApi'
 import SplashScreen from './SplashScreen'
@@ -46,8 +47,40 @@ export default function Stage() {
   const keepScrollRef = useRef(null)
   const [olderState, setOlderState] = useState({ loading: false, error: '' })
 
-  useEffect(() => {
+  // Follow new output only while the reader is at the bottom; otherwise keep
+  // their place and offer "Show new messages".
+  const atBottomRef = useRef(true)
+  const seenRef = useRef({ sessionId: null, count: 0 })
+  const [hasNew, setHasNew] = useState(false)
+
+  const onStageScroll = useCallback(() => {
     const stage = stageRef.current
+    if (!stage) return
+    atBottomRef.current = isNearBottom(stage)
+    if (atBottomRef.current) setHasNew(false)
+  }, [])
+
+  const showNew = useCallback(() => {
+    const stage = stageRef.current
+    if (!stage) return
+    atBottomRef.current = true
+    setHasNew(false)
+    stage.scrollTo({ top: stage.scrollHeight, behavior: 'smooth' })
+  }, [])
+
+  useEffect(() => {
+    // An agent home replaces the transcript; coming back counts as opening
+    // the session again, so the remounted transcript starts at the bottom.
+    if (state.agentHome) {
+      seenRef.current = { sessionId: null, count: 0 }
+      return
+    }
+    const stage = stageRef.current
+    const items = state.stageItems
+    const seen = seenRef.current
+    const sessionChanged = seen.sessionId !== state.currentSessionId
+    const added = sessionChanged ? [] : items.slice(seen.count)
+    seenRef.current = { sessionId: state.currentSessionId, count: items.length }
     if (!stage) return
     const keep = keepScrollRef.current
     if (keep) {
@@ -56,8 +89,20 @@ export default function Stage() {
       return
     }
     if (state.scrollTarget) return
-    stage.scrollTop = stage.scrollHeight
-  }, [state.stageItems, state.scrollTarget])
+    const decision = followNewOutput({
+      sessionChanged,
+      replaying: state.isReplaying,
+      ownMessage: added.some(item => item.type === 'user_message'),
+      atBottom: atBottomRef.current,
+    })
+    if (decision === 'bottom') {
+      stage.scrollTop = stage.scrollHeight
+      atBottomRef.current = true
+      setHasNew(false)
+    } else {
+      setHasNew(true)
+    }
+  }, [state.stageItems, state.scrollTarget, state.currentSessionId, state.isReplaying, state.agentHome])
 
   useEffect(() => { setOlderState({ loading: false, error: '' }) }, [state.currentSessionId])
 
@@ -276,6 +321,7 @@ export default function Stage() {
   return (
     <div
       ref={stageRef}
+      onScroll={onStageScroll}
       className="@container flex-1 overflow-y-auto px-9 py-5"
       style={notesWidth ? { '--notes-w': `${notesWidth}px` } : undefined}
       onPointerDown={resizeNotes}
@@ -309,6 +355,19 @@ export default function Stage() {
           />
         ))}
       </div>
+      {hasNew && (
+        // Zero-height and sticky, so it floats at the bottom of the view
+        // without adding space under the transcript.
+        <div className="pointer-events-none sticky bottom-0 flex h-0 justify-center">
+          <button
+            type="button"
+            onClick={showNew}
+            className="pointer-events-auto -translate-y-12 rounded-full border border-line bg-panel px-3 py-1 text-[12.5px] text-text-default shadow-md transition-colors hover:border-accent hover:text-accent"
+          >
+            Show new messages ↓
+          </button>
+        </div>
+      )}
     </div>
   )
 }

@@ -241,6 +241,10 @@ if the user should be asked about it.
   collapse to a name chip. Replayed messages start collapsed, live ones
   expanded; a user toggle is remembered per image in the browser
   (`frontend/src/imageCollapse.js`).
+- **Transcript scrolling** (`frontend/src/stageScroll.js`, used by `Stage.jsx`)
+  follows new output only while the reader is within 80 px of the bottom;
+  otherwise a "Show new messages" button appears. Opening a session and
+  sending a message always go to the bottom.
 - **Search, export, and metrics** read persisted events as the source of truth —
   keep event changes compatible with all three.
 - **File editing** is desktop-only: `PUT /api/workspace/file` requires the
