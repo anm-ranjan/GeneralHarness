@@ -151,3 +151,8 @@ export async function downloadSessionExport(sessionId, format = 'md') {
     'Export',
   )
 }
+
+export const listAgents = () => api('GET', '/api/agents')
+export const getAgent = name => api('GET', `/api/agents/${encodeURIComponent(name)}`)
+export const getAgentOptions = (name, param, params) => api('POST', `/api/agents/${encodeURIComponent(name)}/options/${encodeURIComponent(param)}`, { params })
+export const startAgentRun = (name, body) => api('POST', `/api/agents/${encodeURIComponent(name)}/runs`, body)

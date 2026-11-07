@@ -26,7 +26,7 @@ export default function SessionBreadcrumb({ meta }) {
   const taskNamesByProject = useMemo(() => taskNamesFor(projects), [projects])
 
   const projectItems = useMemo(() => {
-    const ordered = [...projects.filter(p => p.id !== CHATS_PROJECT_ID), ...projects.filter(p => p.id === CHATS_PROJECT_ID)]
+    const ordered = [...projects.filter(p => p.id !== CHATS_PROJECT_ID && p.id !== '__agents__'), ...projects.filter(p => p.id === CHATS_PROJECT_ID)]
     return ordered.map(p => {
       const sessions = projectSessions(p, sessionsById)
       return {
@@ -72,6 +72,8 @@ export default function SessionBreadcrumb({ meta }) {
     setOpen(null)
     if (!item.current) selectSession(item.id).catch(err => console.error('Failed to select session:', err))
   }
+
+  if (meta.kind === 'agent_run') return <nav className="flex items-center gap-2 min-w-0 text-sm text-text-default" aria-label="Session location"><span>Agents</span><span>›</span><button className="hover:text-accent" onClick={() => dispatch({type:'OPEN_AGENT_HOME',payload:meta.agent})}>{meta.agent}</button><span>›</span><span>Run {meta.agent_run_number}</span>{meta.parent_session_id && <button className="text-faint hover:text-accent truncate" onClick={() => selectSession(meta.parent_session_id)}>← {sessionsById[meta.parent_session_id]?.title || 'from a deleted session'}</button>}</nav>
 
   return (
     // Both labels truncate inside their wrappers (a button only truncates as a

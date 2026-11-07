@@ -45,7 +45,12 @@ export default function TopBar() {
           </button>
         </div>
       )}
-      {meta ? (
+      {state.agentHome ? (
+        <nav className="flex min-w-0 items-center gap-2 text-sm text-text-default" aria-label="Location">
+          <span className="text-faint">Agents</span><span className="text-faint">›</span>
+          <span className="truncate text-text-bright">{state.agentHome}</span>
+        </nav>
+      ) : meta ? (
         <>
           <SessionBreadcrumb meta={meta} />
           <button

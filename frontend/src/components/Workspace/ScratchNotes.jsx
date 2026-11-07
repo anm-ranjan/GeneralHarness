@@ -128,7 +128,7 @@ export default function ScratchNotes() {
     { id: 'memory', label: viewLabel('Memory', project?.name), full: viewLabel('Memory', project?.name) },
   ]
   const textView = activeView === 'scratch' ? scratch : activeView === 'instructions' ? instructions : null
-  const unavailable = 'Not available in chats'
+  const unavailable = 'Available in project sessions'
   const canSave = Boolean(project) && Boolean(scratch.text.trim()) && !busy
 
   return (

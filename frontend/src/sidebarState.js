@@ -14,7 +14,7 @@ const PREFS_KEY = 'myharness.sidebar'
 export function sidebarPrefs() {
   try {
     const raw = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}')
-    return { open: raw.open !== false, view: raw.view === 'activity' ? 'activity' : 'projects' }
+    return { open: raw.open !== false, view: ['activity', 'agents'].includes(raw.view) ? raw.view : 'projects' }
   } catch {
     return { open: true, view: 'projects' }
   }

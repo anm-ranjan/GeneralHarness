@@ -92,6 +92,12 @@ SLASH_COMMANDS: list[dict] = [
         "providers": ALL_PROVIDERS,
     },
     {
+        "name": "/create_agent",
+        "usage": ["/create_agent <intent>"],
+        "description": "Draft a reusable routine agent for review. Native sessions only.",
+        "providers": ["native"],
+    },
+    {
         "name": "/remember",
         "usage": ["/remember", "/remember <focus>"],
         "description": (

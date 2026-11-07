@@ -108,3 +108,10 @@ offered option, type to provide a custom answer when allowed, and press `Enter`
 to submit. `Ctrl+C` cancels the run. Agent `plan_update` calls appear in a
 compact dock above the composer and are restored when reconnecting to a session;
 the dock closes after every plan item is completed.
+
+
+### Routine agents
+
+The reserved **Agents** bucket is pinned above Chats. Runs are listed as `<agent> · Run <n>`; task rows stay hidden. Type `@agent-name request` in any session to start an independent native run, even while the current session is busy. Unknown names remain ordinary messages. Agent calls accept text only. The parent transcript shows a linked status block updated by the global stream; **Ctrl+G** opens the most recently linked run for its full progress, items, approvals, Stop and follow-ups. Stopping a parent never stops its linked runs, or vice versa.
+
+Inside a run, progress updates and item keys replace their previous lines; final results include a compact table. `/create_agent <intent>` drafts an agent in an idle native session; review/save/revise the files in the web UI. See the [routine agent format](../agents/README.md).

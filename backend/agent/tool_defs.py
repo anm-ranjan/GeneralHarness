@@ -568,3 +568,19 @@ COLLABORATION_TOOLS = [
 ]
 
 COLLABORATION_TOOL_NAMES = frozenset(t["function"]["name"] for t in COLLABORATION_TOOLS)
+
+# Routine-agent tool, offered only in an agent_run with its params specialized
+# from the AgentProfile (agent_profiles.script_tool). Never add this to the
+# general-purpose TOOLS catalog.
+RUN_AGENT_SCRIPT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "run_agent_script",
+        "description": "Run this routine agent script with validated parameters.",
+        "parameters": {
+            "type": "object",
+            "properties": {"params": {"type": "object"}, "dry_run": {"type": "boolean"}},
+            "required": ["params"],
+        },
+    },
+}

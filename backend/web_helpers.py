@@ -44,6 +44,8 @@ def _workspace_root_for_session(meta) -> str:
     override = (getattr(meta, "working_directory", "") or "").strip()
     if override and utils.is_path_allowed(override) and os.path.isdir(override):
         return web_app._resolve_path(override)
+    if getattr(meta, "kind", "project") == "agent_run":
+        return web_app._agent_workspace_dir(meta.id)
     if getattr(meta, "kind", "project") == "chat":
         return web_app._resolve_path(web_app._chat_workspace_dir(meta.id))
     project_root = _project_root_for_session(meta)
@@ -59,6 +61,8 @@ def _session_identity(meta) -> dict:
     identity = session_context.current_identity(web_app._store, meta.id)
     if identity:
         identity["workspace_root"] = _workspace_root_for_session(meta)
+        if getattr(meta, "kind", "project") == "agent_run":
+            identity["_agent_name"] = meta.agent
         # Project instructions + memory index, appended to the prompt by
         # session_context.prompt_fragment (never serialized as identity).
         identity["_project_knowledge"] = project_knowledge.prompt_fragment(
@@ -502,7 +506,10 @@ _READS_AS_ANSWER_RE = re.compile(
 
 
 def _has_default_title(meta) -> bool:
-    return bool(_DEFAULT_TITLE_RE.match((getattr(meta, "title", "") or "").strip()))
+    title = (getattr(meta, "title", "") or "").strip()
+    if getattr(meta, "kind", "project") == "agent_run":
+        return title == f"Run {getattr(meta, 'agent_run_number', 0)}"
+    return bool(_DEFAULT_TITLE_RE.match(title))
 
 
 def _clean_title(candidate: str) -> str:
@@ -582,6 +589,8 @@ def _autotitle_session(session_id: str, prompt: str, live_meta=None) -> None:
         if current is None or not _has_default_title(current):
             return
         title = _generate_title(prompt)
+        if title and getattr(current, "kind", "project") == "agent_run":
+            title = f"Run {current.agent_run_number} · {title}"
         # Re-read: generation can take a few seconds, in which case the user may
         # have named the session themselves in the meantime.
         current = web_app._store.load_session(session_id)

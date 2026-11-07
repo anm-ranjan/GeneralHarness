@@ -1,3 +1,4 @@
+import AgentsView from '../Agents/AgentsView'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useAppDispatch, useAppSelector, useAppStateRef } from '../../context/AppContext'
 import useSessionTree from '../../hooks/useSessionTree'
@@ -176,7 +177,7 @@ export default function Sidebar() {
     if (!menu) return []
     const s = sessionsById[menu.session.id] || menu.session
     const busy = !!(runStates[s.id] || s.status === 'running')
-    const chat = isChatSession(s)
+    const chat = isChatSession(s) || s.kind === 'agent_run'
     return [
       { label: 'Copy thread reference', onSelect: () => copyText(sessionReference(s, projectNames)).catch(reportError) },
       { label: 'Rename', onSelect: () => setRenameSessionId(s.id) },
@@ -209,7 +210,7 @@ export default function Sidebar() {
   }, [menu, sessionsById, runStates, projectNames, tree, dispatch, deleteSession, reportError])
 
   const chatsProject = projects.find(p => p.id === CHATS_PROJECT_ID)
-  const realProjects = useMemo(() => projects.filter(p => p.id !== CHATS_PROJECT_ID), [projects])
+  const realProjects = useMemo(() => projects.filter(p => p.id !== CHATS_PROJECT_ID && p.id !== '__agents__'), [projects])
 
   const projectGroups = useMemo(() => realProjects.map(project => {
     const all = projectSessions(project, sessionsById)
@@ -227,7 +228,7 @@ export default function Sidebar() {
 
   const subtitles = useMemo(() => {
     const out = {}
-    for (const s of Object.values(sessionsById)) out[s.id] = isChatSession(s) ? 'Chat' : (projectNames[s.project_id] || s.project_id)
+    for (const s of Object.values(sessionsById)) out[s.id] = s.kind === 'agent_run' ? `Agent · ${s.agent}` : isChatSession(s) ? 'Chat' : (projectNames[s.project_id] || s.project_id)
     return out
   }, [sessionsById, projectNames])
 
@@ -299,10 +300,11 @@ export default function Sidebar() {
         <ViewButton active={view === 'activity'} label="Sort by most recent activity" onClick={() => dispatch({ type: 'SET_SIDEBAR_VIEW', payload: 'activity' })}>
           <ClockIcon />
         </ViewButton>
+        <ViewButton active={view === 'agents'} label="Show agents" onClick={() => dispatch({ type: 'SET_SIDEBAR_VIEW', payload: 'agents' })}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="4" y="6" width="16" height="14" rx="3"/><path d="M12 2v4M8 11v3m8-3v3M8 17h8"/></svg></ViewButton>
       </div>
 
       <div className="flex-1 overflow-y-auto -ml-2 -mr-2 pl-2 pr-2">
-        {view === 'activity' ? (
+        {view === 'agents' ? <AgentsView search={search} {...rowProps} /> : view === 'activity' ? (
           activity.length === 0 ? (
             <p className="text-[13px] text-faint italic text-center mt-8 mb-4">{filtering ? 'No matching threads.' : 'No threads yet.'}</p>
           ) : (

@@ -63,6 +63,8 @@ export default function useGlobalEvents(dispatch, stateRef, activeHostId) {
             })
           } else if (msg.type === 'native_settings') {
             dispatch({ type: 'SET_NATIVE_MODEL', payload: msg.model || '' })
+          } else if (msg.type === 'session_updated') {
+            dispatch({ type: 'PATCH_SESSION', payload: { sessionId: msg.session_id, changes: msg.changes || {} } })
           } else if (msg.type === 'session_renamed') {
             dispatch({
               type: 'SET_SESSION_TITLE',

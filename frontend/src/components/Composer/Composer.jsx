@@ -3,7 +3,11 @@ import { useApp } from '../../context/AppContext'
 import useApi from '../../hooks/useApi'
 import { isSlashCommand, SUGGESTED_SLASH_COMMANDS } from '../../constants'
 import ComposerToolbar from './ComposerToolbar'
-import { api } from '../../api'
+import { api, startAgentRun } from '../../api'
+import { agentInvocation } from '../../agentRunState'
+import { errorLines } from '../../agentUi'
+import useAgentProfiles from '../../hooks/useAgentProfiles'
+import useSessionTree from '../../hooks/useSessionTree'
 import { hostStorageKey } from '../../fleet'
 import { audioBlobToWav } from '../../audioWav'
 import { continueList, toggleMarker } from '../../textFormat'
@@ -20,8 +24,12 @@ const FORMATS = [
 
 export default function Composer() {
   const { state, dispatch } = useApp()
+  const profiles = useAgentProfiles()
+  const tree = useSessionTree()
+  const [agentIndex, setAgentIndex] = useState(0)
   const { sendMessage, sendSilentCommand, cancelRun } = useApi()
   const [input, setInput] = useState('')
+  const agentOptions = /^@[a-z0-9-]*$/.test(input) ? profiles.filter(p=>!p.errors.length && p.ready !== false && p.name.startsWith(input.slice(1))) : []
   const [attachments, setAttachments] = useState([])
   const [attachmentError, setAttachmentError] = useState('')
   const [audioError, setAudioError] = useState('')
@@ -182,6 +190,34 @@ export default function Composer() {
     const text = input.trim()
     if (!text && attachments.length === 0) return
     if (sending) return
+    // `@agent request` starts a separate routine-agent run, even while this
+    // session is busy; its card appears here once the run has started.
+    const invocation = agentInvocation(text, profiles)
+    if (invocation) {
+      if (attachments.length) { setAttachmentError('Agent calls accept text only.'); return }
+      const profile = profiles.find(p => p.name === invocation.name)
+      if (profile && (profile.errors.length || profile.ready === false)) {
+        setAttachmentError(`@${profile.name} is not ready: ${(profile.disabled_reasons || profile.errors).join('; ')}`)
+        return
+      }
+      const sid = state.currentSessionId
+      setSending(true)
+      try {
+        await startAgentRun(invocation.name, {
+          text: invocation.text || 'Run this agent.',
+          parent_session_id: sid,
+          working_directory: state.currentWorkspaceRoot,
+        })
+        await tree.loadTree()
+        setInput(''); setAttachmentError('')
+        localStorage.removeItem(draftKey(state.activeHostId, sid))
+        requestAnimationFrame(resizeInput)
+        return true
+      } catch (e) {
+        setAttachmentError(`Could not start @${invocation.name}: ${errorLines(e).join('; ')}`)
+      } finally { setSending(false) }
+      return false
+    }
     if (state.isRunning && isSlashCommand(text)) {
       dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: 'Slash commands can only run when the agent is idle.' } })
       return
@@ -442,6 +478,13 @@ export default function Composer() {
 
   function handleKeyDown(e) {
     if (e.isComposing || e.nativeEvent?.isComposing) return
+    if (agentOptions.length && ['ArrowDown', 'ArrowUp', 'Tab', 'Enter'].includes(e.key) && !e.shiftKey) {
+      e.preventDefault()
+      if (e.key === 'ArrowDown') setAgentIndex(i => (i + 1) % agentOptions.length)
+      else if (e.key === 'ArrowUp') setAgentIndex(i => (i - 1 + agentOptions.length) % agentOptions.length)
+      else { setInput('@' + agentOptions[agentIndex % agentOptions.length].name + ' '); setAgentIndex(0) }
+      return
+    }
     if ((e.metaKey || e.ctrlKey) && !e.altKey) {
       const format = FORMATS.find(f => f.key === e.key.toLowerCase() && Boolean(f.shift) === e.shiftKey)
       if (format) {
@@ -484,10 +527,11 @@ export default function Composer() {
               onDrop={handleDrop}
               onDragOver={e => e.preventDefault()}
               disabled={sending}
-              placeholder="Reply, or type / for commands"
+              placeholder={state.currentMeta?.kind === 'agent_run' ? "Follow up on this run…" : "Reply, or type / for commands"}
               rows={1}
               className="w-full min-h-[56px] max-h-[32vh] resize-y bg-transparent border border-line rounded-xl px-4 py-3 text-[14.5px] leading-6 text-text-default placeholder:text-faint outline-none focus:border-accent transition-colors disabled:opacity-50"
             />
+            {!!agentOptions.length && <div role="listbox" aria-label="Agents" className="mt-2 border border-line rounded-lg overflow-hidden">{agentOptions.map((p,n)=><button key={p.name} type="button" role="option" aria-selected={n===agentIndex%agentOptions.length} onClick={()=>{setInput('@'+p.name+' ');inputRef.current?.focus()}} className={`block w-full text-left p-2 text-sm ${n===agentIndex%agentOptions.length?'bg-accent-soft text-accent':'text-text-default'}`}>@{p.name}<span className="ml-2 text-faint">{p.description}</span></button>)}</div>}
             {input.startsWith('/') && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {SUGGESTED_SLASH_COMMANDS.map(cmd => (

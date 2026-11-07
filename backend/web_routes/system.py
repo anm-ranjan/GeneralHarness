@@ -355,7 +355,7 @@ def browse_directory(req: BrowseDirectoryRequest):
         roots = []
         for p in utils.ALLOWED_PATHS:
             rp = web_app._resolve_path(p)
-            if os.path.isdir(rp):
+            if os.path.isdir(rp) and utils._resolve_path(p) not in utils.RUNTIME_ALLOWED_PATHS:
                 roots.append({"name": os.path.basename(rp) or rp, "path": rp})
         return {"current": "", "parent": None, "entries": roots, "is_root_list": True}
 
@@ -369,8 +369,9 @@ def browse_directory(req: BrowseDirectoryRequest):
     try:
         for name in sorted(os.listdir(base)):
             full = os.path.join(base, name)
-            if os.path.isdir(full) and not name.startswith('.'):
-                entries.append({"name": name, "path": full})
+            is_dir = os.path.isdir(full)
+            if (is_dir or (req.include_files and os.path.isfile(full))) and not name.startswith('.'):
+                entries.append({"name": name, "path": full, "is_dir": is_dir})
     except PermissionError:
         raise HTTPException(status_code=403, detail="Permission denied")
 

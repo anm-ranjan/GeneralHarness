@@ -456,6 +456,8 @@ pub struct App {
     pub collapsed: std::collections::HashSet<NavKey>,
     pub active_session_id: Option<String>,
     pub transcript: Vec<TranscriptEntry>,
+    routine_entries: std::collections::HashMap<String, usize>,
+    pub last_agent_run: Option<String>,
     pub scroll_from_bottom: u16,
     pub connection: String,
     pub history_label: String,
@@ -529,6 +531,8 @@ impl App {
             collapsed,
             active_session_id: active_session_id.clone(),
             transcript: Vec::new(),
+            routine_entries: std::collections::HashMap::new(),
+            last_agent_run: None,
             scroll_from_bottom: 0,
             connection: "connecting".to_owned(),
             history_label: String::new(),
@@ -673,7 +677,7 @@ impl App {
             .ok_or_else(|| "Nothing is selected.".to_owned())?
         {
             NavRow::Project { id, name, .. } => {
-                if id == "__chats__" {
+                if id == "__chats__" || id == "__agents__" {
                     return Err("The reserved Chats collection cannot be deleted.".to_owned());
                 }
                 let project = self
@@ -717,6 +721,8 @@ impl App {
             ..ComposerState::default()
         };
         self.transcript.clear();
+        self.routine_entries.clear();
+        self.last_agent_run = None;
         self.scroll_from_bottom = 0;
         self.history_label.clear();
         self.connection = "connecting".to_owned();
@@ -782,9 +788,11 @@ impl App {
         }
         let mut replay_verbose = initial_replay_verbose(&loaded.events, self.verbose_tools);
         self.transcript = Vec::with_capacity(loaded.events.len());
+        self.routine_entries.clear();
+        self.last_agent_run = None;
         for event in &loaded.events {
             if let Some(entry) = render_event(event, replay_verbose) {
-                self.transcript.push(entry);
+                self.push_routine_entry(event, entry);
             }
             if event.event_type == "status" {
                 if let Some(verbose) = event
@@ -826,6 +834,9 @@ impl App {
             .filter_map(|event| render_event(event, self.verbose_tools))
             .collect();
         if let Some(index) = self.assistant_delta_index.as_mut() {
+            *index += older.len();
+        }
+        for index in self.routine_entries.values_mut() {
             *index += older.len();
         }
         older.append(&mut self.transcript);
@@ -896,6 +907,48 @@ impl App {
         let history = self.sent_history.entry(session_id.to_owned()).or_default();
         if history.last().map(String::as_str) != Some(text) {
             history.push(text.to_owned());
+        }
+    }
+
+    fn push_routine_entry(&mut self, event: &EventEnvelope, entry: TranscriptEntry) {
+        let d = &event.data;
+        let string = |key: &str| d.get(key).and_then(serde_json::Value::as_str).unwrap_or("");
+        let key = match event.event_type.as_str() {
+            "agent_run_progress" => Some(format!("progress:{}", string("tool_call_id"))),
+            "agent_run_item" => Some(format!("item:{}:{}", string("tool_call_id"), string("key"))),
+            "agent_run_link" => {
+                self.last_agent_run = Some(string("run_session_id").to_owned());
+                Some(format!("link:{}", string("run_session_id")))
+            }
+            _ => None,
+        };
+        if let Some(key) = key {
+            if let Some(index) = self.routine_entries.get(&key).copied() {
+                if index < self.transcript.len() {
+                    self.transcript[index] = entry;
+                    return;
+                }
+            }
+            self.routine_entries.insert(key, self.transcript.len());
+        }
+        self.transcript.push(entry);
+    }
+
+    pub fn update_agent_link(&mut self, session_id: &str, state: &str) {
+        if let Some(index) = self
+            .routine_entries
+            .get(&format!("link:{session_id}"))
+            .copied()
+        {
+            if let Some(entry) = self.transcript.get_mut(index) {
+                let base = entry
+                    .text
+                    .split(" · status: ")
+                    .next()
+                    .unwrap_or("")
+                    .to_owned();
+                entry.text = format!("{base} · status: {state}");
+            }
         }
     }
 
@@ -1006,13 +1059,23 @@ impl App {
             if let Some(index) = self.assistant_delta_index.take() {
                 if index < self.transcript.len() {
                     let removed = self.transcript.remove(index);
+                    self.routine_entries.retain(|_, position| {
+                        if *position == index {
+                            false
+                        } else {
+                            if *position > index {
+                                *position -= 1;
+                            }
+                            true
+                        }
+                    });
                     self.pin_scroll_sub(entry_line_estimate(&removed));
                 }
             }
         }
         if let Some(entry) = render_event(event, self.verbose_tools) {
             self.pin_scroll_add(entry_line_estimate(&entry));
-            self.transcript.push(entry);
+            self.push_routine_entry(event, entry);
         }
         if self.search.is_some() {
             self.recompute_search(false);
@@ -1172,6 +1235,8 @@ impl App {
         self.pane_focus = PaneFocus::Navigator;
         self.composer = ComposerState::default();
         self.transcript.clear();
+        self.routine_entries.clear();
+        self.last_agent_run = None;
         self.history_label.clear();
         self.connection = "no session".to_owned();
         self.run_state = RunState::Idle;
@@ -1403,7 +1468,11 @@ fn flatten_tree(tree: &SessionTree, collapsed: &std::collections::HashSet<NavKey
     // Keep the reserved Chats collection pinned to the bottom, like the desktop
     // app; the stable sort preserves the backend order of every other project.
     let mut ordered: Vec<&crate::api::ProjectInfo> = tree.projects.iter().collect();
-    ordered.sort_by_key(|project| project.id == "__chats__");
+    ordered.sort_by_key(|project| match project.id.as_str() {
+        "__chats__" => 2,
+        "__agents__" => 1,
+        _ => 0,
+    });
     for project in ordered {
         rows.push(NavRow::Project {
             id: project.id.clone(),
@@ -2383,15 +2452,24 @@ mod tests {
             data,
             ..EventEnvelope::default()
         };
-        app.apply_event(&event("assistant_delta", serde_json::json!({"text": "Let me run it"})));
+        app.apply_event(&event(
+            "assistant_delta",
+            serde_json::json!({"text": "Let me run it"}),
+        ));
         app.apply_event(&event("thinking", serde_json::json!({"markdown": "plan"})));
         app.apply_event(&event(
             "tool_call",
             serde_json::json!({"call_id": "c1", "name": "shell_run", "args": {"command": "dir"}}),
         ));
-        assert!(app.transcript.iter().all(|entry| !entry.text.contains("Let me run it")));
+        assert!(app
+            .transcript
+            .iter()
+            .all(|entry| !entry.text.contains("Let me run it")));
         // The next step's commentary starts a fresh entry, not the old one.
-        app.apply_event(&event("assistant_delta", serde_json::json!({"text": "Now it has"})));
+        app.apply_event(&event(
+            "assistant_delta",
+            serde_json::json!({"text": "Now it has"}),
+        ));
         let streamed: Vec<_> = app
             .transcript
             .iter()
@@ -2489,4 +2567,33 @@ mod tests {
             .any(|entry| entry.text.contains("after")));
         assert!(app.verbose_tools);
     }
+    #[test]
+    fn routine_items_and_progress_upsert_and_links_update() {
+        let mut app = App::new("http://localhost".to_owned(), Health::default(), SessionTree::default(), None);
+        for (kind, data) in [
+            ("agent_run_progress", serde_json::json!({"tool_call_id":"c","done":0,"total":2})),
+            ("agent_run_item", serde_json::json!({"tool_call_id":"c","key":"a","status":"running"})),
+            ("agent_run_item", serde_json::json!({"tool_call_id":"c","key":"a","status":"ok","detail":"observed"})),
+            ("agent_run_progress", serde_json::json!({"tool_call_id":"c","done":2,"total":2})),
+        ] { app.apply_event(&EventEnvelope {event_type:kind.to_owned(),data,..EventEnvelope::default()}); }
+        assert_eq!(app.transcript.len(),2);
+        assert!(app.transcript[1].text.contains("observed"));
+        app.apply_event(&EventEnvelope {event_type:"agent_run_link".to_owned(),data:serde_json::json!({"run_session_id":"child","agent":"job-status","run_number":1}),..EventEnvelope::default()});
+        app.update_agent_link("child","waiting_approval");
+        assert!(app.transcript.last().unwrap().text.contains("waiting_approval"));
+        assert_eq!(app.last_agent_run.as_deref(),Some("child"));
+    }
+
+    #[test]
+    fn routine_bucket_is_above_chats_and_below_projects() {
+        let tree = SessionTree {projects:vec![
+            ProjectInfo{id:"__chats__".to_owned(),..ProjectInfo::default()},
+            ProjectInfo{id:"__agents__".to_owned(),..ProjectInfo::default()},
+            ProjectInfo{id:"project".to_owned(),..ProjectInfo::default()},
+        ],..SessionTree::default()};
+        let app=App::new("http://localhost".to_owned(),Health::default(),tree,None);
+        let ids=app.rows.iter().filter_map(|r| if let NavRow::Project{id,..}=r {Some(id.as_str())}else{None}).collect::<Vec<_>>();
+        assert_eq!(ids,vec!["project","__agents__","__chats__"]);
+    }
+
 }

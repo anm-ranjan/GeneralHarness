@@ -1,4 +1,5 @@
 import { useApp } from '../../context/AppContext'
+import AgentRunPanel from '../Agents/AgentRunPanel'
 import TouchedFilesPanel from './TouchedFilesPanel'
 import ActivityLog from './ActivityLog'
 import FileTree from './FileTree'
@@ -35,7 +36,7 @@ export default function WorkspacePanel() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex flex-wrap items-center gap-1 px-3 py-2 border-b border-line">
-        {TABS.map(t => (
+        {(state.currentMeta?.kind === 'agent_run' ? [{id:'run', label:'Run'}, ...TABS] : TABS).map(t => (
           <button
             key={t.id}
             onClick={() => dispatch({ type: 'SET_WORKSPACE_TAB', payload: t.id })}
@@ -59,6 +60,7 @@ export default function WorkspacePanel() {
         </button>
       </div>
       <div className="flex-1 overflow-y-auto">
+        {tab === 'run' && <AgentRunPanel />}
         {tab === 'changes' && <TouchedFilesPanel />}
         {tab === 'source' && <SourceControl />}
         {tab === 'activity' && <ActivityLog />}

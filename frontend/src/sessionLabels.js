@@ -4,6 +4,9 @@
 
 import { CHATS_PROJECT_ID } from './constants.js'
 
+// Routine-agent runs live in the reserved Agents bucket, one task per agent.
+export const isAgentRunSession = session => session?.kind === 'agent_run' || session?.project_id === '__agents__'
+
 // Placeholder task names that carry no meaning as a label.
 const UNLABELED_TASKS = new Set(['general', 'unlabelled', 'unlabeled', 'new task', 'chats'])
 
@@ -17,7 +20,8 @@ export function modeLabel(session) {
 export function sessionLabels(session, taskNames = {}) {
   if (!session) return []
   const labels = []
-  const taskName = String(taskNames[session.task_id] || '').trim()
+  // Agent-run tasks are agent names, already shown by the row's subtitle.
+  const taskName = isAgentRunSession(session) ? '' : String(taskNames[session.task_id] || '').trim()
   if (taskName && !UNLABELED_TASKS.has(taskName.toLowerCase())) labels.push(taskName)
   for (const label of session.labels || []) {
     if (label && !labels.some(l => l.toLowerCase() === label.toLowerCase())) labels.push(label)

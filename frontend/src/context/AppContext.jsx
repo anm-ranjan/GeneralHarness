@@ -30,7 +30,7 @@ function createStore() {
       const next = reducer(state, action)
       if (next === state) return
       state = next
-      if (action.type === 'TOGGLE_SIDEBAR' || action.type === 'SET_SIDEBAR_VIEW') {
+      if (action.type === 'TOGGLE_SIDEBAR' || action.type === 'SET_SIDEBAR_VIEW' || action.type === 'OPEN_AGENT_HOME') {
         saveSidebarPrefs({ open: state.sidebarOpen, view: state.sidebarView })
       }
       listeners.forEach(listener => listener())

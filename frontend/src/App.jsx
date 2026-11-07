@@ -66,8 +66,7 @@ function AppLayout() {
       <main className="main-area @container flex flex-col overflow-hidden bg-panel">
         <TopBar />
         <Stage />
-        <QueuedMessages key={state.currentSessionId || 'none'} />
-        <Composer key={state.currentSessionId || 'none'} />
+        {!state.agentHome && <><QueuedMessages key={state.currentSessionId || 'none'} /><Composer key={state.currentSessionId || 'none'} /></>}
       </main>
 
       {wpOpen && (

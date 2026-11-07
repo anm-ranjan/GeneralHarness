@@ -1,8 +1,10 @@
 // Keep in step with backend/slash_commands.py (served at /api/commands).
-export const SLASH_CMDS = ['/help', '/compact', '/verbose', '/approve', '/clear', '/chdir', '/model', '/maxiters', '/thinking', '/skills', '/remember']
+export const SLASH_CMDS = ['/help', '/compact', '/verbose', '/approve', '/clear', '/chdir', '/model', '/maxiters', '/thinking', '/skills', '/remember', '/create_agent']
 
 // Reserved project id that holds general (project-less) chat sessions.
 export const CHATS_PROJECT_ID = '__chats__'
+// Reserved project id that holds routine-agent runs (one task per agent).
+export const AGENTS_PROJECT_ID = '__agents__'
 
 export const SUGGESTED_SLASH_COMMANDS = [
   '/aside what does this function return?',

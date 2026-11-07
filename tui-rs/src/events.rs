@@ -173,6 +173,70 @@ pub fn render_event(event: &EventEnvelope, verbose_tools: bool) -> Option<Transc
             format!("Generated artifact: {}", text("path")),
         ),
         "compaction" => TranscriptEntry::new(EntryKind::Status, compaction_text(data, verbose_tools)),
+        "agent_draft" => TranscriptEntry::new(
+            EntryKind::Status,
+            format!(
+                "Agent draft {} ({}) · Review in the web UI",
+                text("name"),
+                text("draft_id")
+            ),
+        ),
+        "agent_run_progress" => TranscriptEntry::new(
+            EntryKind::Status,
+            format!(
+                "{}: {}/{}",
+                text("label"),
+                display_scalar(data.get("done")),
+                display_scalar(data.get("total"))
+            ),
+        ),
+        "agent_run_item" => TranscriptEntry::new(
+            EntryKind::Tool,
+            format!(
+                "[{}] {}  {}",
+                text("status"),
+                fallback(text("label"), text("key")),
+                text("detail")
+            ),
+        ),
+        "agent_run_result" => {
+            let mut output = format!("{}: {}", text("status"), text("summary"));
+            if let Some(table) = data.get("table") {
+                if let Some(cols) = table.get("columns").and_then(Value::as_array) {
+                    output.push_str(&format!(
+                        "\n{}",
+                        cols.iter()
+                            .map(|v| display_scalar(Some(v)))
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                    ));
+                }
+                if let Some(rows) = table.get("rows").and_then(Value::as_array) {
+                    for row in rows {
+                        if let Some(cells) = row.as_array() {
+                            output.push_str(&format!(
+                                "\n{}",
+                                cells
+                                    .iter()
+                                    .map(|v| display_scalar(Some(v)))
+                                    .collect::<Vec<_>>()
+                                    .join(" | ")
+                            ));
+                        }
+                    }
+                }
+            }
+            TranscriptEntry::new(EntryKind::Status, output)
+        }
+        "agent_run_link" => TranscriptEntry::new(
+            EntryKind::Status,
+            format!(
+                "Agent {} · Run {} ({})",
+                text("agent"),
+                display_scalar(data.get("run_number")),
+                text("run_session_id")
+            ),
+        ),
         "memory_saved" => {
             let memory = data.get("memory").cloned().unwrap_or(Value::Null);
             let field = |key: &str| memory.get(key).and_then(Value::as_str).unwrap_or("").to_owned();

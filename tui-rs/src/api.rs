@@ -47,6 +47,10 @@ pub struct SessionMeta {
     pub status: String,
     pub provider: String,
     pub kind: String,
+    pub agent: String,
+    pub agent_version: u32,
+    pub agent_run_number: u32,
+    pub parent_session_id: String,
     pub message_queue: Vec<Value>,
     pub run_settings: RunSettings,
     pub updated_at: String,
@@ -137,6 +141,17 @@ impl MyHarnessClient {
 
     pub fn display_url(&self) -> String {
         self.base_url.as_str().trim_end_matches('/').to_owned()
+    }
+
+    #[allow(dead_code)]
+    pub async fn list_agents(&self) -> Result<Vec<Value>> {
+        self.get_json("/api/agents").await
+    }
+
+    #[allow(dead_code)]
+    pub async fn start_agent_run(&self, name: &str, body: &Value) -> Result<SessionMeta> {
+        self.post_json(&format!("/api/agents/{}/runs", name), body)
+            .await
     }
 
     pub async fn health(&self) -> Result<Health> {
@@ -271,6 +286,18 @@ impl MyHarnessClient {
             .await
     }
 
+    pub fn global_ws_url(&self) -> Result<Url> {
+        let mut url = self.session_ws_url("_")?;
+        let path = url
+            .path()
+            .strip_suffix("/sessions/_/events")
+            .unwrap_or("/api")
+            .to_owned()
+            + "/events";
+        url.set_path(&path);
+        Ok(url)
+    }
+
     pub fn session_ws_url(&self, session_id: &str) -> Result<Url> {
         let mut url = self
             .base_url
@@ -385,6 +412,10 @@ mod tests {
         assert_eq!(
             client.session_ws_url("ses_1").unwrap().as_str(),
             "wss://example.test/workstation/api/sessions/ses_1/events"
+        );
+        assert_eq!(
+            client.global_ws_url().unwrap().as_str(),
+            "wss://example.test/workstation/api/events"
         );
     }
 

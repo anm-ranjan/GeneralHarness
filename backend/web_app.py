@@ -74,6 +74,9 @@ _STATIC_DIR = os.environ.get(
 _WORKSPACES_DIR = Path(_DATA_DIR) / "workspaces"
 _CHATS_DIR = _WORKSPACES_DIR
 _MATERIALIZATIONS_DIR = Path(_DATA_DIR) / "temporary-materializations"
+# Routine-agent run sandboxes; the parent is registered once as an allowed path
+# (_agent_workspace_dir reads _DATA_DIR at call time, like the store does).
+_AGENT_RUNS_DIR = Path(_DATA_DIR) / "agent_runs"
 
 _store: SessionStore | None = None
 _manager = SessionManager()
@@ -145,6 +148,13 @@ def _discard_run_lock(session_id: str) -> None:
     utils.kill_all_background_jobs(session_id)
 
 
+def _agent_workspace_dir(session_id: str) -> str:
+    """Private working folder of one routine-agent run (deleted with the run)."""
+    path = Path(_DATA_DIR) / "agent_runs" / session_id
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path.resolve())
+
+
 def _chat_workspace_dir(chat_id: str) -> str:
     """Per-chat sandboxed workspace for the general-purpose agent.
 
@@ -190,6 +200,8 @@ async def _lifespan(app: FastAPI):
     utils.register_allowed_path(str(_CHATS_DIR))
     _MATERIALIZATIONS_DIR.mkdir(parents=True, exist_ok=True)
     utils.register_allowed_path(str(_MATERIALIZATIONS_DIR))
+    _AGENT_RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    utils.register_allowed_path(str(_AGENT_RUNS_DIR))
     _manager.set_event_loop(asyncio.get_event_loop())
     performance_log.record("backend_ready", _IMPORT_STARTED)
     fleet_bridge.tunnels.start()
@@ -234,6 +246,7 @@ import web_routes.runs
 import web_routes.workspace
 import web_routes.usage
 import web_routes.project_knowledge
+import web_routes.agents
 
 # Settings saved from the Native Settings tab override agent_config.yaml.
 native_settings.apply_saved()
@@ -244,6 +257,7 @@ app.include_router(web_routes.runs.router)
 app.include_router(web_routes.workspace.router)
 app.include_router(web_routes.usage.router)
 app.include_router(web_routes.project_knowledge.router)
+app.include_router(web_routes.agents.router)
 
 
 # ── static frontend ───────────────────────────────────────────────

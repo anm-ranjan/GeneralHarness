@@ -19,7 +19,7 @@ function countMatches(text, needle, caseSensitive) {
   return (text.match(re) || []).length
 }
 
-export default function FileEditor({ path }) {
+export default function FileEditor({ path, endpoint, onClose, readOnly = false }) {
   const dispatch = useAppDispatch()
   const expanded = useAppSelector(s => s.workspaceEditorExpanded)
   const sessionRunning = useAppSelector(s => s.isRunning)
@@ -50,7 +50,7 @@ export default function FileEditor({ path }) {
     setError(null)
     setConflict(false)
     if (discardDraft) drafts.delete(path)
-    api('GET', `/api/workspace/file?path=${encodeURIComponent(path)}&full=true`)
+    api('GET', endpoint || `/api/workspace/file?path=${encodeURIComponent(path)}&full=true`)
       .then(data => {
         const draft = drafts.get(path)
         if (draft) {
@@ -65,21 +65,22 @@ export default function FileEditor({ path }) {
       })
       .catch(err => setError(err.detail || err.message || 'Failed to load file'))
       .finally(() => setLoading(false))
-  }, [path])
+  }, [path, endpoint])
 
   useEffect(() => { load() }, [load])
 
   const applyText = useCallback(next => {
+    if (readOnly) return
     setText(next)
     setDirty(true)
     drafts.set(path, { text: next, baseHash })
-  }, [path, baseHash])
+  }, [path, baseHash, readOnly])
 
   const close = useCallback(() => {
     if (dirty && !window.confirm(`Discard unsaved changes to ${name}?`)) return
     drafts.delete(path)
-    dispatch({ type: 'CLOSE_WORKSPACE_EDITOR' })
-  }, [dirty, name, path, dispatch])
+    if (onClose) onClose(); else dispatch({ type: 'CLOSE_WORKSPACE_EDITOR' })
+  }, [dirty, name, path, dispatch, onClose])
 
   const reload = useCallback(() => {
     if (dirty && !window.confirm('Discard your unsaved changes and reload from disk?')) return
@@ -87,14 +88,14 @@ export default function FileEditor({ path }) {
   }, [dirty, load])
 
   const save = useCallback(async (force = false) => {
-    if (saving) return
+    if (saving || readOnly) return
     setSaving(true)
     setError(null)
     try {
-      const data = await api('PUT', '/api/workspace/file', {
+      const data = await api('PUT', endpoint || '/api/workspace/file', {
         path,
         content: text,
-        base_hash: force ? null : baseHash,
+        base_hash: force && !endpoint ? null : baseHash,
       })
       setBaseHash(data.content_hash ?? null)
       setDirty(false)
@@ -109,7 +110,7 @@ export default function FileEditor({ path }) {
     } finally {
       setSaving(false)
     }
-  }, [saving, path, text, baseHash])
+  }, [saving, path, text, baseHash, endpoint, readOnly])
 
   // Unsaved work must survive a window close the same way it survives the X.
   useEffect(() => {
@@ -243,10 +244,10 @@ export default function FileEditor({ path }) {
         <span className="text-[12px] font-mono text-text-bright truncate" title={path}>{name}</span>
         {dirty && <span className="shrink-0 h-1.5 w-1.5 rounded-full bg-accent" title="Unsaved changes" />}
         <span className="ml-auto flex items-center gap-1">
-          {artifactPath(path) && <button className={iconButton} title="Preview the saved file" onClick={() => dispatch({ type: 'OPEN_ARTIFACT', payload: path })}>Preview</button>}
+          {!endpoint && artifactPath(path) && <button className={iconButton} title="Preview the saved file" onClick={() => dispatch({ type: 'OPEN_ARTIFACT', payload: path })}>Preview</button>}
           <button
             onClick={() => save()}
-            disabled={!dirty || saving || loading}
+            disabled={readOnly || !dirty || saving || loading}
             className="px-2 py-0.5 text-[11px] rounded bg-accent/15 text-accent hover:bg-accent/25 transition-colors disabled:opacity-30"
             title="Save (Ctrl/Cmd+S)"
           >
@@ -364,6 +365,7 @@ export default function FileEditor({ path }) {
               {gutter}
             </pre>
             <textarea
+              readOnly={readOnly}
               ref={textareaRef}
               value={text}
               onChange={e => applyText(e.target.value)}

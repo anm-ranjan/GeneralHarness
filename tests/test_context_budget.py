@@ -216,7 +216,7 @@ class ConfigAndCommandTests(unittest.TestCase):
         import re
         from pathlib import Path
         constants = (Path(__file__).resolve().parents[1] / "frontend" / "src" / "constants.js").read_text()
-        listed = set(re.findall(r"'(/[a-z]+)'", re.search(r"SLASH_CMDS = \[(.*?)\]", constants).group(1)))
+        listed = set(re.findall(r"'(/[a-z_]+)'", re.search(r"SLASH_CMDS = \[(.*?)\]", constants).group(1)))
         # /aside is sendable mid-run, so the frontend keeps it out of SLASH_CMDS.
         self.assertEqual(listed, {c["name"] for c in slash_commands.SLASH_COMMANDS} - {"/aside"})
 

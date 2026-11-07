@@ -3,9 +3,12 @@ import { useAppDispatch } from '../../context/AppContext'
 import useSessionTree from '../../hooks/useSessionTree'
 import { api } from '../../api'
 
-export default function DirectoryPicker() {
+// Project picker by default. With onSelect it returns a path; with multiple it
+// stays open so several folders/files can be added (agent "paths" fields).
+export default function DirectoryPicker({ onSelect, onClose, kind = 'dir', multiple = false, selected = [] } = {}) {
   const dispatch = useAppDispatch()
   const tree = useSessionTree()
+  const close = () => onClose ? onClose() : dispatch({ type: 'CLOSE_DIR_PICKER' })
   const [currentPath, setCurrentPath] = useState('')
   const [entries, setEntries] = useState([])
   const [parent, setParent] = useState(null)
@@ -15,11 +18,19 @@ export default function DirectoryPicker() {
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState(null) // null = closed, string = name being typed
   const [makingFolder, setMakingFolder] = useState(false)
+  const [added, setAdded] = useState(() => new Set(selected))
+  const pickFiles = kind === 'file'
+
+  function add(path) {
+    if (!path || added.has(path)) return
+    onSelect(path)
+    setAdded(old => new Set([...old, path]))
+  }
 
   async function loadDir(path) {
     try {
       setMessage('')
-      const data = await api('POST', '/api/browse', { path: path || '' })
+      const data = await api('POST', '/api/browse', { path: path || '', include_files: kind === 'file' })
       setCurrentPath(data.current)
       setEntries(data.entries || [])
       setParent(data.parent || null)
@@ -40,9 +51,11 @@ export default function DirectoryPicker() {
     setCreating(true)
     setMessage('')
     try {
+      if (onSelect && multiple) {add(path);return}
+      if (onSelect) {onSelect(path);close();return}
       const name = path.split(/[\\/]/).filter(Boolean).pop() || path
       await tree.createProject(name, path)
-      dispatch({ type: 'CLOSE_DIR_PICKER' })
+      close()
     } catch (err) {
       console.error('Failed to create project:', err)
       setMessage(err.status === 403
@@ -80,7 +93,7 @@ export default function DirectoryPicker() {
   }
 
   function handleOverlayClick(e) {
-    if (e.target === e.currentTarget) dispatch({ type: 'CLOSE_DIR_PICKER' })
+    if (e.target === e.currentTarget) close()
   }
 
   return (
@@ -90,7 +103,7 @@ export default function DirectoryPicker() {
     >
       <div className="solid-surface border border-line rounded-lg w-[480px] max-h-[70vh] flex flex-col">
         <div className="px-5 pt-5 pb-3 border-b border-line">
-          <h3 className="text-[15px] font-semibold text-text-bright mb-3">Select Project Directory</h3>
+          <h3 className="text-[15px] font-semibold text-text-bright mb-3">{onSelect ? (multiple ? (pickFiles ? 'Add files' : 'Add folders') : (pickFiles ? 'Select file' : 'Select directory')) : 'Select Project Directory'}</h3>
           <form onSubmit={handleDirectPathSubmit} className="flex gap-2">
             <input
               type="text"
@@ -155,35 +168,44 @@ export default function DirectoryPicker() {
               ↑ ..
             </button>
           )}
-          {entries.map(entry => (
-            <button
-              key={entry.path}
-              onClick={() => loadDir(entry.path)}
-              className="w-full text-left px-3 py-1.5 text-[13px] text-text-default hover:bg-surface rounded transition-colors truncate"
-            >
-              📂 {entry.name}
-            </button>
-          ))}
+          {entries.map(entry => {
+            const isFile = entry.is_dir === false
+            const addable = multiple && (pickFiles ? isFile : !isFile)
+            return (
+              <div key={entry.path} className="group flex items-center rounded hover:bg-surface">
+                <button
+                  onClick={() => isFile ? (multiple ? add(entry.path) : setDirectPath(entry.path)) : loadDir(entry.path)}
+                  className="min-w-0 flex-1 truncate px-3 py-1.5 text-left text-[13px] text-text-default"
+                >
+                  {isFile ? '📄' : '📂'} {entry.name}
+                </button>
+                {addable && (added.has(entry.path)
+                  ? <span className="shrink-0 px-3 text-[12px] text-ok">Added</span>
+                  : <button type="button" onClick={() => add(entry.path)} className="shrink-0 px-3 text-[12px] text-accent opacity-70 hover:opacity-100 group-hover:opacity-100">Add</button>)}
+              </div>
+            )
+          })}
           {entries.length === 0 && !parent && (
             <p className="text-[13px] text-faint italic text-center py-4">Empty directory</p>
           )}
         </div>
 
-        <div className="flex justify-end gap-2 px-5 py-3 border-t border-line">
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-line">
+          {multiple && <span className="mr-auto text-[12px] text-faint">{added.size ? `${added.size} selected` : 'Nothing selected yet'}</span>}
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); dispatch({ type: 'CLOSE_DIR_PICKER' }) }}
+            onClick={(e) => { e.stopPropagation(); close() }}
             className="px-4 py-1.5 text-[13px] text-muted border border-line rounded hover:bg-surface transition-colors"
           >
-            Cancel
+            {multiple ? 'Done' : 'Cancel'}
           </button>
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); handleSelect() }}
-            disabled={creating || !(directPath.trim() || currentPath)}
+            disabled={creating || !(directPath.trim() || currentPath) || (multiple && added.has(directPath.trim() || currentPath))}
             className="px-4 py-1.5 text-[13px] font-medium text-accent border border-accent/30 rounded hover:bg-accent-soft transition-colors disabled:opacity-40"
           >
-            {creating ? 'Creating...' : 'Select this directory'}
+            {creating ? 'Creating...' : multiple ? (pickFiles ? 'Add this path' : 'Add this directory') : (pickFiles ? 'Select file path' : 'Select this directory')}
           </button>
         </div>
       </div>

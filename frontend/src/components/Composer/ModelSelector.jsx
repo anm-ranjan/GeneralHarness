@@ -107,8 +107,11 @@ export default function ModelSelector() {
     updateSettings(model.id, effort)
   }
 
+  // Routine-agent runs are native-only; only their model can change.
+  const providerLocked = state.currentMeta?.kind === 'agent_run'
+
   function switchProvider(item) {
-    if (item.id === provider || state.isRunning) return
+    if (item.id === provider || state.isRunning || providerLocked) return
     setOpen(false)
     dispatch({ type: 'SET_SILENT_COMMAND', payload: true })
     dispatch({ type: 'SET_RUNNING' })
@@ -201,7 +204,7 @@ export default function ModelSelector() {
             </div>
           )}
 
-          <div className="model-section model-provider-section">
+          {!providerLocked && <div className="model-section model-provider-section">
             <div className="model-section-label">Provider</div>
             <div className="provider-rail">
               {PROVIDERS.filter(item => providerEnabled(state, item.id)).map(item => (
@@ -217,7 +220,7 @@ export default function ModelSelector() {
                 </button>
               ))}
             </div>
-          </div>
+          </div>}
 
           {error && <div className="model-error">{error}</div>}
         </div>

@@ -95,7 +95,8 @@ async def global_events(websocket: WebSocket):
             else:
                 state = meta.status
             if state != "idle":
-                sessions.append({"session_id": meta.id, "state": state})
+                sessions.append({"session_id": meta.id, "state": state,
+                                 "approval": web_app._manager.pending_approval_summary(meta.id)})
         await websocket.send_json({"type": "run_state_snapshot", "sessions": sessions})
         while True:
             await websocket.receive_text()

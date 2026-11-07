@@ -1400,20 +1400,62 @@ def build_system_message(
     kind: str = "project",
     session_identity: dict | None = None,
 ) -> dict:
-    if kind == "chat":
+    if kind == "agent_run":
+        content = _build_chat_system_content(workspace_root) + _agent_run_fragment(session_identity)
+    elif kind == "chat":
         content = _build_chat_system_content(workspace_root)
     elif utils.MANAGED_TOOLS:
         content = _build_managed_system_content(workspace_root)
     else:
         content = _build_native_system_content(workspace_root)
     content += FILE_ACCESS_FRAGMENT
-    if kind != "chat":
+    if kind not in {"chat", "agent_run"}:
         content += _project_instructions_fragment(workspace_root)
     if session_identity:
         import session_context
 
         content += session_context.prompt_fragment(session_identity)
     return {"role": "system", "content": content}
+
+
+def _agent_run_fragment(session_identity: dict | None) -> str:
+    """Instructions of the routine agent a run executes (agents/<name>/AGENT.md)."""
+    from agent_profiles import get_profile, prompt_fragment
+
+    profile = get_profile((session_identity or {}).get("_agent_name", ""))
+    if profile is None or profile.errors:
+        raise ValueError("Agent profile is missing or invalid")
+    content = prompt_fragment(profile)
+    if profile.uses_skills:
+        content += "\nAllowed skills (use skill_read before using them):\n" + "\n".join(
+            f"- {s.name}: {s.description}" for s in utils.skill_registry.list_skills()
+            if s.name in profile.uses_skills
+        )
+    if profile.entry:
+        content += (
+            "\nUse run_agent_script to do this agent's task. Do not reimplement its script with "
+            "other tools. Report outcomes only from tool results; never claim a job started unless "
+            "its item says ok. If parameters are ambiguous, ask_user when available, otherwise "
+            "state your assumption."
+        )
+    else:
+        content += "\nFollow this agent's instructions using its allowed tools."
+    return content + "\n"
+
+
+def _ui_attr(ui, name: str):
+    """A run attribute set on the UI adapter itself (never a proxied fallback)."""
+    return getattr(ui, "__dict__", {}).get(name) if ui is not None else None
+
+
+def _allowlisted_tools(tools: list, allowlist, profile, tool_policy: str) -> list:
+    """Narrow a routine-agent run's tools to its manifest's allowlist."""
+    offered = list(tools)
+    if profile is not None and profile.entry and tool_policy != "read_only":
+        from agent_profiles import script_tool
+
+        offered.append(script_tool(profile))
+    return [tool for tool in offered if tool.get("function", {}).get("name") in allowlist]
 
 
 def build_initial_messages(
@@ -1453,8 +1495,8 @@ def approval_required(tool_name: str, ui=None) -> bool:
     if mode in ("never", "auto_approve", "off", "false", "0"):
         return False
     if mode in ("shell_only", "ask_shell_only"):
-        return tool_name == "shell_run"
-    return tool_name in {"file_write", "file_replace", "apply_patch", "shell_run"}
+        return tool_name in {"shell_run", "run_agent_script"}
+    return tool_name in {"file_write", "file_replace", "apply_patch", "shell_run", "run_agent_script"}
 
 
 def request_approval(tool_name: str, arguments: dict, ui=None) -> bool:
@@ -1508,6 +1550,27 @@ def _ask_user(arguments: dict, ui) -> str:
     return f"The user answered: {answer}"
 
 
+def _run_agent_script(arguments: dict, ui) -> str:
+    """Run a routine agent's entry script after validation and approval."""
+    from agent_profiles import validate_params
+    from agent_runner import run_agent_script
+
+    context_for = getattr(ui, "agent_run_context", None) if ui is not None else None
+    context = context_for() if callable(context_for) else None
+    if not context:
+        return "ERROR: run_agent_script is only available in routine-agent runs."
+    profile = context.pop("profile")
+    values, errors = validate_params(profile, arguments.get("params", {}))
+    if errors:
+        return "ERROR: " + "; ".join(errors)
+    dry = arguments.get("dry_run", False)
+    if type(dry) is not bool:
+        return "ERROR: dry_run must be boolean"
+    if not request_approval("run_agent_script", {"agent": profile.name, "params": values, "dry_run": dry}, ui=ui):
+        return "ERROR: Tool call denied by user."
+    return utils.truncate_output(run_agent_script(profile, values, dry, **context))
+
+
 def execute_tool(
     name: str,
     arguments: dict,
@@ -1516,6 +1579,19 @@ def execute_tool(
     orchestrator=None,
     agent_path: str = "/root",
 ) -> str:
+    tool_allowlist = _ui_attr(ui, "tool_allowlist")
+    if tool_allowlist is not None and name not in tool_allowlist:
+        return f"ERROR: This agent is not allowed to use {name}."
+    profile = _ui_attr(ui, "agent_profile")
+    if profile is not None and name == "skill_list":
+        return "\n".join(
+            f"- {s.name}: {s.description}" for s in utils.skill_registry.list_skills()
+            if s.name in profile.uses_skills
+        )
+    if profile is not None and name == "skill_read" and arguments.get("name") not in profile.uses_skills:
+        return "ERROR: This agent is not allowed to read that skill."
+    if name == "run_agent_script":
+        return _run_agent_script(arguments, ui)
     err = utils._check_required_args(name, arguments)
     if err:
         return err
@@ -1924,6 +2000,9 @@ def run_agent(
 ):
     if max_iterations is None:
         max_iterations = int(_run_setting(ui, "max_iterations", utils.MAX_AGENT_ITERATIONS))
+    # Routine-agent runs restrict tools to their manifest (agents/<name>/AGENT.md).
+    tool_allowlist = _ui_attr(ui, "tool_allowlist")
+    agent_profile = _ui_attr(ui, "agent_profile")
     verbose_tools = bool(_run_setting(ui, "verbose_tools", utils.UI_VERBOSE_TOOLS))
     orchestration_marker = "MULTI-AGENT:"
     if orchestrator is not None and messages and messages[0].get("role") == "system":
@@ -2007,6 +2086,8 @@ def run_agent(
             active_tools = [tool for tool in active_tools if tool.get("function", {}).get("name") != "ask_user"]
         if orchestrator is not None:
             active_tools = active_tools + COLLABORATION_TOOLS
+        if tool_allowlist is not None and tools_enabled:
+            active_tools = _allowlisted_tools(active_tools, tool_allowlist, agent_profile, tool_policy)
         if api_caller is None:
             # Only the root thread's own context is worth a summary call; an
             # /aside works on a throwaway copy and subagents are short-lived.

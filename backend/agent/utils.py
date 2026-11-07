@@ -781,6 +781,11 @@ def _resolve_path(p: str) -> str:
     return os.path.normpath(os.path.abspath(p))
 
 
+# Runtime-managed roots (chat workspaces, materializations, agent runs): allowed
+# for tools, but not offered as top-level choices in the folder picker.
+RUNTIME_ALLOWED_PATHS: set[str] = set()
+
+
 def register_allowed_path(path: str) -> str:
     """Add a runtime-managed directory to the allowed paths.
 
@@ -792,6 +797,7 @@ def register_allowed_path(path: str) -> str:
     resolved = _resolve_path(path)
     if resolved not in ALLOWED_PATHS:
         ALLOWED_PATHS.append(resolved)
+    RUNTIME_ALLOWED_PATHS.add(resolved)
     return resolved
 
 

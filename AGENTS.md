@@ -246,6 +246,39 @@ if the user should be asked about it.
 - **File editing** is desktop-only: `PUT /api/workspace/file` requires the
   desktop header, re-checks allowed paths, and 409s when the file changed on
   disk. The browser UI keeps the read-only paged preview.
+- **Routine agents** (`AgentProfile`, `backend/agent_profiles.py`) are reusable
+  definitions in tracked `agents/<name>/AGENT.md` plus an optional Python entry
+  script, and in `data/agents/<name>/` for the user's own (`/create_agent`
+  installs there, so deployment syncs keep them; a user definition shadows a
+  bundled one of the same name). `MYHARNESS_AGENTS_DIR` and
+  `MYHARNESS_USER_AGENTS_DIR` override the two roots; `agents/_lib/` is shared
+  helper code (`myharness_agent.py`), not a definition. They are distinct from
+  native orchestration subagents (`spawn_agent`, `agent_event`,
+  `Stage/AgentsPanel.jsx`); do not reuse those identifiers. See
+  `agents/README.md` for the manifest, parameter and JSON-line protocol
+  contract. A run is a native-only session with `kind=agent_run` under the
+  reserved `__agents__` project (one task per agent name); `agent`,
+  `agent_version`, `agent_run_number`, `parent_session_id` and
+  `agent_last_result` are stored together in the `agent_run_json` column. Runs
+  get no project instructions or memory, cannot move or switch provider, and
+  work in the caller's folder, the manifest's `working_directory`, or
+  `data/agent_runs/<session_id>/` (deleted with the run). The reserved bucket
+  cannot be renamed or deleted, export/backup include runs and their folder,
+  and run backups cannot be imported. `backend/agent_runner.py` validates
+  parameters, builds argv without a shell, drains bounded output, and stops the
+  process tree (POSIX groups; Windows Job Object). The manifest's tool
+  allowlist is enforced both when tools are offered and when they run,
+  subagents included; `run_agent_script` follows shell approval rules. Readiness
+  checks (`agent_preflight.py`) are cached 30 s; starting a run re-checks.
+  `@name request` in any session starts an independent run, even while the
+  session is busy; the parent shows a display-only card (`agent_run_link`).
+  `/create_agent <intent>` drafts files in `data/agent_drafts/` for review;
+  nothing is installed automatically, and draft dry runs always ask approval.
+  Events `agent_run_progress`, `agent_run_item`, `agent_run_result`,
+  `agent_run_link` and `agent_draft` are persisted but never model history;
+  `session_updated` on the global stream carries `agent_last_result`. Frontend
+  folding is in `agentRunState.js`, display helpers in `agentUi.js`, components
+  in `components/Agents/`; the Agents sidebar view is the third view button.
 
 ## Config conventions
 
@@ -339,6 +372,13 @@ if the user should be asked about it.
 | POST | `/api/workspace/revert`, `/api/workspace/revert_run` | Revert from a manifest |
 | GET | `/api/workspace/git/status`, `/api/workspace/git/diff` | Read-only git |
 | POST | `/api/workspace/git/stage`, `/api/workspace/git/commit` | Git writes, opt-in |
+| GET | `/api/agents` | Routine-agent catalog with readiness |
+| GET | `/api/agents/{name}`, `/api/agents/{name}/preflight` | Definition and dependency checks |
+| POST | `/api/agents/{name}/options/{param}` | Script-listed choices (`options_from: script`) |
+| POST | `/api/agents/{name}/runs` | Start a native run (text and/or params; optional parent/cwd/dry_run) |
+| GET/PUT | `/api/agents/{name}/files/{path}` | Read/edit definition files; desktop-only save with base_hash |
+| GET/DELETE | `/api/agent-drafts/{id}` | Inspect or discard a /create_agent draft |
+| POST | `/api/agent-drafts/{id}/revise`, `/dry-run`, `/save` | Revise, test (always asks), install |
 
 ## Running
 

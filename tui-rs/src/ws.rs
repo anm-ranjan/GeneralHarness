@@ -79,3 +79,30 @@ async fn stream_session_inner(
     });
     Ok(())
 }
+
+pub async fn stream_global(url: Url, updates: UnboundedSender<serde_json::Value>) {
+    loop {
+        if let Ok((mut socket, _)) = connect_async(url.as_str()).await {
+            while let Some(Ok(message)) = socket.next().await {
+                match message {
+                    Message::Text(text) => {
+                        if let Ok(value) = serde_json::from_str(text.as_ref()) {
+                            if updates.send(value).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    Message::Ping(payload) => {
+                        let _ = socket.send(Message::Pong(payload)).await;
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+        }
+        if updates.is_closed() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    }
+}

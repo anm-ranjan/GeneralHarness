@@ -499,6 +499,22 @@ class RemoteCliApp:
             print(f"Approval {approved}.")
         elif event_type == "context_usage":
             print(f"Context: {data.get('usage_str', '')}")
+        elif event_type == "agent_draft":
+            print(f"Agent draft {data.get('name')}: {data.get('draft_id')} "
+                  f"({len(data.get('errors') or [])} validation errors). Review in the web UI.")
+        elif event_type == "agent_run_progress":
+            print(f"{data.get('label', '')}: {data.get('done')}/{data.get('total') or '?'}")
+        elif event_type == "agent_run_item":
+            print(f"[{data.get('status')}] {data.get('label') or data.get('key')}: {data.get('detail', '')}")
+        elif event_type == "agent_run_result":
+            print(f"{data.get('status')}: {data.get('summary', '')}")
+            table = data.get("table") or {}
+            if table.get("columns"):
+                print(" | ".join(map(str, table["columns"])))
+            for row in table.get("rows", []):
+                print(" | ".join(map(str, row)))
+        elif event_type == "agent_run_link":
+            print(f"Agent {data.get('agent')} · Run {data.get('run_number')}: {data.get('run_session_id')}")
         elif event_type == "compaction":
             print(f"Context compacted: {data.get('before')} -> {data.get('after')} tokens"
                   f"{compaction_detail(data.get('memory'))}")

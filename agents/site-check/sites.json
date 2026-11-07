@@ -1,0 +1,6 @@
+{
+  "groups": {
+    "local-backend": ["http://127.0.0.1:8420/api/health"],
+    "public": ["https://example.com", "https://www.python.org"]
+  }
+}

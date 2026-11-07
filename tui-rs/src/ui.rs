@@ -467,7 +467,11 @@ fn session_line<'a>(row: &'a SessionRow, active_id: Option<&str>) -> Line<'a> {
             format!("  {active} [{provider}] "),
             Style::default().fg(Color::Cyan),
         ),
-        Span::raw(title),
+        Span::raw(if row.meta.kind == "agent_run" {
+            format!("{} · Run {}", row.meta.agent, row.meta.agent_run_number)
+        } else {
+            title.to_owned()
+        }),
     ])
 }
 
@@ -827,6 +831,8 @@ fn command_help_lines() -> Vec<Line<'static>> {
         Line::styled("/skills [name]", command),
         Line::raw("List installed Harness skills or display one skill's complete instructions."),
         Line::default(),
+        Line::styled("/create_agent <intent>", command),
+        Line::raw("  Draft a reusable agent for review (native only)."),
         Line::styled("/remember [focus]", command),
         Line::raw("Save a project memory note written from this thread's findings (optionally only about the focus). Later threads in the project see it. Edit notes in the web Notes tab. Not in chats."),
         Line::default(),

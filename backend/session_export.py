@@ -72,6 +72,26 @@ def _render_tool_block(call: dict) -> str:
     return "\n".join(lines)
 
 
+def _agent_run_text(etype: str, data: dict) -> str:
+    """Markdown for routine-agent run items, results and parent links."""
+    if etype == "agent_run_item":
+        mark = "- [x] " if data.get("status") == "ok" else "- [ ] "
+        return mark + str(data.get("label") or data.get("key") or "") + ": " + str(data.get("detail") or "")
+    if etype == "agent_run_link":
+        return f"Agent {data.get('agent')} · Run {data.get('run_number')} ({data.get('run_session_id')})"
+    text = str(data.get("summary") or "")
+    table = data.get("table") or {}
+    if table.get("columns"):
+        def cell(value):
+            return str(value).replace("|", "\\|").replace("\n", " ")
+        text += "\n\n| " + " | ".join(map(cell, table["columns"])) + " |\n| " + " | ".join("---" for _ in table["columns"]) + " |"
+        for row in table.get("rows", []):
+            text += "\n| " + " | ".join(map(cell, row)) + " |"
+    if data.get("markdown"):
+        text += "\n\n" + str(data["markdown"])
+    return text
+
+
 def iter_turns(events: Iterable[Any]) -> list[dict]:
     """Group a flat event stream into completed turns.
 
@@ -150,6 +170,8 @@ def iter_turns(events: Iterable[Any]) -> list[dict]:
                 entry["ok"] = bool(data.get("ok", True))
         elif etype == "error":
             active["blocks"].append({"kind": "error", "text": str(data.get("text") or "")})
+        elif etype in {"agent_run_item", "agent_run_result", "agent_run_link"}:
+            active["blocks"].append({"kind": "agent", "text": _agent_run_text(etype, data)})
         elif etype == "agent_event":
             action = str(data.get("action") or data.get("status") or "update")
             if action not in AGENT_LIFECYCLE_ACTIONS:

@@ -10,7 +10,7 @@ export function projectPath(projectId, suffix = '') {
 
 // The current session's project, or null for chats / no session.
 export function currentProject(meta, projects) {
-  if (!meta || meta.kind === 'chat' || !meta.project_id || meta.project_id === CHATS_PROJECT_ID) return null
+  if (!meta || ['chat','agent_run'].includes(meta.kind) || !meta.project_id || meta.project_id === CHATS_PROJECT_ID) return null
   const project = (projects || []).find(p => p.id === meta.project_id)
   return { id: meta.project_id, name: project?.name || meta.project_id }
 }

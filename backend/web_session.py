@@ -78,6 +78,8 @@ class ActiveRun:
         self.cancel_event = threading.Event()
         # Cleared once the run can no longer apply mid-run steering.
         self.steering_open = True
+        # Display summaries of pending approvals, for cards in other sessions.
+        self.approval_summaries: dict[str, dict] = {}
         # Steering ids a provider is delivering right now; no longer editable.
         self.steering_in_flight: set[str] = set()
         self.thread: threading.Thread | None = None
@@ -239,13 +241,24 @@ class SessionManager:
                 self._loop,
             )
 
+    def pending_approval_summary(self, session_id: str) -> dict | None:
+        """The first pending approval of a run, for linked agent-run cards."""
+        run = self.get_active_run(session_id)
+        if run is None:
+            return None
+        return next(
+            (run.approval_summaries[key] for key in run.pending_approval_ids if key in run.approval_summaries),
+            None,
+        )
+
     def notify_run_state(self, session_id: str, state: str) -> None:
         """Broadcast a lightweight cross-session run-state change to the
         application-level event stream (sidebar badges, notifications)."""
         if self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(
                 self.connections.broadcast_global(
-                    {"type": "run_state", "session_id": session_id, "state": state}
+                    {"type": "run_state", "session_id": session_id, "state": state,
+                     "approval": self.pending_approval_summary(session_id)}
                 ),
                 self._loop,
             )
@@ -255,6 +268,16 @@ class SessionManager:
         if self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(
                 self.connections.broadcast_global(payload),
+                self._loop,
+            )
+
+    def notify_session_updated(self, session_id: str, changes: dict) -> None:
+        """Broadcast session metadata changes so sidebars update without a refetch."""
+        if self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self.connections.broadcast_global(
+                    {"type": "session_updated", "session_id": session_id, "changes": changes}
+                ),
                 self._loop,
             )
 

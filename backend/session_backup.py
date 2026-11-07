@@ -64,6 +64,15 @@ def export_session_backup(
             if stored is not None:
                 zf.writestr(f"attachments/{attachment['filename']}", stored[0])
 
+        if meta.kind == "agent_run":
+            # The run's private working folder (data/agent_runs/<sid>/).
+            sandbox = store._data_dir / "agent_runs" / session_id
+            if sandbox.is_dir():
+                root = sandbox.resolve()
+                for path in sorted(sandbox.rglob("*")):
+                    if path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(root):
+                        zf.writestr("agent_workspace/" + path.relative_to(sandbox).as_posix(), path.read_bytes())
+
         for manifest in store.load_change_manifests(session_id):
             run_id = manifest.get("run_id") or "run_unknown"
             zf.writestr(
@@ -118,6 +127,8 @@ def import_session_backup(
     old_id = old_meta.get("id")
     if not old_id:
         raise ValueError("Backup is missing the original session id")
+    if old_meta.get("kind") == "agent_run" or project_id == "__agents__":
+        raise ValueError("Agent runs cannot be imported")
 
     project_id = project_id or old_meta.get("project_id") or ""
     task_id = task_id or old_meta.get("task_id") or ""

@@ -31,6 +31,11 @@ class EventType(str, Enum):
     CODEX_ITEM = "codex_item"
     AGENT_EVENT = "agent_event"
     MEMORY_SAVED = "memory_saved"
+    AGENT_RUN_PROGRESS = "agent_run_progress"
+    AGENT_RUN_ITEM = "agent_run_item"
+    AGENT_RUN_RESULT = "agent_run_result"
+    AGENT_RUN_LINK = "agent_run_link"
+    AGENT_DRAFT = "agent_draft"
     PROVIDER_WARNING = "provider_warning"
     PROVIDER_SWITCH = "provider_switch"
     FILE_CHANGE = "file_change"
@@ -75,6 +80,15 @@ class SessionMeta(BaseModel):
     status: str = "idle"
     provider: str = "native"
     kind: str = "project"
+    # Routine-agent runs (kind == "agent_run"): definition name/version, the
+    # run number within that agent, and the session that started it, if any.
+    agent: str = ""
+    agent_version: int = 0
+    agent_run_number: int = 0
+    parent_session_id: str = ""
+    # Latest script outcome of an agent run: status, summary, items_ok,
+    # items_failed, items_total. Display-only; never model input.
+    agent_last_result: dict = Field(default_factory=dict)
     working_directory: str = ""
     codex_state: dict = Field(default_factory=dict)
     claude_state: dict = Field(default_factory=dict)
@@ -218,6 +232,7 @@ class DeleteSessionRequest(BaseModel):
 
 class BrowseDirectoryRequest(BaseModel):
     path: str = ""
+    include_files: bool = False
 
 
 class CreateDirectoryRequest(BaseModel):

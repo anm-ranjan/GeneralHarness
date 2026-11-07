@@ -53,6 +53,15 @@
         "to": "skills"
       },
       {
+        "from": "../agents",
+        "to": "agents",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
         "from": "../requirements.txt",
         "to": "requirements.txt"
       },

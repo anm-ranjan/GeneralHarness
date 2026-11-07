@@ -106,6 +106,18 @@ def _provider_label(provider: str) -> str:
 
 
 def _message_block_detail(meta, text: str, workspace_root: str, image_count: int = 0) -> str | None:
+    if getattr(meta, "kind", "project") == "agent_run":
+        from agent_preflight import preflight
+        from agent_profiles import get_profile
+
+        profile = get_profile(meta.agent)
+        if profile is None or profile.errors:
+            return "Agent profile is missing or invalid; repair it before starting a turn."
+        if meta.provider != "native":
+            return "Agent runs use the native provider only."
+        failures = [check["message"] for check in preflight(profile) if not check["ok"]]
+        if failures:
+            return "; ".join(failures)
     if meta.provider == "codex-cli":
         return "This session uses the legacy Codex CLI provider. Confirm migration in the UI or run /model codex before sending messages."
     if meta.provider == "codex-app-server" and not web_app._codex_app_server_available():
@@ -378,12 +390,21 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
         def worker():
             web_ui = WebUI(session_id, web_app._manager, run, web_app._store, run_settings=run_settings)
             web_ui.display_text = display_text
+            if getattr(meta, "kind", "project") == "agent_run":
+                from agent_profiles import get_profile
+
+                web_ui.agent_profile = get_profile(meta.agent)
+                web_ui.tool_allowlist = frozenset(web_ui.agent_profile.tools) if web_ui.agent_profile else frozenset()
             run_started = time.monotonic()
             run_failed = False
             orchestrator = None
             try:
                 user_content = web_helpers._native_user_content(text, saved_attachments)
-                if utils.MULTI_AGENT_ENABLED:
+                allow_children = (
+                    getattr(meta, "kind", "project") != "agent_run"
+                    or "spawn_agent" in getattr(web_ui, "tool_allowlist", frozenset())
+                )
+                if utils.MULTI_AGENT_ENABLED and allow_children:
                     def run_child(node):
                         child_ui = SubagentUI(web_ui, node.path)
                         if node.messages:
@@ -543,8 +564,8 @@ async def _handle_remember_command(session_id: str, focus: str) -> None:
     if meta is None:
         _emit_session_event(session_id, EventType.ERROR, {"text": "Session not found."})
         return
-    if getattr(meta, "kind", "project") == "chat" or not project_knowledge.has_project(meta.project_id):
-        _emit_session_event(session_id, EventType.ERROR, {"text": "Project memory is not available in chats."})
+    if getattr(meta, "kind", "project") in {"chat", "agent_run"} or not project_knowledge.has_project(meta.project_id):
+        _emit_session_event(session_id, EventType.ERROR, {"text": "This session has no project memory."})
         return
     transcript = await asyncio.to_thread(project_knowledge.session_transcript, store, session_id)
     if not transcript.strip():
@@ -571,6 +592,24 @@ async def _handle_remember_command(session_id: str, focus: str) -> None:
         "memory": entry,
         "focus": focus,
     })
+
+
+async def _handle_create_agent_command(session_id: str, intent: str) -> None:
+    """/create_agent <intent>: draft a routine agent for review (never installed here)."""
+    meta = web_app._store.load_session(session_id)
+    if meta is None or meta.provider != "native" or not intent:
+        _emit_session_event(session_id, EventType.ERROR, {
+            "text": "Usage: /create_agent <intent> in an idle native session."})
+        return
+    import agent_drafts
+
+    _emit_session_event(session_id, EventType.STATUS, {"text": "Drafting agent files for review…"})
+    try:
+        draft = await asyncio.to_thread(agent_drafts.generate_draft, intent, session_id)
+    except Exception as exc:
+        _emit_session_event(session_id, EventType.ERROR, {"text": f"Agent draft failed: {exc}"})
+        return
+    _emit_session_event(session_id, EventType.AGENT_DRAFT, draft)
 
 
 async def _handle_slash_command(session_id: str, text: str, workspace_root: str) -> bool:
@@ -609,6 +648,11 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
         if kind == "status":
             _emit_session_event(session_id, EventType.CONTEXT_USAGE, {
                 "usage_str": agent.format_context_usage(web_app._session_messages[session_id])})
+        _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
+        return True
+
+    if lowered == "/create_agent" or (lowered.startswith("/create_agent") and lowered[13:14].isspace()):
+        await _handle_create_agent_command(session_id, command[len("/create_agent"):].strip())
         _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
         return True
 
@@ -753,6 +797,11 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
                     EventType.STATUS,
                     {"text": f"Thinking for this session set to: {level}"},
                 )
+        _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
+        return True
+
+    if lowered.startswith("/model") and getattr(web_app._store.load_session(session_id), "kind", "") == "agent_run":
+        _emit_session_event(session_id, EventType.ERROR, {"text": "Agent runs use the native provider only."})
         _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
         return True
 

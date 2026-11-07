@@ -13,6 +13,11 @@ export default function useSelectSession() {
     // The session WebSocket replays the transcript, so skip it here.
     const data = await api('GET', `/api/sessions/${encodeURIComponent(sessionId)}?events=0`)
     const meta = data.meta
+    if (stateRef.current.currentSessionId === sessionId && stateRef.current.agentHome) {
+      dispatch({type:'CLOSE_AGENT_HOME'})
+      dispatch({type:'UPDATE_SESSION_META',payload:meta})
+      return meta
+    }
     const project = stateRef.current.projects.find(p => p.id === meta.project_id)
     dispatch({ type: 'SELECT_SESSION', payload: { meta, workspaceRoot: effectiveWorkspaceRoot(meta, project?.root || '') } })
     return meta

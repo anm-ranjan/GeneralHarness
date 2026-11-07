@@ -17,7 +17,7 @@ import session_search
 import turn_delete
 import utils
 from pydantic import BaseModel as _PydanticBaseModel
-from session_store import CHATS_PROJECT_ID, CHATS_TASK_ID
+from session_store import AGENTS_PROJECT_ID, CHATS_PROJECT_ID, CHATS_TASK_ID
 from web_models import (
     CreateChatRequest,
     CreateProjectRequest,
@@ -105,6 +105,8 @@ def create_project(req: CreateProjectRequest):
 
 @router.post("/api/tasks")
 def create_task(req: CreateTaskRequest):
+    if req.project_id == AGENTS_PROJECT_ID:
+        raise HTTPException(status_code=400, detail="Agent tasks are reserved")
     try:
         task = web_app._store.ensure_task(req.project_id, task_id="", name=req.name)
     except ValueError as e:
@@ -114,6 +116,8 @@ def create_task(req: CreateTaskRequest):
 
 @router.post("/api/sessions")
 async def create_session(req: CreateSessionRequest):
+    if req.project_id == AGENTS_PROJECT_ID:
+        raise HTTPException(status_code=400, detail="Start runs from the Agents view")
     if req.provider not in {"native", "codex-app-server", "claude-agent"}:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {req.provider}")
     if req.provider == "native" and not web_app._native_available():
@@ -153,8 +157,8 @@ async def create_chat(req: CreateChatRequest):
 
 @router.patch("/api/projects/{project_id}")
 def rename_project(project_id: str, req: RenameProjectRequest):
-    if project_id == CHATS_PROJECT_ID:
-        raise HTTPException(status_code=400, detail="The Chats collection cannot be renamed")
+    if project_id in {CHATS_PROJECT_ID, AGENTS_PROJECT_ID}:
+        raise HTTPException(status_code=400, detail="This collection cannot be renamed")
     try:
         proj = web_app._store.rename_project(project_id, req.name)
     except ValueError as e:
@@ -192,8 +196,8 @@ def rename_task(project_id: str, task_id: str, req: RenameTaskRequest):
 
 @router.delete("/api/projects/{project_id}")
 def delete_project(project_id: str):
-    if project_id == CHATS_PROJECT_ID:
-        raise HTTPException(status_code=400, detail="The Chats collection cannot be deleted")
+    if project_id in {CHATS_PROJECT_ID, AGENTS_PROJECT_ID}:
+        raise HTTPException(status_code=400, detail="This collection cannot be deleted")
     active = _active_session_ids(_session_ids_for_project(project_id))
     if active:
         raise HTTPException(status_code=409, detail=f"Cannot delete project with active run(s): {', '.join(active)}")
@@ -303,8 +307,8 @@ def move_session(session_id: str, req: MoveSessionRequest):
         meta = web_app._store.load_session(session_id)
         if meta is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        if meta.kind == "chat" or req.project_id == CHATS_PROJECT_ID:
-            raise HTTPException(status_code=400, detail="Chats keep their private workspace")
+        if meta.kind in {"chat", "agent_run"} or req.project_id in {CHATS_PROJECT_ID, AGENTS_PROJECT_ID}:
+            raise HTTPException(status_code=400, detail="Chats and agent runs keep their private workspace")
         target = web_app._store.get_project(req.project_id)
         if target is None:
             raise HTTPException(status_code=404, detail="Target project not found")

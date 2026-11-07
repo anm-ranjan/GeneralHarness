@@ -47,6 +47,19 @@ async fn main() -> Result<()> {
     let mut generation = 0_u64;
     let mut stream_task = connect_selected(&client, &mut app, &updates_tx, &mut generation)?;
     spawn_tree_poller(client.clone(), actions_tx.clone());
+    let (global_tx, mut global_rx) = mpsc::unbounded_channel();
+    let global_task = tokio::spawn(ws::stream_global(client.global_ws_url()?, global_tx));
+    let global_actions = actions_tx.clone();
+    let global_forward = tokio::spawn(async move {
+        while let Some(value) = global_rx.recv().await {
+            if global_actions
+                .send(ActionUpdate::GlobalState { value })
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
 
     let run_result = run_ui(
         terminal.terminal_mut(),
@@ -64,10 +77,20 @@ async fn main() -> Result<()> {
     if let Some(task) = stream_task {
         task.abort();
     }
+    global_task.abort();
+    global_forward.abort();
     run_result
 }
 
 enum ActionUpdate {
+    GlobalState {
+        value: serde_json::Value,
+    },
+    AgentStarted {
+        request_id: u64,
+        session_id: String,
+        tree: api::SessionTree,
+    },
     Created {
         request_id: u64,
         selected: NavKey,
@@ -243,6 +266,16 @@ async fn run_ui(
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
             request_older_events(app, client.clone(), actions_tx.clone(), *generation);
+            continue;
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
+            if let Some(id) = app.last_agent_run.clone() {
+                app.replace_tree(app.tree.clone(), Some(NavKey::Session(id)));
+                replace_stream(
+                    stream_task,
+                    connect_selected(client, app, updates_tx, generation)?,
+                );
+            }
             continue;
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('f') {
@@ -796,6 +829,32 @@ fn submit_inline_composer(
     app.composer.state.request_id = request_id;
     app.composer.state.error = None;
     tokio::spawn(async move {
+        if let Some(rest) = text.trim().strip_prefix('@') {
+            let name = rest.split_whitespace().next().unwrap_or("");
+            if let Ok(profiles) = client.list_agents().await {
+                if profiles
+                    .iter()
+                    .any(|p| p.get("name").and_then(serde_json::Value::as_str) == Some(name))
+                {
+                    if !images.is_empty() {
+                        let _ = actions.send(ActionUpdate::Failed {
+                            request_id,
+                            detail: "Agent calls accept text only.".to_owned(),
+                        });
+                        return;
+                    }
+                    let prompt = rest[name.len()..].trim();
+                    match client.start_agent_run(name, &serde_json::json!({"text": if prompt.is_empty() {"Run this agent."} else {prompt}, "parent_session_id":session_id})).await {
+                        Ok(run) => match client.sessions().await {
+                            Ok(tree) => {let _=actions.send(ActionUpdate::AgentStarted{request_id,session_id:run.id,tree});},
+                            Err(error) => {let _=actions.send(ActionUpdate::Failed{request_id,detail:error.to_string()});},
+                        },
+                        Err(error) => {let _=actions.send(ActionUpdate::Failed{request_id,detail:error.to_string()});},
+                    }
+                    return;
+                }
+            }
+        }
         match client.send_message(&session_id, &text, &images).await {
             Ok(response) => {
                 let _ = actions.send(ActionUpdate::MessageSent {
@@ -1284,6 +1343,40 @@ fn apply_action(
             if let Some(question) = app.pending_question.as_mut() {
                 question.answer.state.submitting = false;
                 question.answer.state.error = Some(detail);
+            }
+        }
+        ActionUpdate::GlobalState { value } => {
+            let states = if value.get("type").and_then(serde_json::Value::as_str)
+                == Some("run_state_snapshot")
+            {
+                value
+                    .get("sessions")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                vec![value]
+            };
+            for state in states {
+                if let (Some(id), Some(status)) = (
+                    state.get("session_id").and_then(serde_json::Value::as_str),
+                    state.get("state").and_then(serde_json::Value::as_str),
+                ) {
+                    app.update_agent_link(id, status);
+                }
+            }
+        }
+        ActionUpdate::AgentStarted {
+            request_id,
+            session_id,
+            tree,
+        } => {
+            if app.composer.state.request_id == request_id {
+                app.composer.state.submitting = false;
+                app.composer.clear_text();
+                app.last_agent_run = Some(session_id.clone());
+                app.replace_tree(tree, None);
+                app.notice = Some(format!("Agent run started: {session_id}. Ctrl+G opens it."));
             }
         }
         ActionUpdate::MessageSent {

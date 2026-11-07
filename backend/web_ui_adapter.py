@@ -110,6 +110,33 @@ class WebUI:
     def session_id(self) -> str:
         return self._sid
 
+    def agent_run_context(self) -> dict | None:
+        """Arguments for agent_runner.run_agent_script in a routine-agent run."""
+        meta = self._store.load_session(self._sid)
+        if meta is None or meta.kind != "agent_run" or getattr(self, "agent_profile", None) is None:
+            return None
+        import web_app
+        import web_helpers
+
+        calls = self._active_tool_calls.get("run_agent_script") or []
+        return dict(
+            profile=self.agent_profile,
+            cwd=web_helpers._workspace_root_for_session(meta),
+            run_id=self._sid,
+            cancel_event=self._run.cancel_event,
+            emit=self._emit_agent_run_event,
+            tool_call_id=calls[-1][0] if calls else None,
+            scratch_dir=web_app._agent_workspace_dir(self._sid),
+        )
+
+    def _emit_agent_run_event(self, event_type: str, data: dict) -> None:
+        self._emit(EventType(event_type), data)
+        if event_type == EventType.AGENT_RUN_RESULT.value:
+            keys = ("status", "summary", "items_ok", "items_failed", "items_total")
+            meta = self._store.set_agent_last_result(self._sid, {k: data.get(k) for k in keys})
+            if meta is not None:
+                self._manager.notify_session_updated(self._sid, {"agent_last_result": meta.agent_last_result})
+
     def _emit(self, event_type: EventType, data: dict) -> None:
         event = EventEnvelope(session_id=self._sid, type=event_type, data=data)
         self._store.append_event(event)
@@ -319,8 +346,14 @@ class WebUI:
                 "source_agent": source_agent,
             },
         )
+        self._run.approval_summaries[approval_id] = {
+            "approval_id": approval_id, "tool": tool_name, "args_preview": args_json[:240],
+        }
         self._manager.notify_run_state(self._sid, "waiting_approval")
-        approved = self._run.request_approval(approval_id)
+        try:
+            approved = self._run.request_approval(approval_id)
+        finally:
+            self._run.approval_summaries.pop(approval_id, None)
         self._manager.notify_run_state(self._sid, "running")
         self._emit(
             EventType.APPROVAL_RESOLVED,
@@ -534,7 +567,16 @@ class SubagentUI:
         self._sid = parent._sid
         self.agent_path = agent_path
         self.run_settings = parent.run_settings
+        # A routine-agent run's restrictions apply to its subagents too.
+        self.tool_allowlist = getattr(parent, "tool_allowlist", None)
+        self.agent_profile = getattr(parent, "agent_profile", None)
         self.result = ""
+
+    def agent_run_context(self) -> dict | None:
+        context = self.parent.agent_run_context()
+        if context:
+            context["tool_call_id"] = "script_" + uuid.uuid4().hex[:12]
+        return context
 
     def show_user_message(self, text: str, images=None) -> None:
         pass

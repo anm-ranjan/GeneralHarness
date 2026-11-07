@@ -19,6 +19,9 @@ from web_models import EventEnvelope, ProjectInfo, QueuedMessage, SessionMeta, T
 # API keeps the historical project/task/session names while the UI presents
 # projects, labels, and threads.
 CHATS_PROJECT_ID = "__chats__"
+# Reserved bucket for routine-agent runs; one task (label) per agent name.
+AGENTS_PROJECT_ID = "__agents__"
+AGENTS_PROJECT_NAME = "Agents"
 CHATS_TASK_ID = "__chats__"
 CHATS_PROJECT_NAME = "Chats"
 
@@ -131,6 +134,23 @@ def _is_placeholder_label(label_id: str, name: str) -> bool:
 def _label_color(label_id: str) -> str:
     digest = hashlib.sha256(label_id.encode("utf-8")).digest()
     return LABEL_COLORS[digest[0] % len(LABEL_COLORS)]
+
+
+_AGENT_RUN_KEYS = ("agent", "agent_version", "agent_run_number", "parent_session_id", "agent_last_result")
+
+
+def _agent_run_json(meta: SessionMeta) -> str:
+    """Routine-agent run fields, stored together; empty for other sessions."""
+    if meta.kind != "agent_run":
+        return "{}"
+    return _json({key: getattr(meta, key) for key in _AGENT_RUN_KEYS})
+
+
+def _agent_run_fields(raw) -> dict:
+    value = _from_json(raw, {})
+    if not isinstance(value, dict):
+        return {}
+    return {key: value[key] for key in _AGENT_RUN_KEYS if key in value}
 
 
 class SessionStore:
@@ -433,6 +453,8 @@ class SessionStore:
         session_columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
         if "archived" not in session_columns:
             conn.execute("ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+        if "agent_run_json" not in session_columns:
+            conn.execute("ALTER TABLE sessions ADD COLUMN agent_run_json TEXT NOT NULL DEFAULT '{}'")
         # Web-only formatted rendering of a pending prompt (never model input).
         for table in ("queued_messages", "session_prompt_lists"):
             columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
@@ -736,6 +758,33 @@ class SessionStore:
         self.ensure_task(project.id, CHATS_TASK_ID, CHATS_PROJECT_NAME)
         return self.get_project(CHATS_PROJECT_ID)
 
+    def ensure_agents_bucket(self, agent_name: str) -> ProjectInfo:
+        """Reserved Agents collection with one task per routine agent."""
+        project = self.ensure_project(AGENTS_PROJECT_ID, AGENTS_PROJECT_NAME, "")
+        self.ensure_task(project.id, agent_name, agent_name)
+        return self.get_project(AGENTS_PROJECT_ID)
+
+    def next_agent_run_number(self, agent_name: str) -> int:
+        numbers = [
+            meta.agent_run_number for meta in self.list_sessions(AGENTS_PROJECT_ID, agent_name)
+            if meta.kind == "agent_run" and meta.agent == agent_name
+        ]
+        return max(numbers, default=0) + 1
+
+    def set_agent_last_result(self, session_id: str, result: dict) -> SessionMeta | None:
+        """Record a routine-agent run's latest script outcome for the sidebar."""
+        with self._lock, self._conn:
+            meta = self.load_session(session_id)
+            if meta is None or meta.kind != "agent_run":
+                return None
+            meta.agent_last_result = dict(result)
+            # Quiet write: neither updated_at nor the sidebar order changes.
+            self._conn.execute(
+                "UPDATE sessions SET agent_run_json=?,version=version+1 WHERE id=?",
+                (_agent_run_json(meta), session_id),
+            )
+            return meta
+
     def ensure_task(self, project_id: str, task_id: str, name: str) -> TaskInfo:
         explicit = bool(task_id)
         task_id = task_id or name.lower().replace(" ", "_").replace("-", "_")
@@ -773,6 +822,8 @@ class SessionStore:
         return TaskInfo(id=row["id"], name=row["name"], color=row["color"], sessions=sessions)
 
     def rename_project(self, project_id: str, new_name: str) -> ProjectInfo:
+        if project_id == AGENTS_PROJECT_ID:
+            raise ValueError("The Agents collection is reserved")
         with self._lock, self._conn:
             cur = self._conn.execute("UPDATE projects SET name=? WHERE id=?", (new_name, project_id))
             if cur.rowcount == 0:
@@ -780,6 +831,8 @@ class SessionStore:
         return self.get_project(project_id)
 
     def rename_task(self, project_id: str, task_id: str, new_name: str) -> TaskInfo:
+        if project_id == AGENTS_PROJECT_ID:
+            raise ValueError("Agent tasks are reserved")
         with self._lock, self._conn:
             cur = self._conn.execute(
                 "UPDATE tasks SET name=? WHERE project_id=? AND id=?", (new_name, project_id, task_id)
@@ -803,6 +856,8 @@ class SessionStore:
         return self._task_info(project_id, task_id)
 
     def delete_project(self, project_id: str) -> list[str]:
+        if project_id == AGENTS_PROJECT_ID:
+            raise ValueError("The Agents collection is reserved")
         with self._lock, self._conn:
             sessions = [r[0] for r in self._conn.execute(
                 "SELECT id FROM sessions WHERE project_id=?", (project_id,)
@@ -826,6 +881,8 @@ class SessionStore:
         return sessions
 
     def delete_task(self, project_id: str, task_id: str) -> list[str]:
+        if project_id == AGENTS_PROJECT_ID:
+            raise ValueError("Agent tasks are reserved")
         with self._lock, self._conn:
             if self._conn.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone() is None:
                 raise ValueError(f"Project {project_id} not found")
@@ -894,7 +951,14 @@ class SessionStore:
             self._cleanup_session_files(session_id, project_root)
 
     def _cleanup_session_files(self, session_id: str, project_root: str = "") -> None:
+        try:
+            from agent_runner import stop_session_scripts
+
+            stop_session_scripts(session_id)
+        except ImportError:
+            pass
         for path in (
+            self._data_dir / "agent_runs" / session_id,
             self._workspaces_dir / session_id,
             self._materializations_dir / session_id,
             self._data_dir / "chats" / session_id,
@@ -1025,7 +1089,7 @@ class SessionStore:
             meta = self.load_session(session_id)
             if meta is None:
                 raise ValueError(f"Session {session_id} not found")
-            if meta.kind == "chat" or target_project_id == CHATS_PROJECT_ID:
+            if meta.kind in {"chat", "agent_run"} or target_project_id in {CHATS_PROJECT_ID, AGENTS_PROJECT_ID}:
                 raise ValueError("Chats keep their private workspace and cannot be moved into projects")
             cross_project = target_project_id != meta.project_id
             if not cross_project and target_task_id == meta.task_id:
@@ -1101,13 +1165,15 @@ class SessionStore:
         conn.execute(
             """INSERT INTO sessions(
                 id,project_id,task_id,position,title,summary,created_at,updated_at,message_count,
-                status,provider,kind,working_directory,codex_state_json,claude_state_json,run_settings_json
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                status,provider,kind,working_directory,codex_state_json,claude_state_json,run_settings_json,
+                agent_run_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 meta.id, meta.project_id, meta.task_id, position, meta.title, meta.summary,
                 meta.created_at.isoformat(), meta.updated_at.isoformat(), meta.message_count,
                 meta.status, meta.provider, meta.kind, meta.working_directory,
                 _json(meta.codex_state), _json(meta.claude_state), _json(meta.run_settings),
+                _agent_run_json(meta),
             ),
         )
         conn.execute("DELETE FROM queued_messages WHERE session_id=?", (meta.id,))
@@ -1184,6 +1250,7 @@ class SessionStore:
             message_queue=queue, run_settings=_from_json(row["run_settings_json"], {}),
             prompt_stash=prompt_lists["stash"], steering_queue=prompt_lists["steering"],
             archived=bool(row["archived"]), labels=labels,
+            **_agent_run_fields(row["agent_run_json"]),
         )
 
     def set_session_order(self, project_id: str, session_ids: list[str]) -> ProjectInfo:
@@ -1214,12 +1281,13 @@ class SessionStore:
                 """UPDATE sessions SET
                     project_id=?,task_id=?,title=?,summary=?,updated_at=?,message_count=?,status=?,
                     provider=?,kind=?,working_directory=?,codex_state_json=?,claude_state_json=?,
-                    run_settings_json=?,version=version+1
+                    run_settings_json=?,agent_run_json=?,version=version+1
                    WHERE id=?""",
                 (
                     meta.project_id, meta.task_id, meta.title, meta.summary, meta.updated_at.isoformat(),
                     meta.message_count, meta.status, meta.provider, meta.kind, meta.working_directory,
-                    _json(meta.codex_state), _json(meta.claude_state), _json(meta.run_settings), meta.id,
+                    _json(meta.codex_state), _json(meta.claude_state), _json(meta.run_settings),
+                    _agent_run_json(meta), meta.id,
                 ),
             )
             if cur.rowcount == 0:
@@ -1324,7 +1392,7 @@ class SessionStore:
                 known_ids.add(label_id)
             if label_id not in label_ids:
                 label_ids.append(label_id)
-        if meta.project_id == CHATS_PROJECT_ID:
+        if meta.project_id in {CHATS_PROJECT_ID, AGENTS_PROJECT_ID}:
             primary = meta.task_id
         else:
             primary = label_ids[0] if label_ids else self.default_task_id(meta.project_id)

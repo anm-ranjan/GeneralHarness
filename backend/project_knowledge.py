@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from session_store import CHATS_PROJECT_ID
+from session_store import AGENTS_PROJECT_ID, CHATS_PROJECT_ID
 
 MAX_INSTRUCTIONS_CHARS = 16_000
 MAX_MEMORY_ENTRIES = 200
@@ -47,7 +47,7 @@ def _now_iso() -> str:
 
 
 def has_project(project_id: str | None) -> bool:
-    return bool(project_id) and project_id != CHATS_PROJECT_ID
+    return bool(project_id) and project_id not in {CHATS_PROJECT_ID, AGENTS_PROJECT_ID}
 
 
 # ── instructions ──────────────────────────────────────────────────────────

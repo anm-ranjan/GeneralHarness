@@ -34,6 +34,7 @@ export default function ActivityLog() {
   }
 
   for (const item of stageItems) {
+    if (item.type === 'agent_run_link') entries.push({key:item.run_session_id,time:null,icon:'↗',color:'text-accent',text:`${item.agent} · Run ${item.run_number} · ${state.runStates[item.run_session_id] || state.sessionsById[item.run_session_id]?.status || 'idle'}`,badge:'agent'})
     if (item.type === 'work_group') {
       for (const tool of (item.tools || [])) {
         if (tool.name === 'shell_run' && tool.detail) {

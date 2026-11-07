@@ -1,11 +1,14 @@
 // Pure state layer for the app store. Kept free of JSX so it can be unit
 // tested directly with `node --test`.
+import { foldAgentRun, mergeRoutineStageItems } from '../agentRunState.js'
 import { effectiveWorkspaceRoot } from '../sessionWorkspace.js'
 import { applyRunState, snapshotRunStates, trackUnseenFinished, withoutSession } from '../runStates.js'
 import { sidebarPrefs } from '../sidebarState.js'
 import { embedsImage, linksToPath } from '../artifacts.js'
 
 export const initialState = {
+  agentProfiles: [],
+  agentHome: null,
   currentSessionId: null,
   currentMeta: null,
   currentProvider: 'native',
@@ -352,6 +355,19 @@ export function reducer(state, action) {
       }
     }
 
+    case 'SET_AGENT_PROFILES':
+      return {...state, agentProfiles: action.payload}
+    case 'OPEN_AGENT_HOME':
+      return {...state, agentHome: action.payload, sidebarView: 'agents'}
+    case 'CLOSE_AGENT_HOME':
+      return {...state, agentHome: null}
+    case 'UPSERT_AGENT_DRAFT': {
+      const existing = state.stageItems.find(i=>i.type==='agent_draft' && i.draft_id===action.payload.draft_id)
+      const item = {...action.payload,type:'agent_draft',_id:'draft_'+action.payload.draft_id}
+      return {...state,stageItems:existing ? state.stageItems.map(i=>i===existing ? {...existing,...item} : i) : [...state.stageItems,item]}
+    }
+    case 'FOLD_AGENT_RUN':
+      return {...state, stageItems: foldAgentRun(state.stageItems, action.payload.eventType, action.payload.data, {eventIndex:action.payload.eventIndex,historical:action.payload.historical})}
     case 'SELECT_SESSION': {
       const { meta, workspaceRoot } = action.payload
       return {
@@ -361,6 +377,8 @@ export function reducer(state, action) {
         sessionsById: state.sessionsById[meta.id]
           ? { ...state.sessionsById, [meta.id]: { ...state.sessionsById[meta.id], ...meta } }
           : state.sessionsById,
+        agentHome: null,
+        workspacePanelTab: meta.kind === 'agent_run' ? 'run' : (state.workspacePanelTab === 'run' ? 'changes' : state.workspacePanelTab),
         currentSessionId: meta.id,
         unseenFinished: withoutSession(state.unseenFinished, meta.id),
         currentMeta: meta,
@@ -575,6 +593,19 @@ export function reducer(state, action) {
       }
     }
 
+    // Metadata pushed by the backend (session_updated), e.g. an agent run's
+    // stored last result. Patches the sidebar copy and the open session.
+    case 'PATCH_SESSION': {
+      const { sessionId, changes } = action.payload
+      const known = state.sessionsById[sessionId]
+      if (!known && state.currentMeta?.id !== sessionId) return state
+      return {
+        ...state,
+        sessionsById: known ? { ...state.sessionsById, [sessionId]: { ...known, ...changes } } : state.sessionsById,
+        currentMeta: state.currentMeta?.id === sessionId ? { ...state.currentMeta, ...changes } : state.currentMeta,
+      }
+    }
+
     case 'SET_SESSION_TITLE': {
       const { sessionId, title } = action.payload
       const known = state.sessionsById[sessionId]
@@ -739,7 +770,7 @@ export function reducer(state, action) {
     case 'PREPEND_STAGE_ITEMS': {
       const { sessionId, items, offset } = action.payload
       if (sessionId !== state.currentSessionId || offset !== state.eventWindowOffset) return state
-      return { ...state, stageItems: [...items, ...state.stageItems], eventWindowOffset: 0 }
+      return { ...state, stageItems: mergeRoutineStageItems([...items, ...state.stageItems]), eventWindowOffset: 0 }
     }
 
     case 'SET_CONTEXT': {
@@ -930,7 +961,7 @@ export function reducer(state, action) {
       return { ...state, sidebarOpen: !state.sidebarOpen }
 
     case 'SET_SIDEBAR_VIEW':
-      return { ...state, sidebarView: action.payload === 'activity' ? 'activity' : 'projects' }
+      return { ...state, sidebarView: ['projects', 'activity', 'agents'].includes(action.payload) ? action.payload : 'projects' }
 
     case 'TOGGLE_WORKSPACE_PANEL':
       return { ...state, workspacePanelOpen: !state.workspacePanelOpen }

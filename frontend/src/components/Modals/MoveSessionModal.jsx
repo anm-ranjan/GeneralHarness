@@ -4,7 +4,7 @@ import { CHATS_PROJECT_ID } from '../../constants'
 // Moves a session to another project. The backend files it under the target's
 // unlabeled bucket and keeps the old task name as a label.
 export default function MoveSessionModal({ moveRequest, projects, onClose, onMove }) {
-  const targets = projects.filter(p => p.id !== CHATS_PROJECT_ID && p.id !== moveRequest.projectId)
+  const targets = projects.filter(p => p.id !== CHATS_PROJECT_ID && p.id !== '__agents__' && p.id !== moveRequest.projectId)
   const [targetProjectId, setTargetProjectId] = useState(targets[0]?.id || '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')

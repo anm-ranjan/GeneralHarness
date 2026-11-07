@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api'
 import { useApp, useAppStateRef } from '../../context/AppContext'
 import { handleSessionEvent } from '../../eventHandlers'
@@ -21,6 +21,11 @@ import ApprovalCard from './ApprovalCard'
 import { clampNotesWidth, readNotesWidth, saveNotesWidth, BLOCK_WIDTH_KEY } from '../../notesWidth'
 import QuestionCard from './QuestionCard'
 import AsideBox from './AsideBox'
+import AgentDraftCard from '../Agents/AgentDraftCard'
+import AgentRunCard from '../Agents/AgentRunCard'
+import AgentRunStatus from '../Agents/AgentRunStatus'
+
+const AgentHome = lazy(() => import('../Agents/AgentHome'))
 
 export default function Stage() {
   const { state, dispatch } = useApp()
@@ -149,8 +154,16 @@ export default function Stage() {
     [answerQuestion, sessionId],
   )
 
+  const isRunning = state.isRunning
   const renderItem = useCallback(function renderItem(item) {
     switch (item.type) {
+      case 'agent_draft':
+        return <AgentDraftCard draft={item} />
+      case 'agent_run_link':
+        return <AgentRunCard item={item} />
+      case 'agent_run_status':
+        // A replayed invocation without a result never shows as live.
+        return <AgentRunStatus item={item} live={isRunning && !item.historical} />
       case 'user_message':
         return <MessageBubble role="user" text={item.text} displayText={item.displayText} images={item.images} attachments={item.attachments} steering={item.steering} historical={Boolean(item.historical)} />
       case 'assistant_message':
@@ -198,11 +211,13 @@ export default function Stage() {
       default:
         return null
     }
-  }, [handleApproval, handleQuestion])
+  }, [handleApproval, handleQuestion, isRunning])
 
   const turns = useMemo(() => buildTurns(state.stageItems), [state.stageItems])
   // The latest prompt, when it never got a reply: the one Retry / Delete apply to.
   const unansweredTurn = useMemo(() => unansweredLastTurn(turns, state.isRunning), [turns, state.isRunning])
+
+  if (state.agentHome) return <Suspense fallback={<div className="p-8 text-faint text-sm">Loading agent…</div>}><AgentHome key={state.agentHome} name={state.agentHome} /></Suspense>
 
   // One handler for every turn's divider (data-notes-handle), so the memoised
   // turns need no props for it. The thread block keeps its width, so the

@@ -30,6 +30,9 @@ def searchable_event_text(event) -> tuple[str, str]:
         return "tool_result", str(data.get("preview") or "")[:2000]
     if etype in {EventType.FILE_CHANGE, EventType.GENERATED_ARTIFACT}:
         return "file", str(data.get("path") or "")
+    if etype in {EventType.AGENT_RUN_ITEM, EventType.AGENT_RUN_RESULT, EventType.AGENT_RUN_LINK}:
+        fields = ("label", "detail", "summary", "request_text", "agent")
+        return "agent_run", " ".join(str(data.get(key) or "") for key in fields).strip()
     if etype == EventType.MEMORY_SAVED:
         memory = data.get("memory") if isinstance(data.get("memory"), dict) else {}
         fields = [memory.get("title"), memory.get("description"), memory.get("body")]

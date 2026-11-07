@@ -52,11 +52,16 @@ export function isCodexProtocolStatus(text) {
 const HISTORICAL_ITEM_TYPES = new Set([
   'user_message', 'assistant_message', 'question', 'error',
   'codex_command', 'codex_file_change', 'turn_note', 'aside', 'memory_saved',
+  'agent_run_link',
 ])
 
 function indexedDispatch(dispatch, eventIndex, historical = false) {
   return (action) => {
     if (historical && action.type === 'APPEND_STAGE_ITEM' && !HISTORICAL_ITEM_TYPES.has(action.payload.type)) return
+    if (action.type === 'FOLD_AGENT_RUN' || action.type === 'UPSERT_AGENT_DRAFT') {
+      dispatch({ ...action, payload: { ...action.payload, eventIndex, historical } })
+      return
+    }
     if (action.type === 'APPEND_STAGE_ITEM' || action.type === 'APPEND_TOOL_CALL' || action.type === 'HOLD_AUTO_PREVIEW') {
       dispatch({ ...action, payload: { ...action.payload, eventIndex, historical } })
     } else {
@@ -334,6 +339,18 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
       // memory (newer events only) is the block the model now sees in place
       // of the older history; the notice shows it on demand.
       dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'compaction', before: data.before, after: data.after, memory: data.memory || null } })
+      break
+
+    case 'agent_draft':
+      dispatch({type:'UPSERT_AGENT_DRAFT', payload:data})
+      break
+    case 'agent_run_progress':
+    case 'agent_run_item':
+    case 'agent_run_result':
+      dispatch({ type: 'FOLD_AGENT_RUN', payload: {eventType: type, data} })
+      break
+    case 'agent_run_link':
+      dispatch({ type: 'APPEND_STAGE_ITEM', payload: {type: 'agent_run_link', ...data} })
       break
 
     case 'memory_saved':
