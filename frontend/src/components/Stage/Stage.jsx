@@ -217,8 +217,6 @@ export default function Stage() {
   // The latest prompt, when it never got a reply: the one Retry / Delete apply to.
   const unansweredTurn = useMemo(() => unansweredLastTurn(turns, state.isRunning), [turns, state.isRunning])
 
-  if (state.agentHome) return <Suspense fallback={<div className="p-8 text-faint text-sm">Loading agent…</div>}><AgentHome key={state.agentHome} name={state.agentHome} /></Suspense>
-
   // One handler for every turn's divider (data-notes-handle), so the memoised
   // turns need no props for it. The thread block keeps its width, so the
   // divider follows the pointer: the notes take room from the thread, or give
@@ -267,6 +265,9 @@ export default function Stage() {
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
   }, [])
+
+  // After every hook: an early return above one changes the hook count.
+  if (state.agentHome) return <Suspense fallback={<div className="p-8 text-faint text-sm">Loading agent…</div>}><AgentHome key={state.agentHome} name={state.agentHome} /></Suspense>
 
   if (!sessionId) {
     return <SplashScreen />
