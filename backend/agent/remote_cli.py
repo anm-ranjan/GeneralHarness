@@ -496,6 +496,8 @@ class RemoteCliApp:
         elif event_type == "approval_resolved":
             approved = "approved" if data.get("approved") else "denied"
             print(f"Approval {approved}.")
+        elif event_type == "request_capture":
+            pass  # Persisted audit links; no transcript presentation.
         elif event_type == "context_usage":
             print(f"Context: {data.get('usage_str', '')}")
         elif event_type == "agent_draft" and data.get("saved"):

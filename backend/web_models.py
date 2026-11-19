@@ -22,6 +22,7 @@ class EventType(str, Enum):
     QUESTION_REQUIRED = "question_required"
     QUESTION_RESOLVED = "question_resolved"
     API_METRICS = "api_metrics"
+    REQUEST_CAPTURE = "request_capture"
     CONTEXT_USAGE = "context_usage"
     ITERATION = "iteration"
     COMPACTION = "compaction"

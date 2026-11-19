@@ -179,6 +179,14 @@ logging:
   retention_days: 30
   # Empty means "<repo>/logs". Relative paths resolve against the repo root.
   log_dir: ""
+  # Independent of logging.enabled and ui.verbose_tools. Native provider only.
+  # Stores full request/response contents and images locally in
+  # data/request_captures/<session_id>/ (deleted with the session; not in
+  # backups). May contain sensitive workspace data.
+  request_capture:
+    # Set to true to enable capture, then restart the backend.
+    # MYHARNESS_REQUEST_CAPTURE, if set, overrides this value.
+    enabled: false
 
 storage:
   # Empty means "<repo>/data". MYHARNESS_WEB_DATA_DIR overrides this.

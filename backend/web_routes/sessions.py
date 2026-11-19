@@ -504,6 +504,22 @@ def get_session_events(session_id: str, limit: int = 200, offset: int = 0):
     }
 
 
+@router.get("/api/sessions/{session_id}/request-captures/export")
+def export_captures(session_id: str):
+    if web_app._store.load_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    from request_capture_export import export_request_captures
+    try:
+        payload = export_request_captures(web_app._store.request_captures(session_id),
+                                          web_app._store.events_jsonl(session_id))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="No captures or a referenced capture blob is missing")
+    except (ValueError, KeyError):
+        raise HTTPException(status_code=409, detail="Capture validation failed; export cannot reconstruct all requests")
+    return Response(content=payload, media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="request-captures.zip"'})
+
+
 @router.get("/api/sessions/{session_id}/export")
 def export_session(session_id: str, format: str = "md", include_all: bool = False):
     meta = web_app._store.load_session(session_id)

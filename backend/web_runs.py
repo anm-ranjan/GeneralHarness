@@ -398,6 +398,7 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
             run_started = time.monotonic()
             run_failed = False
             orchestrator = None
+            capture_token = web_ui.start_request_capture()
             try:
                 user_content = web_helpers._native_user_content(text, saved_attachments)
                 allow_children = (
@@ -425,16 +426,26 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
                                 f"Task: {node.task}"
                             )
                         node.prompt = ""
-                        agent.run_agent(
-                            child_prompt,
-                            child_messages,
-                            ui=child_ui,
-                            cancel_event=CombinedCancelEvent(run.cancel_event, node.cancel_event),
-                            orchestrator=orchestrator,
-                            agent_path=node.path,
-                            tool_policy=node.tool_policy,
-                            show_user=False,
-                        )
+                        child_token = child_ui.start_request_capture(getattr(node, "parent", None) or "agent_root")
+                        child_reason = "completed"
+                        try:
+                            agent.run_agent(
+                                child_prompt,
+                                child_messages,
+                                ui=child_ui,
+                                cancel_event=CombinedCancelEvent(run.cancel_event, node.cancel_event),
+                                orchestrator=orchestrator,
+                                agent_path=node.path,
+                                tool_policy=node.tool_policy,
+                                show_user=False,
+                            )
+                        except Exception:
+                            child_reason = "error"
+                            raise
+                        finally:
+                            child_ui.finish_request_capture(
+                                child_token,
+                                "interrupted" if run.cancel_event.is_set() or node.cancel_event.is_set() else child_reason)
                         node.messages = child_messages
                         return child_ui.result
 
@@ -482,6 +493,8 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
                     web_ui.show_agent_finished("error")
                 elif not web_ui.finished_reason:
                     web_ui.show_agent_finished("completed")
+                web_ui.finish_request_capture(capture_token, "interrupted" if run.cancel_event.is_set() else
+                                              "error" if run_failed else web_ui.finished_reason or "completed")
                 if meta.provider == "native" and not run_failed and not run.cancel_event.is_set():
                     try:
                         web_helpers._save_native_context(

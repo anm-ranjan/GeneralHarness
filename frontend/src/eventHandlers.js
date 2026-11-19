@@ -74,6 +74,10 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
   const { type, data } = evt
 
   switch (type) {
+    // Audit metadata is persisted for capture joins, never transcript content.
+    case 'request_capture':
+      return
+
     case 'session_loaded': {
       // Replay is collected into a single BATCH action: a stored transcript of
       // N events costs one render instead of one render per event.

@@ -167,6 +167,10 @@ NATIVE_CACHING = nested_get(CONFIG, ["native_caching"], {})
 # Token-level SSE streaming for assistant output (UIs that support deltas).
 # Providers that reject stream=True fall back to a plain request per call.
 API_STREAMING = str(nested_get(CONFIG, ["api", "streaming"], "true")).lower() in ("true", "1", "yes")
+# Opt-in capture of exact native requests/responses (agent/request_capture.py).
+REQUEST_CAPTURE_ENABLED = str(os.environ.get(
+    "MYHARNESS_REQUEST_CAPTURE", nested_get(CONFIG, ["logging", "request_capture", "enabled"], "false")
+)).lower() in ("true", "1", "yes")
 MODEL = nested_get(CONFIG, ["models", "default"], "MiniMaxAI/MiniMax-M2.5")
 READ_MODEL = nested_get(CONFIG, ["models", "read"], MODEL)
 WRITE_MODEL = nested_get(CONFIG, ["models", "write"], MODEL)

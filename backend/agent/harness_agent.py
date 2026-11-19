@@ -39,6 +39,7 @@ from prompt_toolkit.keys import Keys
 
 import utils
 import prompt_cache
+import request_capture
 import history_tokens
 from history_evidence import HistoryEvidence
 from tool_defs import (
@@ -381,7 +382,7 @@ _STREAM_USAGE_REJECTED: set = set()
 
 
 def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int, headers=None,
-                        include_usage: bool | None = None, context_of=None):
+                        include_usage: bool | None = None, context_of=None, capture=None):
     """Streaming variant of call_api. Returns _STREAM_UNSUPPORTED when the
     provider rejects the streaming request so the caller can retry plainly.
 
@@ -397,8 +398,8 @@ def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int, head
         stream_payload["stream_options"] = {"include_usage": True}
     t0 = time.monotonic()
     try:
-        response = requests.post(
-            f"{utils.BASE_URL}/chat/completions",
+        response = request_capture.post(
+            capture, requests.post, f"{utils.BASE_URL}/chat/completions",
             headers=headers or utils.api_headers(),
             json=stream_payload,
             timeout=utils.NATIVE_API_TIMEOUT,
@@ -429,7 +430,7 @@ def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int, head
             # stop sending it only if that retry is accepted. Any other error
             # keeps the option and falls back to a plain request as before.
             result = _call_api_streaming(payload, ui, cancel_event, payload_size, headers,
-                                         include_usage=False, context_of=context_of)
+                                         include_usage=False, context_of=context_of, capture=capture)
             if isinstance(result, dict):
                 _STREAM_USAGE_REJECTED.add(utils.BASE_URL)
             return result
@@ -451,6 +452,10 @@ def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int, head
         message, finish_reason, usage, model_name = _assemble_streamed_response(
             cancellable_lines(), streamer, response_metadata
         )
+        if isinstance(response, request_capture.CapturedResponse):
+            response.finish_stream({"message": message, "finish_reason": finish_reason,
+                                    "usage": usage, "model": model_name, **response_metadata},
+                                   cancelled=cancel_event is not None and cancel_event.is_set())
     except requests.exceptions.RequestException as e:
         _set_api_failure("request")
         if ui:
@@ -501,7 +506,9 @@ def call_api(
     report_context: bool = False,
     timeout: float | None = None,
     reasoning_effort: str | None = None,
+    capture_purpose: str = "agent",
 ) -> dict:
+    capture = request_capture.start_call(capture_purpose)
     _set_api_failure(None)
     _set_api_metrics({})
     selected_model = choose_model_for_tools(tools, model or _thread_model(ui))
@@ -553,15 +560,16 @@ def call_api(
             return format_context_count(reported if reported > 0 else context_tokens(messages, tools))
 
     if utils.API_STREAMING and ui is not None and hasattr(ui, "show_assistant_delta"):
-        result = _call_api_streaming(payload, ui, cancel_event, payload_size, headers, context_of=context_of)
+        result = _call_api_streaming(payload, ui, cancel_event, payload_size, headers, context_of=context_of,
+                                     capture=capture)
         if result is not _STREAM_UNSUPPORTED:
             return result
         # Streaming rejected by the provider — retry as a plain request.
 
     t0 = time.monotonic()
     try:
-        response = requests.post(
-            f"{utils.BASE_URL}/chat/completions",
+        response = request_capture.post(
+            capture, requests.post, f"{utils.BASE_URL}/chat/completions",
             headers=headers,
             json=payload,
             timeout=timeout or utils.NATIVE_API_TIMEOUT,
@@ -761,7 +769,7 @@ def summarize_history(existing_memory: list, old_history: list, ui=None) -> str:
     ]
     try:
         result = call_api(summary_prompt, tools=None, model=utils.SUMMARY_MODEL,
-                          max_tokens=utils.SUMMARY_TARGET_TOKENS + 256)
+                          max_tokens=utils.SUMMARY_TARGET_TOKENS + 256, capture_purpose="history_compaction")
         if ui and hasattr(ui, "show_api_metrics") and get_last_api_metrics():
             ui.show_api_metrics({**get_last_api_metrics(), "purpose": "history_compaction"})
         choice = result["choices"][0]

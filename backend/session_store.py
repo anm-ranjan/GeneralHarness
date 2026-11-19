@@ -979,12 +979,21 @@ class SessionStore:
             self._data_dir / "codex" / session_id,
             self._data_dir / "changes" / session_id,
             self._data_dir / "native_history" / session_id,
+            self._data_dir / "request_captures" / session_id,
         ):
             try:
                 if path.exists():
                     shutil.rmtree(path)
             except OSError:
                 pass
+
+    def request_captures(self, session_id: str):
+        from request_capture import CaptureStore
+        return CaptureStore(self._data_dir / "request_captures" / session_id)
+
+    def events_jsonl(self, session_id: str) -> bytes:
+        """The session's stored events as JSON lines (request-capture exports)."""
+        return b"".join(event.model_dump_json().encode("utf-8") + b"\n" for event in self.load_events(session_id))
 
     def native_evidence(self, session_id: str):
         from history_evidence import HistoryEvidence

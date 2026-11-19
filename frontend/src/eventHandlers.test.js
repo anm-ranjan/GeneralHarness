@@ -731,3 +731,13 @@ test('an outside-allowed-paths warning and its folders travel with the approval 
   handleSessionEvent({ type: 'approval_resolved', data: { approval_id: 'a1', approved: true, scope: 'turn' } }, resolved.dispatch, resolved.stateRef)
   assert.deepEqual(resolved.actions[0], { type: 'RESOLVE_APPROVAL', payload: { approvalId: 'a1', approved: true, scope: 'turn' } })
 })
+
+test('request capture audit events stay invisible during live delivery and replay', () => {
+  const ctx = collect()
+  handleSessionEvent({ type: 'request_capture', data: { request_id: 'req1', attempt_id: 'a1' } }, ctx.dispatch, ctx.stateRef)
+  assert.deepEqual(ctx.actions, [])
+  handleSessionEvent({ type: 'session_loaded', data: { meta: { status: 'idle' }, events: [
+    { type: 'request_capture', data: { request_id: 'req1' } },
+  ] } }, ctx.dispatch, ctx.stateRef)
+  assert.equal(JSON.stringify(ctx.actions).includes('req1'), false)
+})

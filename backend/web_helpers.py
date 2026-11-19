@@ -565,7 +565,7 @@ def _generate_title(prompt: str) -> str:
         },
     ]
     try:
-        result = agent.call_api(messages, tools=None, model=utils.SUMMARY_MODEL)
+        result = agent.call_api(messages, tools=None, model=utils.SUMMARY_MODEL, capture_purpose="session_title")
         content = result["choices"][0]["message"].get("content", "")
     except Exception:
         return fallback

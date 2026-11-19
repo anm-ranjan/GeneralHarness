@@ -9,6 +9,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 
 import utils
+import request_capture
 import session_context
 import usage_ledger
 from prompt_cache import UsageTotals
@@ -116,6 +117,37 @@ class WebUI:
     def session_id(self) -> str:
         return self._sid
 
+    def start_request_capture(self, parent_agent_id=None):
+        """Bind a request-capture scope for this run's thread (opt-in)."""
+        if not utils.REQUEST_CAPTURE_ENABLED:
+            return None
+        self._capture_links = {}
+        root = getattr(self, "parent", self)
+
+        def emit(data):
+            if data["kind"] == "request":
+                self._capture_links = {key: data[key] for key in ("request_id", "attempt_id")}
+            root._emit(EventType.REQUEST_CAPTURE, data)
+
+        self._capture_scope = request_capture.CaptureScope(
+            root._store.request_captures(self._sid),
+            {"session_id": self._sid, "run_id": root.run_id, "provider": "native",
+             "agent_id": getattr(self, "agent_path", "/root") if parent_agent_id else "agent_root",
+             "agent_path": getattr(self, "agent_path", "/root"),
+             "parent_agent_id": parent_agent_id}, emit)
+        request_capture.safe_capture(self._capture_scope.record, "agent_start" if parent_agent_id else "run_start",
+                                     settings=self.run_settings, quality=None, quality_source=None)
+        return request_capture.bind(self._capture_scope)
+
+    def finish_request_capture(self, token, reason):
+        if token is None:
+            return
+        try:
+            request_capture.safe_capture(self._capture_scope.outcome, reason,
+                                         "agent_outcome" if getattr(self, "parent", None) is not None else "run_outcome")
+        finally:
+            request_capture.reset(token)
+
     def agent_run_context(self) -> dict | None:
         """Arguments for agent_runner.run_agent_script in a routine-agent run."""
         meta = self._store.load_session(self._sid)
@@ -144,6 +176,10 @@ class WebUI:
                 self._manager.notify_session_updated(self._sid, {"agent_last_result": meta.agent_last_result})
 
     def _emit(self, event_type: EventType, data: dict) -> None:
+        if event_type in {EventType.ASSISTANT_MESSAGE, EventType.THINKING, EventType.TOOL_CALL,
+                          EventType.TOOL_RESULT, EventType.API_METRICS}:
+            # Joins transcript events to the captured request (when capturing).
+            data = {**getattr(self, "_capture_links", {}), **data}
         event = EventEnvelope(session_id=self._sid, type=event_type, data=data)
         self._store.append_event(event)
         self._manager.emit_event(event)
@@ -589,6 +625,9 @@ class SubagentUI:
         self.agent_profile = getattr(parent, "agent_profile", None)
         self.offers_turn_allow = getattr(parent, "offers_turn_allow", False)
         self.result = ""
+
+    start_request_capture = WebUI.start_request_capture
+    finish_request_capture = WebUI.finish_request_capture
 
     # Outside paths refused or allowed this turn belong to the root run, so a
     # refusal or "Allow folder for this turn" covers its subagents too.

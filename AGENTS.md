@@ -206,6 +206,21 @@ if the user should be asked about it.
 - **Change manifests** record run-level file mutations plus before-content, so a
   file or a whole run can be reverted after a restart, with conflict checks
   against later external edits.
+- **Native request capture** (`backend/agent/request_capture.py`): opt-in
+  `logging.request_capture.enabled` or `MYHARNESS_REQUEST_CAPTURE=1`,
+  independent of logging and verbosity. Native web runs (subagents included;
+  compaction and title calls labelled by `capture_purpose`) record each HTTP
+  attempt after final payload preparation, without headers or credentials:
+  request/attempt IDs, content-addressed message and image blobs, raw
+  responses (SSE lines plus the assembled message) and ungraded run/agent
+  outcomes, in `data/request_captures/<session_id>/` (deleted with the
+  session, never in backups). `request_capture` events carry metadata only and
+  are ignored by every client; transcript events carry the
+  `request_id`/`attempt_id` they came from. `GET
+  /api/sessions/{id}/request-captures/export` or `python
+  backend/request_capture_export.py --data-dir data --session-id ID --output
+  ZIP` writes a hash-checked archive with the session's events. Raw content may
+  hold secrets: never export to shared-logs automatically.
 - **Interrupted runs** roll native in-memory context back to the last completed
   turn. Transcript events stay visible, but interrupted user/tool/partial
   assistant content must not re-enter model context. Startup resets sessions

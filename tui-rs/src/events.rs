@@ -148,7 +148,7 @@ pub fn render_event(event: &EventEnvelope, verbose_tools: bool) -> Option<Transc
             EntryKind::Muted,
             format!("[api_metrics] {}", compact_json(data)),
         ),
-        "api_metrics" => return None,
+        "api_metrics" | "request_capture" => return None,
         "run_metrics" if verbose_tools => {
             TranscriptEntry::new(EntryKind::Muted, render_metrics(data))
         }
@@ -634,5 +634,12 @@ mod tests {
         assert_eq!(decoded.events.len(), 1);
         assert_eq!(decoded.event_offset, 12);
         assert_eq!(decoded.event_total, 13);
+    }
+
+    #[test]
+    fn capture_audit_events_are_hidden_in_both_modes() {
+        for verbose in [false, true] {
+            assert_eq!(render_event(&event("request_capture", json!({"request_id": "r"})), verbose), None);
+        }
     }
 }
