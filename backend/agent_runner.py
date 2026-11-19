@@ -187,6 +187,10 @@ def run_agent_script(profile, params, dry_run, *, cwd, run_id, cancel_event, emi
                 if pending_progress and time.monotonic() - last_progress >= .25:
                     event('progress', pending_progress); pending_progress = None; last_progress = time.monotonic()
             proc.wait(timeout=3)
+            # The loop can end on its own condition (both streams closed and the
+            # process gone) after the in-loop exit check last saw it running;
+            # the outcome then still has to come from the exit code.
+            if deadline is None: status = 'completed' if proc.returncode == 0 else 'failed'
             for thread in threads: thread.join(timeout=.5)
         except Exception as exc:
             log(str(exc)); status = 'failed'

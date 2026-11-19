@@ -41,6 +41,26 @@ print(json.dumps({'wj':'result','summary':'Done','table':{'columns':['A'],'rows'
         self.assertEqual(result['items'][0]['status'],'ok'); self.assertIn('stderr',result['log_tail'])
         self.assertEqual(events[-1][1]['table']['rows'],[[1]])
         self.assertEqual(len({d['tool_call_id'] for _,d in events}),1)
+    def test_exit_after_last_in_loop_check_still_completes(self):
+        # The process exits after the loop's last in-loop check saw it running,
+        # then the loop ends on its own condition. Report "running" until the
+        # runner has read both end-of-stream markers, so only the loop condition
+        # sees the exit. Status must follow the exit code.
+        import queue as queue_module, subprocess, agent_runner
+        ends = []
+        class CountingQueue(queue_module.Queue):
+            def get(self, *a, **k):
+                item = super().get(*a, **k)
+                if item[0] == 'end': ends.append(item)
+                return item
+        class LatePoll(subprocess.Popen):
+            def poll(self):
+                if len(ends) < 2: return None
+                self.wait(); return super().poll()
+        with patch.object(agent_runner.queue, 'Queue', CountingQueue), patch.object(agent_runner.subprocess, 'Popen', LatePoll):
+            result, events = self.run_script('pass')
+        self.assertEqual(result['exit_code'], 0); self.assertEqual(result['status'], 'completed')
+        self.assertEqual(events[-1][1]['status'], 'completed')
     def test_nonzero_and_generated_result(self):
         result,events=self.run_script('raise SystemExit(7)')
         self.assertEqual(result['status'],'failed'); self.assertEqual(result['exit_code'],7); self.assertTrue(events[-1][1]['summary'])

@@ -8,6 +8,11 @@ import threading
 import tempfile
 from datetime import datetime
 
+# The CLI UI imports helpers by this name. Direct script launches otherwise
+# load a second copy whose prompt session was never initialized.
+if __name__ == "__main__":
+    sys.modules["harness_agent"] = sys.modules[__name__]
+
 _BULLET = "*" if sys.platform == "win32" else "●"
 _THINK_RE = re.compile(r"<think>(.*?)</think>\s*", re.DOTALL)
 
