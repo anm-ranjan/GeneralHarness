@@ -318,7 +318,7 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
         !stateRef.current.verbose
         && isCodexProtocolStatus(data.text)
       ) break
-      dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: stateRef.current.silentCommand ? 'indicator' : 'status', text: data.text } })
+      dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: stateRef.current.silentCommand ? 'indicator' : 'status', text: data.text, ...(data.progress ? { progress: true } : {}) } })
       if (data.approval_mode) dispatch({ type: 'SET_APPROVAL_MODE', payload: data.approval_mode })
       if (data.verbose !== undefined) dispatch({ type: 'SET_VERBOSE', payload: data.verbose })
       break
@@ -457,6 +457,8 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
     case 'run_finished':
       dispatch({ type: 'CLEAR_ASSISTANT_STREAM' })
       dispatch({ type: 'CLEAR_THINKING_STREAM' })
+      // "Working on it" notes (e.g. /create_agent drafting) end with the run.
+      dispatch({ type: 'CLEAR_PROGRESS_STATUS' })
       dispatch({ type: 'FINALIZE_WORK_GROUP' })
       if (Object.keys(stateRef.current.agentsById || {}).length) dispatch({ type: 'FINALIZE_AGENTS' })
       // A run that ended without a reply (error, stop, max iterations) still

@@ -623,6 +623,15 @@ export function reducer(state, action) {
     case 'INCREMENT_WS_RECONNECTS':
       return { ...state, wsReconnects: state.wsReconnects + 1 }
 
+    case 'CLEAR_PROGRESS_STATUS': {
+      // Only "working on it" status lines. Routine-agent run cards also carry
+      // a `progress` object and must survive the end of the run.
+      const isProgressLine = i => i.progress === true && (i.type === 'status' || i.type === 'indicator')
+      return state.stageItems.some(isProgressLine)
+        ? { ...state, stageItems: state.stageItems.filter(i => !isProgressLine(i)) }
+        : state
+    }
+
     case 'APPEND_STAGE_ITEM': {
       const item = action.payload
       if (item.type === 'aside') return { ...state, stageItems: insertAside(state.stageItems, item) }

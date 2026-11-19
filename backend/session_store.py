@@ -880,6 +880,18 @@ class SessionStore:
             pass
         return sessions
 
+    def delete_agent_runs(self, agent_name: str) -> list[str]:
+        """Remove an agent's run bucket and its runs (used when the agent itself is deleted)."""
+        removed = [meta.id for meta in self.list_sessions(AGENTS_PROJECT_ID, agent_name)]
+        for session_id in removed:
+            try:
+                self.delete_session(AGENTS_PROJECT_ID, agent_name, session_id)
+            except ValueError:
+                pass
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM tasks WHERE project_id=? AND id=?", (AGENTS_PROJECT_ID, agent_name))
+        return removed
+
     def delete_task(self, project_id: str, task_id: str) -> list[str]:
         if project_id == AGENTS_PROJECT_ID:
             raise ValueError("Agent tasks are reserved")

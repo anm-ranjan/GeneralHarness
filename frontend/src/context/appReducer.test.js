@@ -495,3 +495,19 @@ test('search opened from the thread header is scoped to that thread', () => {
   assert.equal(reducer(scoped, { type: 'CLOSE_SEARCH' }).searchSessionId, null)
   assert.equal(reducer(scoped, { type: 'OPEN_SEARCH' }).searchSessionId, null, 'Cmd/Ctrl+K stays global')
 })
+
+test('CLEAR_PROGRESS_STATUS drops progress lines but keeps routine-agent run cards', () => {
+  const card = { type: 'agent_run_status', toolCallId: 't1', items: {}, progress: { done: 1, total: 1 }, result: { markdown: 'done' } }
+  const state = {
+    ...initialState,
+    stageItems: [
+      { type: 'status', text: 'Drafting…', progress: true },
+      { type: 'indicator', text: 'Working…', progress: true },
+      card,
+      { type: 'status', text: 'Kept' },
+    ],
+  }
+  const next = reducer(state, { type: 'CLEAR_PROGRESS_STATUS' })
+  assert.deepEqual(next.stageItems, [card, { type: 'status', text: 'Kept' }])
+  assert.equal(reducer(next, { type: 'CLEAR_PROGRESS_STATUS' }), next)
+})

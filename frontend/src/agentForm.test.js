@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { initialValues, toRequest, validate } from './agentForm.js'
+import { clearAgentDraft, initialValues, restoreAgentDraft, saveAgentDraft, toRequest, validate } from './agentForm.js'
 import { initialState, reducer } from './context/appReducer.js'
 import { handleSessionEvent } from './eventHandlers.js'
 const params = { paths:{type:'paths',required:true}, stagger:{type:'float',default:2,min:0,max:60}, mode:{type:'enum',options:['one','two']}, flag:{type:'bool'} }
@@ -54,4 +54,12 @@ test('final snapshots restore older items and paging keeps one invocation',()=>{
   const combined=mergeRoutineStageItems([...older,...newer])
   assert.equal(combined.length,1);assert.equal(combined[0].items.a.status,'ok');assert.equal(combined[0].items.b.status,'failed')
   assert.equal(combined[0].result.summary,'done')
+})
+test('agent form drafts survive leaving the page and follow the current parameters',()=>{
+  assert.deepEqual(restoreAgentDraft('wj-test',params),{values:initialValues(params),text:''})
+  saveAgentDraft('wj-test',{values:{paths:'/a',stagger:'5',removed:'x'},text:'note'})
+  const restored=restoreAgentDraft('wj-test',params)
+  assert.deepEqual(restored.values,{paths:'/a',stagger:'5',mode:'',flag:false}); assert.equal(restored.text,'note')
+  clearAgentDraft('wj-test')
+  assert.deepEqual(restoreAgentDraft('wj-test',params).values,initialValues(params))
 })

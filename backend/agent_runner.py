@@ -16,6 +16,7 @@ import uuid
 _registry = {}
 _lock = threading.Lock()
 MAX_LINE = 65536
+MODEL_TABLE_ROWS = 50
 
 
 class _WindowsJob:
@@ -146,7 +147,8 @@ def run_agent_script(profile, params, dry_run, *, cwd, run_id, cancel_event, emi
     status = 'failed'; proc = None; job = None
     with tempfile.TemporaryDirectory(prefix='mh-agent-', dir=scratch_dir) as scratch:
         param_file = Path(scratch) / 'params.json'; param_file.write_text(json.dumps(values), encoding='utf-8')
-        env = os.environ.copy()
+        from agent_preflight import agent_env
+        env = agent_env()
         env.update(MYHARNESS_AGENT='1', MYHARNESS_AGENT_NAME=profile.name, MYHARNESS_AGENT_DIR=str(profile.path), MYHARNESS_RUN_ID=run_id, PYTHONUNBUFFERED='1', PYTHONIOENCODING='utf-8')
         from agent_profiles import helper_lib_dir
         helper = str(helper_lib_dir())
@@ -206,7 +208,15 @@ def run_agent_script(profile, params, dry_run, *, cwd, run_id, cancel_event, emi
     failed = sum(i['status'] == 'failed' for i in items.values())
     if not final: final = {'summary': f'{status.replace("_", " ").capitalize()} · {ok} of {len(items)} items ok'}
     event('result', dict(final, status=status, exit_code=proc.returncode if proc else None, items_total=len(items), items_ok=ok, items_failed=failed, items_snapshot=list(items.values())))
-    return json.dumps({'status': status, 'exit_code': proc.returncode if proc else None, 'items': [{k:v for k,v in i.items() if k in ('key','status','detail')} for i in items.values()], 'result': {'summary': final['summary']}, 'log_tail': list(log_tail)}, ensure_ascii=False)
+    # The model sees the result table too: some agents (job-status convergence)
+    # put their findings only there, not in item details.
+    model_result = {'summary': final['summary']}
+    table = final.get('table')
+    if table:
+        rows = table['rows']
+        model_result['table'] = {'columns': table['columns'], 'rows': rows[:MODEL_TABLE_ROWS]}
+        if len(rows) > MODEL_TABLE_ROWS: model_result['table']['rows_omitted'] = len(rows) - MODEL_TABLE_ROWS
+    return json.dumps({'status': status, 'exit_code': proc.returncode if proc else None, 'items': [{k:v for k,v in i.items() if k in ('key','status','detail')} for i in items.values()], 'result': model_result, 'log_tail': list(log_tail)}, ensure_ascii=False)
 
 
 OPTIONS_TIMEOUT = 15
@@ -235,7 +245,8 @@ def list_param_options(profile, param, values=None, *, timeout=OPTIONS_TIMEOUT):
     found, logs = None, deque(maxlen=5)
     with tempfile.TemporaryDirectory(prefix='mh-options-') as scratch:
         param_file = Path(scratch) / 'params.json'; param_file.write_text(json.dumps(checked), encoding='utf-8')
-        env = os.environ.copy()
+        from agent_preflight import agent_env
+        env = agent_env()
         env.update(MYHARNESS_AGENT='1', MYHARNESS_AGENT_NAME=profile.name, MYHARNESS_AGENT_DIR=str(profile.path), PYTHONUNBUFFERED='1', PYTHONIOENCODING='utf-8')
         from agent_profiles import helper_lib_dir
         env['PYTHONPATH'] = str(helper_lib_dir()) + os.pathsep + env.get('PYTHONPATH', '')

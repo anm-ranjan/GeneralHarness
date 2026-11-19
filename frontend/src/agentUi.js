@@ -81,3 +81,22 @@ export function itemCounts(result) {
 export function formChanged(initial, current) {
   return JSON.stringify(initial) !== JSON.stringify(current)
 }
+
+// One line about a parameter for the Workspace > Agents reference.
+export function paramSummary(spec = {}) {
+  const kind = spec.type === 'enum' && spec.options?.length ? spec.options.join(' | ')
+    : spec.type === 'path' || spec.type === 'paths' ? `${spec.type === 'paths' ? 'list of ' : ''}${spec.kind === 'dir' ? 'folder' : spec.kind === 'file' ? 'file' : 'path'}${spec.type === 'paths' ? 's' : ''}`
+    : spec.type || 'string'
+  const parts = [kind]
+  if (spec.required) parts.push('required')
+  const def = Array.isArray(spec.default) ? spec.default.join(', ') : spec.default
+  if (def !== undefined && def !== null && def !== '') parts.push(`default ${def}`)
+  if (spec.min !== undefined || spec.max !== undefined) parts.push(`${spec.min ?? ''}–${spec.max ?? ''}`)
+  const label = spec.label ? `${spec.label} · ` : ''
+  return label + parts.join(', ')
+}
+
+// A run still in progress (or waiting on the user) must not be archived.
+export function isRunActive(liveState, session) {
+  return (!!liveState && liveState !== 'idle') || session?.status === 'running'
+}

@@ -312,6 +312,7 @@ test('run_finished clears running indicators and silent command state', () => {
   assert.deepEqual(ctx.actions.map(a => a.type), [
     'CLEAR_ASSISTANT_STREAM',
     'CLEAR_THINKING_STREAM',
+    'CLEAR_PROGRESS_STATUS',
     'FINALIZE_WORK_GROUP',
     'FLUSH_AUTO_PREVIEWS',
     'APPEND_STAGE_ITEM',
@@ -405,6 +406,15 @@ test('workspace_changed is skipped during replay so historical state does not bl
   }, ctx.dispatch, ctx.stateRef)
 
   assert.deepEqual(ctx.actions, [])
+})
+
+test('a progress status is flagged so the end of its command removes it', () => {
+  const ctx = collect()
+  handleSessionEvent({ type: 'status', data: { text: 'Drafting agent files for review…', progress: true } }, ctx.dispatch, ctx.stateRef)
+  assert.equal(ctx.actions[0].payload.progress, true)
+  const plain = collect()
+  handleSessionEvent({ type: 'status', data: { text: 'Note' } }, plain.dispatch, plain.stateRef)
+  assert.equal(plain.actions[0].payload.progress, undefined)
 })
 
 test('plan_update sets the plan, defaulting a missing items list to empty', () => {

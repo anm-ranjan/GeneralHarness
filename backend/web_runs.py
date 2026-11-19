@@ -603,7 +603,7 @@ async def _handle_create_agent_command(session_id: str, intent: str) -> None:
         return
     import agent_drafts
 
-    _emit_session_event(session_id, EventType.STATUS, {"text": "Drafting agent files for review…"})
+    _emit_session_event(session_id, EventType.STATUS, {"text": "Drafting agent files for review…", "progress": True})
     try:
         draft = await asyncio.to_thread(agent_drafts.generate_draft, intent, session_id)
     except Exception as exc:

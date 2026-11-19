@@ -18,9 +18,9 @@ const textareaClass = 'min-h-0 flex-1 resize-none rounded-lg border border-line 
 //   every session prompt in the project.
 // - Memory - <project>: notes saved from sessions (see ProjectMemory).
 // Chats have no project, so only Scratch is available there.
-export default function ScratchNotes() {
+export default function ScratchNotes({ scratchOnly = false }) {
   const { state, dispatch } = useApp()
-  const project = useMemo(() => currentProject(state.currentMeta, state.projects), [state.currentMeta, state.projects])
+  const project = useMemo(() => scratchOnly ? null : currentProject(state.currentMeta, state.projects), [scratchOnly, state.currentMeta, state.projects])
   const [view, setView] = useState('scratch')
   const [focusId, setFocusId] = useState(null)
   const [notice, setNotice] = useState(null)

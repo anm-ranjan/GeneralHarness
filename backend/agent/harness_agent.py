@@ -499,6 +499,7 @@ def call_api(
     cache_session_key: str | None = None,
     report_context: bool = False,
     timeout: float | None = None,
+    reasoning_effort: str | None = None,
 ) -> dict:
     _set_api_failure(None)
     _set_api_metrics({})
@@ -517,6 +518,12 @@ def call_api(
     # specific model (history compaction).
     if model is None:
         reasoning = utils.build_openrouter_reasoning(_run_setting(ui, "reasoning_effort", utils.NATIVE_REASONING_DEFAULT))
+        if reasoning:
+            payload["reasoning"] = reasoning
+    elif reasoning_effort:
+        # Reasoning models count thinking against max_tokens; without a cap
+        # some spend the whole budget thinking and return no content.
+        reasoning = utils.build_openrouter_reasoning(reasoning_effort)
         if reasoning:
             payload["reasoning"] = reasoning
     if tools:

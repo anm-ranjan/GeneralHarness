@@ -100,6 +100,92 @@ class AgentDraftTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             agent_drafts.parse_model_json("no json here")
 
+    def test_parse_tolerates_raw_newlines_and_inner_fences(self):
+        raw = '```json\n{"name":"x","agent_md":"See:\n```python\nrun()\n```\ndone","files":{"run.py":"import os\nprint(1)\n"}}\n```'
+        value = agent_drafts.parse_model_json(raw)
+        self.assertEqual(value["name"], "x")
+        self.assertIn("```python", value["agent_md"])
+
+    def test_generator_reports_truncation_and_saves_raw_reply(self):
+        import harness_agent
+
+        response = {"choices": [{"message": {"content": '{"name":"x","files":{"run.py":"print('}, "finish_reason": "length"}]}
+        with patch.object(harness_agent, "call_api", return_value=response):
+            with self.assertRaises(ValueError) as caught:
+                agent_drafts.generate_draft("make a routine", "sid")
+        self.assertIn("cut off", str(caught.exception))
+        self.assertEqual(len(list((self.root / "data/agent_drafts/_failed").glob("*.txt"))), 1)
+        with patch.object(harness_agent, "call_api", return_value=None):
+            with self.assertRaises(ValueError) as caught:
+                agent_drafts.generate_draft("make a routine", "sid")
+        self.assertIn("request failed", str(caught.exception))
+
+    def test_generator_caps_reasoning_and_falls_back_when_rejected(self):
+        import harness_agent
+
+        ok = {"choices": [{"message": {"content": json.dumps(self.payload)}}]}
+        with patch.object(harness_agent, "call_api", return_value=ok) as call:
+            agent_drafts.generate_draft("make a routine", "sid")
+        self.assertEqual(call.call_args.kwargs["reasoning_effort"], "low")
+
+        def rejecting(*args, **kwargs):
+            if kwargs.get("reasoning_effort"):
+                harness_agent._set_api_failure("status")
+                return None
+            return ok
+
+        with patch.object(harness_agent, "call_api", side_effect=rejecting) as call:
+            draft = agent_drafts.generate_draft("make a routine", "sid")
+        self.assertEqual(draft["name"], "test-routine")
+        self.assertIsNone(call.call_args.kwargs["reasoning_effort"])
+
+    def test_generator_reports_budget_spent_on_reasoning(self):
+        import harness_agent
+
+        response = {"choices": [{"message": {"content": "", "reasoning_content": "thinking " * 50}, "finish_reason": "length"}],
+                    "usage": {"completion_tokens": 24000}}
+        with patch.object(harness_agent, "call_api", return_value=response):
+            with self.assertRaises(ValueError) as caught:
+                agent_drafts.generate_draft("make a routine", "sid")
+        self.assertIn("reasoning", str(caught.exception))
+        saved = next((self.root / "data/agent_drafts/_failed").glob("*.txt")).read_text()
+        self.assertIn("reasoning_length: 450", saved)
+        self.assertIn('"completion_tokens": 24000', saved)
+
+    def test_discard_cancels_dry_run_and_records_discard(self):
+        from web_routes import agents as routes
+
+        draft = agent_drafts.store_draft(self.payload, "session", "intent")
+
+        class Run:
+            def __init__(self):
+                import threading
+                self.cancel_event = threading.Event()
+                self.waiters_cancelled = False
+
+            def cancel_waiters(self):
+                self.waiters_cancelled = True
+
+        run = Run()
+        routes._draft_dry_runs[draft["draft_id"]] = run
+        self.addCleanup(routes._draft_dry_runs.clear)
+        with patch.object(routes.web_helpers, "_emit_session_event") as emit:
+            result = routes.discard_draft(draft["draft_id"])
+        self.assertTrue(result["cancelled_dry_run"])
+        self.assertTrue(run.cancel_event.is_set())
+        self.assertTrue(run.waiters_cancelled)
+        self.assertTrue(emit.call_args.args[2]["discarded"])
+        with self.assertRaises(ValueError):
+            agent_drafts.draft_path(draft["draft_id"])
+
+    def test_save_route_records_saved_draft(self):
+        from web_routes import agents as routes
+
+        draft = agent_drafts.store_draft(self.payload, "session", "intent")
+        with patch.object(routes.web_helpers, "_emit_session_event") as emit:
+            routes.save_draft(draft["draft_id"], routes.DraftSave())
+        self.assertTrue(emit.call_args.args[2]["saved"])
+
     def test_file_editing_desktop_and_conflict_guards(self):
         draft = agent_drafts.store_draft(self.payload, "session", "intent")
         agent_drafts.save_draft(draft["draft_id"])

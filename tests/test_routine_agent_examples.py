@@ -209,6 +209,25 @@ class PreflightTests(unittest.TestCase):
         self.assertFalse(check["ok"])
         self.assertIn("unset environment variable", check["message"])
 
+    def test_configured_env_feeds_checks_and_real_env_wins(self):
+        import agent_preflight
+        import utils
+
+        with tempfile.TemporaryDirectory() as tmp:
+            launcher = Path(tmp) / "tool.sh"
+            launcher.write_text("#!/bin/sh")
+            profile = AgentProfile(name="z", path=Path("/tmp/z-agent"),
+                                   requires=({"env": "MH_TEST_CFG_TOOL"}, {"file": "${MH_TEST_CFG_TOOL}"}))
+            config = dict(utils.CONFIG, agent=dict(utils.CONFIG.get("agent") or {},
+                          routine_agents={"env": {"MH_TEST_CFG_TOOL": str(launcher), "MH_TEST_BLANK": ""}}))
+            with patch.object(utils, "CONFIG", config), patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("MH_TEST_CFG_TOOL", None)
+                checks = agent_preflight.preflight(profile, fresh=True)
+                self.assertTrue(all(c["ok"] for c in checks), checks)
+                self.assertNotIn("MH_TEST_BLANK", agent_preflight.agent_env())
+                os.environ["MH_TEST_CFG_TOOL"] = "/real/value"
+                self.assertEqual(agent_preflight.agent_env()["MH_TEST_CFG_TOOL"], "/real/value")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,9 @@ from datetime import datetime, timezone
 import agent_profiles
 
 _lock = threading.RLock()
+DRAFT_MAX_TOKENS = 24000
+DRAFT_TIMEOUT_S = 300
+DRAFT_REASONING_EFFORT = 'low'
 
 
 def draft_root():
@@ -79,28 +82,72 @@ def generate_draft(intent, session_id, previous=None, feedback=''):
               '"files":{"run.py":"..."},"example_params":{...}}. Do not execute code or write installed agents. '
               'Use the helper API (myharness_agent). Keep the example parameters safe for a dry run.\n' + spec)
     user = json.dumps({'intent': intent, 'examples': examples, 'skills': skills, 'previous_draft': previous, 'feedback': feedback}, ensure_ascii=False)
-    response = agent.call_api([{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
-                              tools=None, model=utils.WRITE_MODEL, max_tokens=16000, timeout=120)
-    if not response:
-        raise ValueError('The model call failed. Check the native provider and try again.')
-    content = response['choices'][0]['message'].get('content', '') or ''
-    return store_draft(parse_model_json(content), session_id, intent, previous.get('draft_id', '') if previous else '')
+    messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]
+    def request(effort):
+        return agent.call_api(messages, tools=None, model=utils.WRITE_MODEL, max_tokens=DRAFT_MAX_TOKENS,
+                              timeout=DRAFT_TIMEOUT_S, reasoning_effort=effort)
+    response = request(DRAFT_REASONING_EFFORT)
+    if not response and agent._get_api_failure() == 'status':
+        # Some gateways reject the reasoning field; retry the plain request.
+        response = request(None)
+    if not response or not response.get('choices'):
+        raise ValueError('The model request failed (' + str(agent._get_api_failure() or 'no response') + '). Check the native provider and try again.')
+    choice = response['choices'][0]
+    message_obj = choice.get('message') or {}
+    content = message_obj.get('content', '') or ''
+    try:
+        payload = parse_model_json(content)
+    except ValueError as exc:
+        reasoning = message_obj.get('reasoning_content') or message_obj.get('reasoning') or ''
+        saved = _save_failed_response(content, choice.get('finish_reason'), reasoning, response.get('usage'))
+        if choice.get('finish_reason') == 'length' and not content.strip():
+            message = (f'The model spent the whole {DRAFT_MAX_TOKENS}-token output limit reasoning and returned no draft. '
+                       'Try again, or set models.write to a model that reasons less.')
+        elif choice.get('finish_reason') == 'length':
+            message = f'The draft was cut off at the {DRAFT_MAX_TOKENS}-token output limit. Ask for a smaller agent or try again.'
+        elif not content.strip():
+            message = 'The model returned an empty reply. Try again or rephrase the intent.'
+        else:
+            message = str(exc)
+        raise ValueError(message + (f' Raw reply saved to {saved}.' if saved else '')) from None
+    return store_draft(payload, session_id, intent, previous.get('draft_id', '') if previous else '')
+
+
+def _save_failed_response(content, finish_reason, reasoning='', usage=None):
+    """Keep an unparsable reply for diagnosis; never let this hide the real error."""
+    try:
+        folder = draft_root() / '_failed'; folder.mkdir(parents=True, exist_ok=True)
+        path = folder / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '_' + uuid.uuid4().hex[:6] + '.txt')
+        header = f'finish_reason: {finish_reason}\nlength: {len(content)}\nreasoning_length: {len(str(reasoning))}\nusage: {json.dumps(usage or {})}\n'
+        tail = f'\n--- reasoning (last 4000 chars) ---\n{str(reasoning)[-4000:]}' if reasoning else ''
+        path.write_text(f'{header}\n{content}{tail}', encoding='utf-8')
+        return str(path)
+    except Exception:
+        return ''
 
 
 def parse_model_json(content):
-    """Models often wrap JSON in a Markdown fence or add a sentence around it."""
+    """Models often wrap JSON in a Markdown fence, add a sentence around it, or put
+    raw newlines inside long code strings (strict JSON forbids them)."""
     import re
     text = str(content).strip()
-    fenced = re.search(r'```(?:json)?\s*\n(.*?)\n```', text, re.S)
-    if fenced: text = fenced.group(1).strip()
-    try: return json.loads(text)
-    except ValueError: pass
-    start = text.find('{')
-    if start >= 0:
+    candidates = [text]
+    candidates += [m.group(1).strip() for m in re.finditer(r'```(?:json)?[ \t]*\n(.*?)\n```', text, re.S)]
+    # A greedy fence survives inner ``` fences inside AGENT.md text.
+    greedy = re.search(r'```(?:json)?[ \t]*\n(.*)\n```', text, re.S)
+    if greedy: candidates.append(greedy.group(1).strip())
+    decoder = json.JSONDecoder(strict=False)
+    for candidate in candidates:
         try:
-            value, _ = json.JSONDecoder().raw_decode(text[start:])
-            return value
+            value = json.loads(candidate, strict=False)
+            if isinstance(value, dict): return value
         except ValueError: pass
+        start = candidate.find('{')
+        if start >= 0:
+            try:
+                value, _ = decoder.raw_decode(candidate[start:])
+                if isinstance(value, dict): return value
+            except ValueError: pass
     raise ValueError('The model did not return a JSON agent draft. Try again or rephrase the intent.')
 
 

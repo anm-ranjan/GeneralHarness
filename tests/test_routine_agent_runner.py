@@ -40,7 +40,13 @@ print(json.dumps({'wj':'result','summary':'Done','table':{'columns':['A'],'rows'
         self.assertEqual(result['status'],'completed'); self.assertEqual(len(result['items']),1)
         self.assertEqual(result['items'][0]['status'],'ok'); self.assertIn('stderr',result['log_tail'])
         self.assertEqual(events[-1][1]['table']['rows'],[[1]])
+        self.assertEqual(result['result']['table'],{'columns':['A'],'rows':[[1]]})
         self.assertEqual(len({d['tool_call_id'] for _,d in events}),1)
+    def test_configured_env_reaches_the_script(self):
+        import utils
+        with patch.object(utils, 'CONFIG', dict(utils.CONFIG, agent=dict(utils.CONFIG.get('agent') or {}, routine_agents={'env': {'MH_TEST_CFG_VAR': 'from-config'}}))):
+            result, _ = self.run_script("import os; assert os.environ['MH_TEST_CFG_VAR']=='from-config'")
+        self.assertEqual(result['status'], 'completed')
     def test_exit_after_last_in_loop_check_still_completes(self):
         # The process exits after the loop's last in-loop check saw it running,
         # then the loop ends on its own condition. Report "running" until the

@@ -274,10 +274,21 @@ if the user should be asked about it.
   allowlist is enforced both when tools are offered and when they run,
   subagents included; `run_agent_script` follows shell approval rules. Readiness
   checks (`agent_preflight.py`) are cached 30 s; starting a run re-checks.
+  `agent.routine_agents.env` in the config adds machine-specific environment
+  variables to checks and runs (real environment variables win). The runner
+  passes the result table (first 50 rows) to the run's model.
   `@name request` in any session starts an independent run, even while the
   session is busy; the parent shows a display-only card (`agent_run_link`).
   `/create_agent <intent>` drafts files in `data/agent_drafts/` for review;
   nothing is installed automatically, and draft dry runs always ask approval.
+  Draft requests ask for low reasoning effort; unparsable replies are kept in
+  `data/agent_drafts/_failed/`. Saving or discarding a draft is recorded as an
+  `agent_draft` event with `saved`/`discarded`, and discarding stops its dry
+  run. Agent pages archive finished runs with Clear (Undo offered), and the
+  Agents sidebar deletes user agents. Workspace > Agents
+  (`AgentsHelpPanel.jsx`) lists agents and their parameters; on an agent's
+  page the session-bound Workspace tabs stay empty unless the open session
+  started one of that agent's runs (Notes keeps Scratch only).
   Events `agent_run_progress`, `agent_run_item`, `agent_run_result`,
   `agent_run_link` and `agent_draft` are persisted but never model history;
   `session_updated` on the global stream carries `agent_last_result`. Frontend
@@ -378,6 +389,7 @@ if the user should be asked about it.
 | POST | `/api/workspace/git/stage`, `/api/workspace/git/commit` | Git writes, opt-in |
 | GET | `/api/agents` | Routine-agent catalog with readiness |
 | GET | `/api/agents/{name}`, `/api/agents/{name}/preflight` | Definition and dependency checks |
+| DELETE | `/api/agents/{name}` | Delete a user agent (under `data/agents/`) and its runs; 409 while a run is active, 400 for bundled agents; the definition is backed up to `data/agent_backups/<name>/` |
 | POST | `/api/agents/{name}/options/{param}` | Script-listed choices (`options_from: script`) |
 | POST | `/api/agents/{name}/runs` | Start a native run (text and/or params; optional parent/cwd/dry_run) |
 | GET/PUT | `/api/agents/{name}/files/{path}` | Read/edit definition files; desktop-only save with base_hash |

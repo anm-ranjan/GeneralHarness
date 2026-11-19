@@ -110,6 +110,8 @@ requires:
   - {python: '3.13', arch: x64}
 ```
 
+`env` and `file` checks, and the run's environment, include `agent.routine_agents.env` from `agent_config.yaml` (machine-specific values such as tool install paths); a variable set in the real process environment takes precedence.
+
 ## Bundled examples
 
 - `folder-summary`: file counts, sizes, common types and largest files of one or more folders. Read-only, with a dry run.

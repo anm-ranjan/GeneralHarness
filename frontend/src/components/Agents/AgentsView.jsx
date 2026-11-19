@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useApp } from '../../context/AppContext'
 import useAgentProfiles from '../../hooks/useAgentProfiles'
+import useSessionTree from '../../hooks/useSessionTree'
+import { api, listAgents } from '../../api'
+import { errorLines } from '../../agentUi'
 import SessionItem from '../Sidebar/SessionItem'
 import { runDisplayStatus, statusInfo } from '../../agentUi'
 
@@ -24,7 +27,34 @@ function runSubtitle(run, liveState, sessionsById) {
 
 function AgentNode({ profile, runs, collapsed, onToggle, filtering, rowProps }) {
   const { state, dispatch } = useApp()
+  const { loadTree } = useSessionTree()
   const [showAll, setShowAll] = useState(false)
+  const allRuns = Object.values(state.sessionsById).filter(s => s.kind === 'agent_run' && s.agent === profile.name).length
+
+  async function deleteAgent() {
+    try {
+      await api('DELETE', `/api/agents/${encodeURIComponent(profile.name)}`)
+      if (state.agentHome === profile.name) dispatch({ type: 'CLOSE_AGENT_HOME' })
+      dispatch({ type: 'SET_AGENT_PROFILES', payload: await listAgents() })
+      await loadTree()
+    } catch (e) {
+      dispatch({ type: 'OPEN_CONFIRM', payload: { title: 'Agent not deleted', message: errorLines(e).join(' '), detail: profile.name, confirmLabel: 'OK' } })
+    }
+  }
+
+  function confirmDelete() {
+    dispatch({
+      type: 'OPEN_CONFIRM',
+      payload: {
+        title: 'Delete agent?',
+        message: `This removes the ${profile.name} agent definition${allRuns ? ` and its ${allRuns} run${allRuns === 1 ? '' : 's'} (transcripts and sandbox files)` : ''}. A copy of the definition is kept under data/agent_backups/.`,
+        detail: profile.name,
+        confirmLabel: 'Delete',
+        tone: 'danger',
+        onConfirm: deleteAgent,
+      },
+    })
+  }
   const blocked = profile.errors.length > 0 || profile.ready === false
   const isHome = state.agentHome === profile.name
   const containsCurrent = runs.some(r => r.id === state.currentSessionId)
@@ -64,6 +94,13 @@ function AgentNode({ profile, runs, collapsed, onToggle, filtering, rowProps }) 
           title={`New ${profile.name} run`}
           aria-label={`New ${profile.name} run`}
         >+</button>
+        {profile.source === 'user' && <button
+          type="button"
+          onClick={confirmDelete}
+          className="shrink-0 px-0.5 text-[11px] text-faint opacity-0 transition-opacity hover:text-danger group-hover:opacity-100 group-focus-within:opacity-100"
+          title={`Delete ${profile.name}`}
+          aria-label={`Delete agent ${profile.name}`}
+        >✕</button>}
       </div>
       {open && (
         <div className="mt-0.5">

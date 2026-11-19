@@ -499,6 +499,10 @@ class RemoteCliApp:
             print(f"Approval {approved}.")
         elif event_type == "context_usage":
             print(f"Context: {data.get('usage_str', '')}")
+        elif event_type == "agent_draft" and data.get("saved"):
+            print(f"Agent draft {data.get('name')} saved.")
+        elif event_type == "agent_draft" and data.get("discarded"):
+            print(f"Agent draft {data.get('name')} discarded.")
         elif event_type == "agent_draft":
             print(f"Agent draft {data.get('name')}: {data.get('draft_id')} "
                   f"({len(data.get('errors') or [])} validation errors). Review in the web UI.")

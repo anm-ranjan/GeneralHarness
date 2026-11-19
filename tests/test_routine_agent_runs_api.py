@@ -91,6 +91,40 @@ class AgentRunApiTests(unittest.TestCase):
         self.store.delete_session(meta.project_id, meta.task_id, meta.id)
         self.assertFalse(Path(meta.working_directory).exists())
 
+    def test_delete_agent_removes_user_definition_and_runs_with_backup(self):
+        import shutil
+        from web_routes.agents import delete_agent
+
+        user = self.root / "data" / "agents"
+        shutil.copytree(self.root / "definitions" / "fixture-agent", user / "user-agent")
+        md = user / "user-agent" / "AGENT.md"
+        md.write_text(md.read_text().replace("name: fixture-agent", "name: user-agent"))
+        run = asyncio.run(start_agent_run("user-agent", StartAgentRun(params={})))
+        web_app._manager.start_run(run["id"])
+        with self.assertRaises(HTTPException) as caught:
+            delete_agent("user-agent")
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertTrue((user / "user-agent").is_dir())
+        web_app._manager.end_run(run["id"])
+        result = delete_agent("user-agent")
+        self.assertFalse((user / "user-agent").exists())
+        self.assertTrue((Path(result["backup"]) / "AGENT.md").is_file())
+        self.assertEqual(result["removed_sessions"], [run["id"]])
+        self.assertIsNone(self.store.load_session(run["id"]))
+        self.assertEqual(self.store.list_sessions(AGENTS_PROJECT_ID, "user-agent"), [])
+        self.assertIsNone(agent_profiles.get_profile("user-agent"))
+        with self.assertRaises(HTTPException) as caught:
+            delete_agent("user-agent")
+        self.assertEqual(caught.exception.status_code, 404)
+
+    def test_bundled_agent_cannot_be_deleted(self):
+        from web_routes.agents import delete_agent
+
+        with self.assertRaises(HTTPException) as caught:
+            delete_agent("fixture-agent")
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertTrue((self.root / "definitions" / "fixture-agent" / "AGENT.md").is_file())
+
     def test_form_validation_and_cwd(self):
         with self.assertRaises(HTTPException) as caught:
             asyncio.run(start_agent_run("fixture-agent", StartAgentRun(params={"mode": "bogus"})))

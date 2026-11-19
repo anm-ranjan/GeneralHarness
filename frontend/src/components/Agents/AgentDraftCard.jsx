@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../../api'
 import { useApp } from '../../context/AppContext'
 import { errorLines } from '../../agentUi'
@@ -11,8 +11,19 @@ export default function AgentDraftCard({ draft }) {
   const [error, setError] = useState('')
   const [feedback, setFeedback] = useState('')
   const [busy, setBusy] = useState('')
-  const [saved, setSaved] = useState(false)
-  const [discarded, setDiscarded] = useState(false)
+  const [savedHere, setSaved] = useState(false)
+  const saved = savedHere || !!draft.saved
+  const [discardedHere, setDiscarded] = useState(false)
+  const discarded = discardedHere || !!draft.discarded
+
+  // A replayed card may outlive its draft (discarded before discards were
+  // recorded in the session): check once, and show it as discarded.
+  useEffect(() => {
+    if (draft.discarded || draft.saved) return
+    let live = true
+    api('GET', `/api/agent-drafts/${draft.draft_id}`).catch(e => { if (live && e.status === 404) setDiscarded(true) })
+    return () => { live = false }
+  }, [draft.draft_id, draft.discarded, draft.saved])
   const [replace, setReplace] = useState(false)
 
   async function action(name, body = {}) {
@@ -22,7 +33,11 @@ export default function AgentDraftCard({ draft }) {
       if (name === 'save') { setSaved(true); dispatch({ type: 'SET_AGENT_PROFILES', payload: await api('GET', '/api/agents') }) }
       if (name === 'revise') { setFeedback(''); dispatch({ type: 'UPSERT_AGENT_DRAFT', payload: data }) }
       if (name === 'discard') setDiscarded(true)
-    } catch (e) { setError(errorLines(e).join(' ')) } finally { setBusy('') }
+    } catch (e) {
+      // Already gone: the draft was discarded elsewhere or earlier.
+      if (e.status === 404) setDiscarded(true)
+      else setError(errorLines(e).join(' '))
+    } finally { setBusy('') }
   }
 
   const invalid = draft.errors.length > 0
@@ -38,7 +53,13 @@ export default function AgentDraftCard({ draft }) {
         </div>
         <StatusPill status={status[0]} label={status[1]} />
       </div>
-      {!discarded && <>
+      {saved && !discarded && (
+        <p className="text-[12.5px] text-faint">
+          Installed. Start it with <code className="font-mono">@{draft.name} …</code> or{' '}
+          <button type="button" className="text-accent hover:underline" onClick={() => dispatch({ type: 'OPEN_AGENT_HOME', payload: draft.name })}>open its page</button>.
+        </p>
+      )}
+      {!discarded && !saved && <>
         <div role="tablist" aria-label="Draft files" className="flex flex-wrap gap-1 border-b border-line">
           {Object.keys(draft.files).map(f => (
             <button role="tab" aria-selected={file === f} key={f} onClick={() => setFile(f)}

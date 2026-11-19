@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import threading
@@ -14,6 +15,41 @@ from urllib.request import urlopen
 CACHE_SECONDS = 30
 _cache = {}
 _cache_lock = threading.Lock()
+
+
+def configured_env():
+    """`agent.routine_agents.env` from agent_config.yaml as {name: value} strings.
+
+    Machine-specific settings (tool install paths and similar) belong in the
+    gitignored config rather than in tracked AGENT.md files. Values may use
+    environment variables themselves (e.g. $HOME).
+    """
+    try:
+        import utils
+        raw = utils.nested_get(utils.CONFIG, ['agent', 'routine_agents', 'env'], {}) or {}
+    except Exception:
+        return {}
+    if not isinstance(raw, dict): return {}
+    return {str(k): os.path.expandvars(str(v)) for k, v in raw.items() if str(k).strip() and v is not None and str(v).strip()}
+
+
+def agent_env(base=None):
+    """The environment agent checks and runs see: configured values under real ones.
+
+    A variable already set in the process environment wins over the config file.
+    """
+    env = dict(os.environ if base is None else base)
+    for key, value in configured_env().items():
+        if not env.get(key): env[key] = value
+    return env
+
+
+_VAR = re.compile(r'\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)|%([^%]+)%')
+
+
+def expand_vars(text, env):
+    """os.path.expandvars against `env`: ${VAR}, $VAR and %VAR%; unknown ones stay."""
+    return _VAR.sub(lambda m: env.get(next(g for g in m.groups() if g), m.group(0)) or m.group(0), str(text))
 
 
 def _cache_key(profile):
@@ -36,6 +72,7 @@ def preflight(profile, fresh=False):
 
 def _run_checks(profile):
     checks=[]
+    env=agent_env()
     current={'darwin':'macos','win32':'windows'}.get(sys.platform,'linux')
     if profile.platform:
         checks.append({'check':{'platform':list(profile.platform)},'ok':current in profile.platform,'message':f'Platform: {current}; supported: {", ".join(profile.platform)}'})
@@ -49,9 +86,9 @@ def _run_checks(profile):
                 response=subprocess.run([profile.python or sys.executable,'-c',code,name],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=3,text=True)
                 ok=response.returncode==0;message=f'Python module {name}: '+('available' if ok else 'not importable by the agent interpreter')
             elif 'env' in check:
-                ok=bool(os.environ.get(check['env']));message=f"Environment variable {check['env']}: "+('set' if ok else 'missing')
+                ok=bool(env.get(check['env']));message=f"Environment variable {check['env']}: "+('set' if ok else 'missing')
             elif 'file' in check:
-                value=os.path.expandvars(check['file'])
+                value=expand_vars(check['file'],env)
                 if '$' in value or '%' in value:
                     # The env check reports the unset variable; do not echo an unexpanded path.
                     ok=False;message=f"File {check['file']}: path depends on an unset environment variable"

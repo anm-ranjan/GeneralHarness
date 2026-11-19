@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { errorLines, fieldLabel, humanize, itemCounts, runDisplayStatus, splitFieldErrors, statusInfo } from './agentUi.js'
+import { errorLines, fieldLabel, humanize, isRunActive, itemCounts, paramSummary, runDisplayStatus, splitFieldErrors, statusInfo } from './agentUi.js'
 
 test('labels fall back to a readable parameter name', () => {
   assert.equal(humanize('timeout_per_model'), 'Timeout per model')
@@ -33,4 +33,14 @@ test('item counts read naturally', () => {
   assert.equal(itemCounts({ items_total: 4, items_ok: 2, items_failed: 1 }), '2 ok · 1 failed · 1 other')
   assert.equal(itemCounts({ items_total: 2, items_ok: 2, items_failed: 0 }), '2 ok')
   assert.equal(itemCounts(null), '')
+})
+
+test('parameter summaries and active runs for the agents reference and Clear', () => {
+  assert.equal(paramSummary({ type: 'paths', kind: 'dir', required: true, label: 'Run folders' }), 'Run folders · list of folders, required')
+  assert.equal(paramSummary({ type: 'float', default: 2, min: 0, max: 60 }), 'float, default 2, 0–60')
+  assert.equal(paramSummary({ type: 'enum', options: ['any', 'R'], default: 'any' }), 'any | R, default any')
+  assert.equal(paramSummary({ type: 'path', kind: 'file' }), 'file')
+  assert.equal(isRunActive('running', {}), true)
+  assert.equal(isRunActive('idle', { status: 'idle' }), false)
+  assert.equal(isRunActive(undefined, { status: 'running' }), true)
 })

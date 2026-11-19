@@ -33,3 +33,19 @@ export function validate(params, values) {
   }
   return errors
 }
+
+// Unsent agent-form entries, kept per agent for this window only so leaving an
+// agent's page (to a session or another agent) does not lose them. A reload
+// starts again from the agent's current defaults.
+const drafts = new Map()
+export function saveAgentDraft(name, draft) { drafts.set(name, draft) }
+export function clearAgentDraft(name) { drafts.delete(name) }
+// Saved values for parameters the agent still has, over its current defaults.
+export function restoreAgentDraft(name, params = {}) {
+  const defaults = initialValues(params)
+  const saved = drafts.get(name)
+  if (!saved) return { values: defaults, text: '' }
+  const values = { ...defaults }
+  for (const key of Object.keys(defaults)) if (Object.hasOwn(saved.values || {}, key)) values[key] = saved.values[key]
+  return { values, text: typeof saved.text === 'string' ? saved.text : '' }
+}

@@ -3,8 +3,8 @@ import { useApp } from '../../context/AppContext'
 import { api, getAgent, startAgentRun } from '../../api'
 import useSelectSession from '../../hooks/useSelectSession'
 import useSessionTree from '../../hooks/useSessionTree'
-import { initialValues, validate, toRequest } from '../../agentForm'
-import { errorLines, formChanged, splitFieldErrors } from '../../agentUi'
+import { clearAgentDraft, initialValues, restoreAgentDraft, saveAgentDraft, validate, toRequest } from '../../agentForm'
+import { errorLines, formChanged, isRunActive, splitFieldErrors } from '../../agentUi'
 import FileEditor from '../Workspace/FileEditor'
 import { isDesktopApp } from '../../desktop'
 import AgentForm from './AgentForm'
@@ -22,6 +22,7 @@ export default function AgentHome({ name }) {
   const [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState(null)
   const [checks, setChecks] = useState(null)
+  const [cleared, setCleared] = useState(null)  // { ids, error } after Clear, for Undo
 
   useEffect(() => {
     let active = true
@@ -36,15 +37,39 @@ export default function AgentHome({ name }) {
     let active = true
     setProfile(null); setLoadError(''); setText(''); setErrors({ fields: {}, general: [] })
     getAgent(name)
-      .then(p => { if (active) { setProfile(p); setValues(initialValues(p.params)) } })
+      .then(p => {
+        if (!active) return
+        const draft = restoreAgentDraft(name, p.params)
+        setProfile(p); setValues(draft.values); setText(draft.text)
+      })
       .catch(e => { if (active) setLoadError(errorLines(e).join(' ')) })
     return () => { active = false }
   }, [name])
 
+  // Keep unsent entries while the user visits other sessions or agents.
+  const loaded = profile !== null
+  useEffect(() => { if (loaded) saveAgentDraft(name, { values, text }) }, [loaded, name, values, text])
+
   const initial = useMemo(() => profile ? toRequest(profile.params, initialValues(profile.params)) : {}, [profile])
   const runs = useMemo(() => Object.values(state.sessionsById)
-    .filter(s => s.kind === 'agent_run' && s.agent === name)
+    .filter(s => s.kind === 'agent_run' && s.agent === name && !s.archived)
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)), [state.sessionsById, name])
+
+  const finishedRuns = runs.filter(r => !isRunActive(state.runStates[r.id], r))
+
+  async function clearRuns() {
+    const ids = finishedRuns.map(r => r.id)
+    const results = await Promise.allSettled(ids.map(id => tree.updateSession(id, { archived: true })))
+    const done = ids.filter((_, i) => results[i].status === 'fulfilled')
+    const failed = results.length - done.length
+    setCleared({ ids: done, error: failed ? `${done.length} archived, ${failed} could not be archived.` : '' })
+  }
+
+  async function undoClear() {
+    const ids = cleared?.ids || []
+    setCleared(null)
+    await Promise.allSettled(ids.map(id => tree.updateSession(id, { archived: false })))
+  }
 
   if (loadError) return <section className="flex-1 overflow-y-auto p-8"><div className="mx-auto max-w-3xl"><p className="text-[13px] text-faint">Agents</p><h1 className="mt-1 font-display text-3xl text-text-bright">{name}</h1><p role="alert" className="mt-4 rounded-lg border border-danger/40 bg-danger-soft p-3 text-[13px] text-danger">{loadError}</p></div></section>
   if (!profile) return <div className="p-8 text-[13px] text-faint">Loading agent…</div>
@@ -82,6 +107,7 @@ export default function AgentHome({ name }) {
     setBusy(true); setErrors({ fields: {}, general: [] })
     try {
       const meta = await startAgentRun(name, { text, ...(sendForm ? { params: current } : {}), dry_run: dry })
+      if (!dry) { clearAgentDraft(name); setValues(initialValues(profile.params)); setText('') }
       await tree.loadTree(); await selectSession(meta.id); dispatch({ type: 'SET_SIDEBAR_VIEW', payload: 'agents' })
     } catch (e) {
       setErrors(splitFieldErrors(errorLines(e), profile.params))
@@ -139,7 +165,8 @@ export default function AgentHome({ name }) {
             <div className="mt-5 flex flex-wrap items-center gap-3">
               <button type="button" disabled={!canStart} onClick={() => start(false)} className="rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-bg transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">{busy ? 'Starting…' : 'Start run'}</button>
               {profile.dry_run && <button type="button" disabled={!canStart} onClick={() => start(true)} className="rounded-lg border border-line px-4 py-2 text-[13px] text-text-default transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40">Dry run</button>}
-              {readiness === 'checking' && <span className="text-[12px] text-faint">Checking requirements…</span>}
+              {(text || formChanged(initial, current)) && <button type="button" disabled={busy} onClick={() => { clearAgentDraft(name); setValues(initialValues(profile.params)); setText(''); setErrors({ fields: {}, general: [] }) }} className="text-[12.5px] text-muted transition-colors hover:text-accent disabled:opacity-40">Reset form</button>}
+                            {readiness === 'checking' && <span className="text-[12px] text-faint">Checking requirements…</span>}
               {readiness === 'not_ready' && <span className="text-[12px] text-warn">Fix the requirements above to start a run.</span>}
               {readiness === 'invalid' && <span className="text-[12px] text-danger">Fix the definition to start a run.</span>}
             </div>
@@ -156,7 +183,19 @@ export default function AgentHome({ name }) {
         </div>
 
         <aside className="min-w-0 lg:sticky lg:top-0 lg:self-start">
-          <h2 className="mb-1 text-[15px] font-medium text-text-bright">Recent runs</h2>
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <h2 className="text-[15px] font-medium text-text-bright">Recent runs</h2>
+            {finishedRuns.length > 0 && (
+              <button type="button" onClick={clearRuns} title="Archive this agent's finished runs. They stay in the sidebar's Archived group; running runs are kept."
+                className="text-[12.5px] text-muted transition-colors hover:text-accent">Clear</button>
+            )}
+          </div>
+          {cleared && (
+            <p className="mb-2 text-[12px] text-faint">
+              {cleared.error || `${cleared.ids.length} run${cleared.ids.length === 1 ? '' : 's'} archived.`}{' '}
+              {cleared.ids.length > 0 && <button type="button" onClick={undoClear} className="text-accent hover:underline">Undo</button>}
+            </p>
+          )}
           <RecentAgentRuns runs={runs} sessions={state.sessionsById} onSelect={selectSession} />
         </aside>
       </div>

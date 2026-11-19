@@ -48,6 +48,37 @@ def get_agent(name: str):
     return _profile(name).public(detail=True)
 
 
+@router.delete('/api/agents/{name}')
+def delete_agent(name: str):
+    """Remove an agent definition and its runs. The definition is backed up first."""
+    import shutil
+    from datetime import datetime, timezone
+    from pathlib import Path
+    profile = _profile(name)
+    with _creation_lock:
+        run_ids = [s.id for s in web_app._store.list_sessions() if s.kind == 'agent_run' and s.agent == name]
+        active = [sid for sid in run_ids if web_app._manager.get_active_run(sid)]
+        if active: raise HTTPException(409, 'Stop the running ' + name + ' run(s) before deleting the agent')
+        folder = Path(profile.path)
+        # Bundled examples ship with the checkout (and a sync restores them);
+        # only agents installed under data/agents can be deleted here.
+        root = agent_profiles.user_agents_root()
+        if folder.resolve().parent == agent_profiles.agents_root() and root != agent_profiles.agents_root():
+            raise HTTPException(400, 'Bundled agents ship with the app and cannot be deleted')
+        if folder.is_symlink() or folder.resolve().parent != root: raise HTTPException(400, 'Agent folder is outside the agents directory')
+        backup = Path(web_app._DATA_DIR)/'agent_backups'/name/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(folder, backup)
+        shutil.rmtree(folder)
+        removed = web_app._store.delete_agent_runs(name)
+    from web_ui_adapter import _file_snapshots
+    for sid in removed:
+        web_app._session_messages.pop(sid, None)
+        _file_snapshots.pop(sid, None)
+        web_app._discard_run_lock(sid)
+    return {'status': 'deleted', 'backup': str(backup), 'removed_sessions': removed}
+
+
 @router.post('/api/agents/{name}/runs')
 async def start_agent_run(name: str, req: StartAgentRun):
     from web_routes.runs import send_message
@@ -138,19 +169,32 @@ async def revise_draft(draft_id: str, req: DraftRevision):
 @router.post('/api/agent-drafts/{draft_id}/save')
 def save_draft(draft_id: str, req: DraftSave):
     import agent_drafts
-    _draft(draft_id)
-    try: return agent_drafts.save_draft(draft_id, req.replace)
+    draft = _draft(draft_id)
+    try: profile = agent_drafts.save_draft(draft_id, req.replace)
     except FileExistsError as exc: raise HTTPException(409, str(exc))
     except ValueError as exc: raise HTTPException(400, str(exc))
+    # Persist the outcome so a replayed card shows it as saved.
+    web_helpers._emit_session_event(draft['session_id'], EventType.AGENT_DRAFT, {**draft, 'saved': True})
+    return profile
+
+
+# Dry runs in flight, by draft, so discarding a draft can stop its run.
+_draft_dry_runs = {}
 
 
 @router.delete('/api/agent-drafts/{draft_id}')
 def discard_draft(draft_id: str):
     import agent_drafts
     import shutil
-    _draft(draft_id)
-    shutil.rmtree(agent_drafts.draft_path(draft_id))
-    return {'status': 'discarded'}
+    draft = _draft(draft_id)
+    run = _draft_dry_runs.get(draft_id)
+    if run is not None:
+        run.cancel_event.set()
+        run.cancel_waiters()
+    shutil.rmtree(agent_drafts.draft_path(draft_id), ignore_errors=True)
+    # Persist the outcome so a replayed card shows it as discarded.
+    web_helpers._emit_session_event(draft['session_id'], EventType.AGENT_DRAFT, {**draft, 'discarded': True})
+    return {'status': 'discarded', 'cancelled_dry_run': run is not None}
 
 
 @router.post('/api/agent-drafts/{draft_id}/dry-run')
@@ -169,6 +213,7 @@ def dry_run_draft(draft_id: str):
         if not meta: raise HTTPException(404, 'Draft session no longer exists')
         if web_app._manager.get_active_run(sid): raise HTTPException(409, 'Wait for the current run to finish')
         run = web_app._manager.start_run(sid)
+        _draft_dry_runs[draft_id] = run
         meta.status = 'running'; web_app._store.update_session(meta)
         web_app._manager.notify_run_state(sid, 'running')
     def worker():
@@ -183,11 +228,14 @@ def dry_run_draft(draft_id: str):
                     shutil.copytree(agent_drafts.draft_path(draft_id)/draft['name'], folder)
                     profile = agent_profiles.read_profile(folder)
                     output = run_agent_script(profile, draft['example_params'], True, cwd=web_helpers._workspace_root_for_session(meta), run_id=sid, cancel_event=run.cancel_event, emit=lambda typ, data: None)
-            draft['output'] = output
-            (agent_drafts.draft_path(draft_id)/'draft.json').write_text(json.dumps(draft,ensure_ascii=False),encoding='utf-8')
-            ui._emit(EventType.AGENT_DRAFT, draft)
+            draft_file = agent_drafts.draft_root()/draft_id/'draft.json'
+            if draft_file.is_file():  # Not discarded meanwhile.
+                draft['output'] = output
+                draft_file.write_text(json.dumps(draft,ensure_ascii=False),encoding='utf-8')
+                ui._emit(EventType.AGENT_DRAFT, draft)
         except Exception as exc: ui.show_error(str(exc))
         finally:
+            _draft_dry_runs.pop(draft_id, None)
             ui.show_agent_finished('interrupted' if run.cancel_event.is_set() else 'completed')
             _finish_run_and_start_next(sid)
     run.thread = threading.Thread(target=worker, daemon=True); run.thread.start()

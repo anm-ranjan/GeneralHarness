@@ -106,6 +106,14 @@ agent:
   max_concurrent_subagents: 3
   max_total_subagents: 12
   max_subagent_depth: 2
+  # Routine agents (agents/ and data/agents/). `env` sets machine-specific
+  # environment variables for agent pre-run checks and runs, so install paths
+  # stay out of the tracked AGENT.md files. A variable already set in the real
+  # environment wins. Values may reference other variables ($HOME). Restart
+  # the backend after changing them.
+  routine_agents:
+    env: {}
+      # MYHARNESS_EXAMPLE_TOOL: '$HOME/bin/tool'
 
 shell:
   default_timeout: 120

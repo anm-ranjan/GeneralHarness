@@ -173,6 +173,18 @@ pub fn render_event(event: &EventEnvelope, verbose_tools: bool) -> Option<Transc
             format!("Generated artifact: {}", text("path")),
         ),
         "compaction" => TranscriptEntry::new(EntryKind::Status, compaction_text(data, verbose_tools)),
+        "agent_draft" if data.get("discarded").and_then(Value::as_bool) == Some(true) => {
+            TranscriptEntry::new(
+                EntryKind::Status,
+                format!("Agent draft {} discarded", text("name")),
+            )
+        }
+        "agent_draft" if data.get("saved").and_then(Value::as_bool) == Some(true) => {
+            TranscriptEntry::new(
+                EntryKind::Status,
+                format!("Agent draft {} saved", text("name")),
+            )
+        }
         "agent_draft" => TranscriptEntry::new(
             EntryKind::Status,
             format!(
