@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -243,6 +244,8 @@ class CreateDirectoryRequest(BaseModel):
 class ApprovalResponse(BaseModel):
     approval_id: str
     approved: bool
+    # "turn": also allow the card's outside folders for the rest of this turn.
+    scope: Literal["", "turn"] = ""
 
 
 class QuestionResponse(BaseModel):

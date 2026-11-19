@@ -81,8 +81,11 @@ class CliUI:
         tool_name: str,
         args_json: str,
         diff_preview: str | None,
+        warning: str | None = None,
     ) -> bool:
         ui_panel("Approval required", f"Tool: {tool_name}", style="yellow")
+        if warning:
+            ui_panel("Outside allowed paths", warning, style="red")
         ui_code(truncate_output(args_json, 4000), "json")
         if diff_preview:
             ui_panel(

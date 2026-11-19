@@ -887,10 +887,10 @@ export function reducer(state, action) {
       return { ...state, iterationN: null, iterationMax: null }
 
     case 'RESOLVE_APPROVAL': {
-      const { approvalId, approved } = action.payload
+      const { approvalId, approved, scope } = action.payload
       const items = state.stageItems.map(item =>
         item.type === 'approval' && item.approvalId === approvalId
-          ? { ...item, resolved: approved ? 'approved' : 'denied' }
+          ? { ...item, resolved: approved ? (scope === 'turn' ? 'approved for this turn' : 'approved') : 'denied' }
           : item
       )
       return { ...state, stageItems: items }

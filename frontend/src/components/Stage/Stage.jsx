@@ -191,7 +191,7 @@ export default function Stage() {
   // every streamed delta.
   const sessionId = state.currentSessionId
   const handleApproval = useCallback(
-    (approvalId, approved) => respondApproval(sessionId, approvalId, approved),
+    (approvalId, approved, scope) => respondApproval(sessionId, approvalId, approved, scope),
     [respondApproval, sessionId],
   )
   const handleQuestion = useCallback(
@@ -235,6 +235,8 @@ export default function Stage() {
             sourceAgent={item.sourceAgent}
             argsJson={item.argsJson}
             diffPreview={item.diffPreview}
+            warning={item.warning}
+            allowFolders={item.allowFolders}
             resolved={item.resolved}
             onRespond={handleApproval}
           />

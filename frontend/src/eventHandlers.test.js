@@ -720,3 +720,14 @@ test('isAside recognises the command only at the start', async () => {
   // Not an idle-only slash command, so it can be sent mid-run.
   assert.equal(isSlashCommand('/aside why?'), false)
 })
+
+test('an outside-allowed-paths warning and its folders travel with the approval card', () => {
+  const ctx = collect()
+  handleSessionEvent({ type: 'approval_required', data: { approval_id: 'a1', tool_name: 'shell_run', warning: 'outside: /x', allow_folders: ['/x'] } }, ctx.dispatch, ctx.stateRef)
+  const card = ctx.actions.find(a => a.type === 'APPEND_STAGE_ITEM' && a.payload.type === 'approval')
+  assert.equal(card.payload.warning, 'outside: /x')
+  assert.deepEqual(card.payload.allowFolders, ['/x'])
+  const resolved = collect()
+  handleSessionEvent({ type: 'approval_resolved', data: { approval_id: 'a1', approved: true, scope: 'turn' } }, resolved.dispatch, resolved.stateRef)
+  assert.deepEqual(resolved.actions[0], { type: 'RESOLVE_APPROVAL', payload: { approvalId: 'a1', approved: true, scope: 'turn' } })
+})

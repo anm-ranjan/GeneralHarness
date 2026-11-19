@@ -34,6 +34,11 @@ permissions:
   # Absolute directories the agent may read and write. The setup installer fills
   # this in; an empty list falls back to the current working directory.
   allowed_paths: []
+  # Agent tools can never read, search or change agent_config.yaml (any copy),
+  # .env files in the application folder or the credential store
+  # (~/.myharness or MYHARNESS_CREDENTIALS_DIR), even inside allowed_paths.
+  # List further files or folders to protect here.
+  protected_paths: []
 
 memory:
   # Total context window (input + output). Native on OpenRouter takes it from
@@ -72,6 +77,10 @@ limits:
 search:
   max_results: 100
   rg_path: ""
+  # Wall-clock limit for one file_search/file_list/content_search scan. A scan of a
+  # whole drive or share stops here and returns partial results; Cancel and
+  # steering also stop a scan early.
+  walk_time_limit_seconds: 20
 
 web_fetch:
   # Native provider only. Only public HTTP(S) destinations are allowed, and

@@ -43,6 +43,7 @@ class AgentUI(typing.Protocol):
         tool_name: str,
         args_json: str,
         diff_preview: str | None,
+        warning: str | None = None,
     ) -> bool: ...
 
     def show_file_change(self, path: str, action: str, tool: str) -> None: ...

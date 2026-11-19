@@ -36,10 +36,11 @@ export default function useApi() {
     }
   }, [dispatch])
 
-  const respondApproval = useCallback(async (sessionId, approvalId, approved) => {
-    dispatch({ type: 'RESOLVE_APPROVAL', payload: { approvalId, approved } })
+  // scope 'turn' also allows the card's outside folders until the turn ends.
+  const respondApproval = useCallback(async (sessionId, approvalId, approved, scope = '') => {
+    dispatch({ type: 'RESOLVE_APPROVAL', payload: { approvalId, approved, scope } })
     try {
-      await api('POST', `/api/sessions/${encodeURIComponent(sessionId)}/approval`, { approval_id: approvalId, approved })
+      await api('POST', `/api/sessions/${encodeURIComponent(sessionId)}/approval`, { approval_id: approvalId, approved, scope })
     } catch (err) {
       dispatch({ type: 'APPEND_STAGE_ITEM', payload: { type: 'error', text: err.detail || err.message } })
     }

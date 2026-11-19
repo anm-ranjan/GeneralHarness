@@ -99,7 +99,9 @@ move between fields, `Enter` to advance or submit, and `Esc` to cancel. Opening
 the session dialog re-fetches backend health so provider availability stays
 current. Messages
 sent during an active run are queued. Approval
-prompts use `y` to approve, `n` to deny, or `c` to cancel the run. Deletion removes
+prompts use `y` to approve, `n` to deny, or `c` to cancel the run. When a
+tool call names folders outside the allowed paths, `t` approves it and
+allows those folders for shell commands and file reads until the turn ends. Deletion removes
 MyHarness metadata and session data; it never deletes project workspace files.
 
 When an agent asks a question, the TUI opens a blocking question dialog instead

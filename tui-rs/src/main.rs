@@ -980,9 +980,14 @@ fn handle_approval_key(
     if app.run_state == RunState::Cancelling {
         return;
     }
-    let approved = match key.code {
-        KeyCode::Char('y') => true,
-        KeyCode::Char('n') => false,
+    let allows_turn = app
+        .pending_approval
+        .as_ref()
+        .is_some_and(|prompt| !prompt.allow_folders.is_empty());
+    let (approved, scope) = match key.code {
+        KeyCode::Char('y') => (true, ""),
+        KeyCode::Char('t') if allows_turn => (true, "turn"),
+        KeyCode::Char('n') => (false, ""),
         KeyCode::Char('c') => {
             request_cancel(app, client.clone(), actions.clone());
             return;
@@ -1007,7 +1012,7 @@ fn handle_approval_key(
     let actions = actions.clone();
     tokio::spawn(async move {
         match client
-            .resolve_approval(&session_id, &approval_id, approved)
+            .resolve_approval(&session_id, &approval_id, approved, scope)
             .await
         {
             Ok(_) => {

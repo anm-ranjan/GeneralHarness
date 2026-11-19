@@ -242,10 +242,10 @@ async def resolve_approval(session_id: str, req: ApprovalResponse):
     run = web_app._manager.get_active_run(session_id)
     if run is None:
         raise HTTPException(status_code=404, detail="No active run")
-    ok = run.resolve_approval(req.approval_id, req.approved)
+    ok = run.resolve_approval(req.approval_id, req.approved, req.scope)
     if not ok:
         raise HTTPException(status_code=400, detail="Approval ID mismatch or expired")
-    return {"status": "resolved", "approved": req.approved}
+    return {"status": "resolved", "approved": req.approved, "scope": req.scope if req.approved else ""}
 
 
 @router.post("/api/sessions/{session_id}/question")

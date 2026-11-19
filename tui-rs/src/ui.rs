@@ -941,8 +941,17 @@ fn draw_approval(frame: &mut Frame, approval: &crate::app::ApprovalPrompt) {
                 .add_modifier(Modifier::BOLD),
         ),
         Line::default(),
-        Line::raw(truncate(&approval.args_json, 1800)),
     ];
+    if !approval.warning.is_empty() {
+        for line in approval.warning.lines() {
+            lines.push(Line::styled(
+                line.to_string(),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ));
+        }
+        lines.push(Line::default());
+    }
+    lines.push(Line::raw(truncate(&approval.args_json, 1800)));
     if !approval.diff_preview.is_empty() {
         lines.push(Line::default());
         lines.push(Line::styled(
@@ -960,10 +969,15 @@ fn draw_approval(frame: &mut Frame, approval: &crate::app::ApprovalPrompt) {
     } else if let Some(error) = &approval.state.error {
         lines.push(Line::styled(error.clone(), Style::default().fg(Color::Red)));
     }
-    lines.push(Line::styled(
-        "y approve · n deny · c cancel run",
-        Style::default().fg(Color::DarkGray),
-    ));
+    let keys = if approval.allow_folders.is_empty() {
+        "y approve · n deny · c cancel run".to_owned()
+    } else {
+        format!(
+            "y approve · t allow {} for this turn · n deny · c cancel run",
+            approval.allow_folders.join(", ")
+        )
+    };
+    lines.push(Line::styled(keys, Style::default().fg(Color::DarkGray)));
     frame.render_widget(
         Paragraph::new(lines)
             .block(

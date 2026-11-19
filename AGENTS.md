@@ -167,6 +167,39 @@ if the user should be asked about it.
   without touching process-wide defaults.
 - **Approvals** follow `permissions.approval_mode`: `always_ask`, `shell_only`,
   `auto_approve`.
+- **Outside allowed_paths (native only)**: `shell_run` validates only its
+  working directory, so `execute_tool` scans the command text
+  (`utils.shell_paths_outside_allowed`: arguments, redirects, `--opt=path`, `..`
+  escapes, paths inside quoted code; the program in command position and
+  `/dev/*` are skipped; on Windows only drive/UNC paths count). The read-only
+  file tools (`OUTSIDE_PATH_READ_TOOLS`) are checked the same way. Any hit asks
+  in every approval mode, including `auto_approve`: `approval_required` carries
+  `warning` (red banner in the web card, Rust TUI, remote CLI, CLI) and
+  `allow_folders`. "Allow folder for this turn" (web button, Rust TUI and remote
+  CLI `t`; `POST .../approval` with `scope: "turn"`, echoed on
+  `approval_resolved`) adds those folders to `turn_allowed_paths` on the root
+  WebUI (subagent UIs share it), so later shell commands and read-only file
+  tools may use them (`utils.turn_read_scope`; the read-only cache is bypassed);
+  write tools stay limited to `allowed_paths`. A refused path is refused
+  without asking again for the rest of the turn (`refused_outside_paths`);
+  `run_agent` resets both at each root turn, and nothing is persisted. Denials
+  and "Access denied" errors end with `utils.OUTSIDE_PATHS_HINT`, and the
+  prompt rule is `utils.allowed_paths_prompt_rule`. Best effort, not a sandbox:
+  paths built inside scripts or after `cd` are not seen; Codex and Claude
+  sessions use their own sandboxes.
+- **Protected settings files** (`utils.is_protected_path`): native agent tools
+  never read, search, list or change `agent_config.yaml` (any copy), `.env`
+  files in the application folder, the credential store directory, or
+  anything under `permissions.protected_paths`, even inside `allowed_paths`
+  and in every approval mode. Walks and rg output drop them, `gather_context`
+  skips them, and a `shell_run` naming one (`shell_protected_paths`) is refused
+  before any approval. The user's own web preview/editor uses
+  `is_path_allowed` alone.
+- **Stopping tools**: `run_agent` wraps each tool call in
+  `utils.tool_stop_scope`; directory walks (`_BoundedWalk`) and rg scans stop on
+  Cancel, steering or `search.walk_time_limit_seconds` and return partial
+  results marked `PARTIAL_SCAN_MARKER` (never cached); foreground `shell_run`
+  commands stop (process tree killed) on Cancel or their timeout.
 - **Queued messages** are persisted FIFO while a run is active and stay out of
   model context until they become the active turn. Slash commands are idle-only
   and are never queued.

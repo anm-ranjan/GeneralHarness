@@ -511,3 +511,12 @@ test('CLEAR_PROGRESS_STATUS drops progress lines but keeps routine-agent run car
   assert.deepEqual(next.stageItems, [card, { type: 'status', text: 'Kept' }])
   assert.equal(reducer(next, { type: 'CLEAR_PROGRESS_STATUS' }), next)
 })
+
+test('an approval answered for this turn is marked as such', () => {
+  const card = id => ({ type: 'approval', approvalId: id, resolved: null })
+  const state = { ...initialState, stageItems: [card('a'), card('b'), card('c')] }
+  let next = reducer(state, { type: 'RESOLVE_APPROVAL', payload: { approvalId: 'a', approved: true, scope: 'turn' } })
+  next = reducer(next, { type: 'RESOLVE_APPROVAL', payload: { approvalId: 'b', approved: true } })
+  next = reducer(next, { type: 'RESOLVE_APPROVAL', payload: { approvalId: 'c', approved: false, scope: 'turn' } })
+  assert.deepEqual(next.stageItems.map(item => item.resolved), ['approved for this turn', 'approved', 'denied'])
+})

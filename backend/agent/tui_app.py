@@ -191,7 +191,10 @@ class TuiUI:
         tool_name: str,
         args_json: str,
         diff_preview: str | None,
+        warning: str | None = None,
     ) -> bool:
+        if warning:
+            diff_preview = f"WARNING: {warning}" + (f"\n\n{diff_preview}" if diff_preview else "")
         event = threading.Event()
         result = [False]
         self._app.post_message(

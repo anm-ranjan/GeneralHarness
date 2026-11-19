@@ -371,6 +371,10 @@ pub struct ApprovalPrompt {
     pub tool_name: String,
     pub args_json: String,
     pub diff_preview: String,
+    /// Set when the command names paths outside the allowed directories.
+    pub warning: String,
+    /// Folders `t` allows for shell commands and read-only file tools until the turn ends.
+    pub allow_folders: Vec<String>,
     pub state: FormState,
 }
 
@@ -1326,6 +1330,18 @@ fn approval_from_event(event: &EventEnvelope) -> Option<ApprovalPrompt> {
         tool_name: text("tool_name"),
         args_json: text("args_json"),
         diff_preview: text("diff_preview"),
+        warning: text("warning"),
+        allow_folders: event
+            .data
+            .get("allow_folders")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default(),
         state: FormState::default(),
     })
 }

@@ -260,13 +260,15 @@ export function handleSessionEvent(evt, dispatch, stateRef) {
           sourceAgent: data.source_agent,
           argsJson: data.args_json,
           diffPreview: data.diff_preview,
+          warning: data.warning || '',
+          allowFolders: data.allow_folders || [],
           resolved: null,
         },
       })
       break
 
     case 'approval_resolved':
-      dispatch({ type: 'RESOLVE_APPROVAL', payload: { approvalId: data.approval_id, approved: data.approved } })
+      dispatch({ type: 'RESOLVE_APPROVAL', payload: { approvalId: data.approval_id, approved: data.approved, scope: data.scope || '' } })
       break
 
     case 'question_required':

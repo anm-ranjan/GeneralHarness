@@ -87,6 +87,12 @@ class WebUI:
         # in this or any other session must not alter a running worker.
         self.run_settings: dict = dict(run_settings or {})
         self.run_id = run_id or f"run_{uuid.uuid4().hex[:10]}"
+        # Outside paths the user refused, and folders allowed for shell commands
+        # and read-only file tools until this turn ends (approval card "Allow
+        # folder for this turn"); run_agent resets both at each root turn.
+        self.refused_outside_paths: set[str] = set()
+        self.turn_allowed_paths: list[str] = []
+        self.offers_turn_allow = True
         # Durable record of files this run touches: before-content captured at
         # first write, action/after-hash updated per change, persisted so diffs
         # and reverts survive a backend restart.
@@ -321,11 +327,13 @@ class WebUI:
         args_json: str,
         diff_preview: str | None,
         source_agent: str | None = None,
+        warning: str | None = None,
+        allow_folders: list[str] | None = None,
     ) -> bool:
         with self._approval_prompt_lock:
             if getattr(self._run, "cancel_event", None) and self._run.cancel_event.is_set():
                 return False
-            return self._request_approval(tool_name, args_json, diff_preview, source_agent)
+            return self._request_approval(tool_name, args_json, diff_preview, source_agent, warning, allow_folders)
 
     def _request_approval(
         self,
@@ -333,32 +341,41 @@ class WebUI:
         args_json: str,
         diff_preview: str | None,
         source_agent: str | None,
+        warning: str | None = None,
+        allow_folders: list[str] | None = None,
     ) -> bool:
         """Publish and resolve one serialized approval prompt."""
         approval_id = f"apr_{uuid.uuid4().hex[:8]}"
-        self._emit(
-            EventType.APPROVAL_REQUIRED,
-            {
-                "approval_id": approval_id,
-                "tool_name": tool_name,
-                "args_json": args_json,
-                "diff_preview": diff_preview,
-                "source_agent": source_agent,
-            },
-        )
+        data = {
+            "approval_id": approval_id,
+            "tool_name": tool_name,
+            "args_json": args_json,
+            "diff_preview": diff_preview,
+            "source_agent": source_agent,
+        }
+        if warning:
+            data["warning"] = warning
+        if allow_folders:
+            data["allow_folders"] = list(allow_folders)
+        if not self._run.begin_approval(approval_id):
+            return False
+        self._emit(EventType.APPROVAL_REQUIRED, data)
         self._run.approval_summaries[approval_id] = {
             "approval_id": approval_id, "tool": tool_name, "args_preview": args_json[:240],
         }
         self._manager.notify_run_state(self._sid, "waiting_approval")
         try:
-            approved = self._run.request_approval(approval_id)
+            approved, scope = self._run.request_approval_scope(approval_id)
         finally:
             self._run.approval_summaries.pop(approval_id, None)
         self._manager.notify_run_state(self._sid, "running")
-        self._emit(
-            EventType.APPROVAL_RESOLVED,
-            {"approval_id": approval_id, "approved": approved},
-        )
+        resolved = {"approval_id": approval_id, "approved": approved}
+        if approved and scope == "turn" and allow_folders:
+            for folder in allow_folders:
+                if folder not in self.turn_allowed_paths:
+                    self.turn_allowed_paths.append(folder)
+            resolved["scope"] = "turn"
+        self._emit(EventType.APPROVAL_RESOLVED, resolved)
         return approved
 
     def request_approval_for_agent(
@@ -570,7 +587,26 @@ class SubagentUI:
         # A routine-agent run's restrictions apply to its subagents too.
         self.tool_allowlist = getattr(parent, "tool_allowlist", None)
         self.agent_profile = getattr(parent, "agent_profile", None)
+        self.offers_turn_allow = getattr(parent, "offers_turn_allow", False)
         self.result = ""
+
+    # Outside paths refused or allowed this turn belong to the root run, so a
+    # refusal or "Allow folder for this turn" covers its subagents too.
+    @property
+    def refused_outside_paths(self):
+        return getattr(self.parent, "refused_outside_paths", None)
+
+    @refused_outside_paths.setter
+    def refused_outside_paths(self, value):
+        self.parent.refused_outside_paths = value
+
+    @property
+    def turn_allowed_paths(self):
+        return getattr(self.parent, "turn_allowed_paths", None)
+
+    @turn_allowed_paths.setter
+    def turn_allowed_paths(self, value):
+        self.parent.turn_allowed_paths = value
 
     def agent_run_context(self) -> dict | None:
         context = self.parent.agent_run_context()
@@ -608,8 +644,10 @@ class SubagentUI:
     def show_tool_result(self, name: str, result_preview: str, verbose: bool) -> None:
         self.parent.show_agent_event("tool_result", {"agent_id": self.agent_path, "tool": name, "ok": not result_preview.startswith("ERROR")})
 
-    def request_approval(self, tool_name: str, args_json: str, diff_preview: str | None) -> bool:
-        return self.parent.request_approval(tool_name, args_json, diff_preview, source_agent=self.agent_path)
+    def request_approval(self, tool_name: str, args_json: str, diff_preview: str | None,
+                         warning: str | None = None, allow_folders: list[str] | None = None) -> bool:
+        return self.parent.request_approval(tool_name, args_json, diff_preview, source_agent=self.agent_path,
+                                            warning=warning, allow_folders=allow_folders)
 
     def ask_user_question(self, question: str, options=None, allow_free_text: bool = True):
         return self.parent.ask_user_question(question, options, allow_free_text)
@@ -658,7 +696,7 @@ class AsideUI:
     def show_assistant_markdown(self, text: str) -> None:
         self.result = text
 
-    def request_approval(self, tool_name: str, args_json: str, diff_preview: str | None) -> bool:
+    def request_approval(self, tool_name: str, args_json: str, diff_preview: str | None, **_kwargs) -> bool:
         return False
 
     def ask_user_question(self, question: str, options=None, allow_free_text: bool = True):

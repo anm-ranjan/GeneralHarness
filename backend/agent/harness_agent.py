@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import threading
+import time
 import tempfile
 from datetime import datetime
 
@@ -1271,7 +1272,7 @@ def _build_managed_system_content(workspace_root: str | None = None) -> str:
         + _notes_fragment()
         + _clarification_fragment()
         + utils.skill_registry.prompt_fragment()
-        + f"You can only access these directories: {', '.join(utils.ALLOWED_PATHS)}. "
+        + utils.allowed_paths_prompt_rule()
         + _workspace_fragment(workspace_root)
         + _web_output_fragment()
         + _native_execution_fragment()
@@ -1307,7 +1308,7 @@ def _build_native_system_content(workspace_root: str | None = None) -> str:
         + _plan_fragment()
         + _clarification_fragment()
         + utils.skill_registry.prompt_fragment()
-        + f"You can only access these directories: {', '.join(utils.ALLOWED_PATHS)}. "
+        + utils.allowed_paths_prompt_rule()
         + _workspace_fragment(workspace_root)
         + _web_output_fragment()
         + _native_execution_fragment()
@@ -1511,17 +1512,139 @@ def approval_required(tool_name: str, ui=None) -> bool:
     return tool_name in {"file_write", "file_replace", "apply_patch", "shell_run", "run_agent_script"}
 
 
-def request_approval(tool_name: str, arguments: dict, ui=None) -> bool:
-    if not approval_required(tool_name, ui=ui):
+# Read-only tools that take paths: an outside path asks the user (see execute_tool).
+OUTSIDE_PATH_READ_TOOLS = frozenset({"file_read", "file_list", "file_search", "content_search", "gather_context", "image_read"})
+
+
+def _normalize_outside(path: str) -> str:
+    return os.path.normcase(utils._resolve_path(os.path.expanduser(path)))
+
+
+def _refused_outside_paths(ui) -> set[str]:
+    """Outside paths the user refused during this turn.
+
+    run_agent resets the set at the start of each root turn (CLI and TUI keep
+    one UI object for the whole process). Web subagent UIs share their
+    parent's set, so a refusal to the root agent also covers its subagents.
+    """
+    if ui is None:
+        return set()
+    refused = getattr(ui, "refused_outside_paths", None)
+    if not isinstance(refused, set):
+        refused = set()
+        try:
+            ui.refused_outside_paths = refused
+        except AttributeError:
+            return set()
+    return refused
+
+
+def _absolute_for(path: str, working_directory: str) -> str:
+    candidate = os.path.expanduser(path)
+    if not os.path.isabs(candidate) and not candidate.startswith(("\\\\", "//")):
+        candidate = os.path.join(working_directory or ".", candidate)
+    return utils._resolve_path(candidate)
+
+
+def _outside_folders(paths: list[str], working_directory: str) -> list[str]:
+    """The folder each outside path names: itself when a directory, else its parent."""
+    folders = []
+    for raw in paths:
+        path = _absolute_for(raw, working_directory)
+        folder = path if os.path.isdir(path) else os.path.dirname(path)
+        if folder and folder not in folders:
+            folders.append(folder)
+    return folders
+
+
+def _turn_allowed(ui) -> list[str]:
+    allowed = getattr(ui, "turn_allowed_paths", None) if ui is not None else None
+    return allowed if isinstance(allowed, list) else []
+
+
+def _covered_by(path: str, roots: list[str], working_directory: str) -> bool:
+    candidate = _absolute_for(path, working_directory)
+    return any(utils._path_within(candidate, root) for root in roots)
+
+
+TURN_ALLOWANCE_NOTE = (
+    "\n\nNOTE: For the rest of this turn the user allowed these folders: {folders}. shell_run commands and the "
+    "read-only file tools (file_read, file_list, file_search, content_search, gather_context, image_read) may now "
+    "use them; prefer the file tools for reading. Writing or editing files there is still not allowed. The "
+    "permission ends with this turn."
+)
+
+
+def _ask_for_outside_paths(name: str, arguments: dict, ui, outside: list[str], working_directory: str,
+                           read_only: bool = False):
+    """Ask the user about paths outside allowed_paths, in every approval mode.
+
+    Returns ``(error, turn_note)``: ``error`` is the tool result when refused
+    (now or earlier in this turn); ``turn_note`` tells the model about folders
+    the user allowed for the rest of the turn ("Allow folder for this turn").
+    """
+    refused = _refused_outside_paths(ui)
+    repeated = [path for path in outside if _normalize_outside(path) in refused]
+    if repeated:
+        # Already refused in this turn: do not ask the user again.
+        return (
+            f"ERROR: Refused without asking. Access to {', '.join(repeated)} was already denied earlier in "
+            "this turn, and repeating it will keep being refused. Do not attempt it again in any form. "
+            "Finish what you can inside the allowed directories, then end your turn and tell the user that "
+            "the task needs this path and that they can approve it or add it to the allowed directories."
+        ), ""
+    warning = utils.outside_paths_warning(outside, read_only=read_only)
+    folders = _outside_folders(outside, working_directory)
+    before = len(_turn_allowed(ui))
+    if not request_approval(name, arguments, ui=ui, warning=warning, allow_folders=folders):
+        refused.update(_normalize_outside(path) for path in outside)
+        what = "This tool call reads" if read_only else "The command refers to"
+        return (
+            f"ERROR: Tool call denied. {what} paths outside the allowed directories: "
+            f"{', '.join(outside)}. {utils.OUTSIDE_PATHS_HINT}"
+        ), ""
+    added = _turn_allowed(ui)[before:]
+    return None, (TURN_ALLOWANCE_NOTE.format(folders=", ".join(added)) if added else "")
+
+
+def _read_tool_outside_paths(name: str, arguments: dict, ui) -> list[str]:
+    """Paths a read-only file tool names outside allowed_paths and this turn's folders.
+
+    Protected settings files are left out: the tool itself refuses them.
+    """
+    turn_allowed = _turn_allowed(ui)
+    outside = []
+    for path in utils._read_paths(name, arguments):
+        if utils.is_protected_path(path) or utils.is_path_allowed(path) or _covered_by(path, turn_allowed, ""):
+            continue
+        if path not in outside:
+            outside.append(path)
+    return outside
+
+
+def request_approval(tool_name: str, arguments: dict, ui=None, warning: str = "",
+                     allow_folders: list[str] | None = None) -> bool:
+    """Ask the user to approve a tool call when the approval mode requires it.
+
+    A non-empty ``warning`` always asks, in every approval mode: it marks a
+    call the user must see (paths outside the allowed directories). UIs that
+    cannot ask (subagents) deny it.
+    """
+    if not warning and not approval_required(tool_name, ui=ui):
         return True
 
     args_json = json.dumps(arguments, indent=2, ensure_ascii=False)
     diff_preview = utils.build_tool_diff_preview(tool_name, arguments)
 
     if ui:
+        if warning:
+            extra = {"allow_folders": allow_folders} if allow_folders and getattr(ui, "offers_turn_allow", False) else {}
+            return ui.request_approval(tool_name, args_json, diff_preview or None, warning=warning, **extra)
         return ui.request_approval(tool_name, args_json, diff_preview or None)
 
     ui_panel("Approval required", f"Tool: {tool_name}", style="yellow")
+    if warning:
+        ui_panel("Outside allowed paths", warning, style="red")
     ui_code(utils.truncate_output(args_json, 4000), "json")
     if diff_preview:
         ui_panel("Proposed diff", "Review the changes below before approving.", style="cyan")
@@ -1646,7 +1769,17 @@ def execute_tool(
             return "ERROR: MyHarness session context is unavailable in this interface."
         return context_runner(arguments)
     if name in {"file_search", "file_list", "content_search", "file_read", "image_read", "web_fetch", "web_request", "gather_context", "skill_list", "skill_read"}:
-        return utils.execute_read_only_tool(name, arguments, cancel_event)
+        # Outside paths are asked about like shell commands: Approve lets this
+        # call read them, "Allow folder for this turn" adds them to the turn's
+        # folders. Folders allowed for this turn are readable (never writable).
+        outside = _read_tool_outside_paths(name, arguments, ui) if name in OUTSIDE_PATH_READ_TOOLS else []
+        turn_note = ""
+        if outside:
+            error, turn_note = _ask_for_outside_paths(name, arguments, ui, outside, "", read_only=True)
+            if error:
+                return error
+        with utils.turn_read_scope([*_turn_allowed(ui), *outside]):
+            return utils.execute_read_only_tool(name, arguments, cancel_event) + turn_note
     if name == "shell_check":
         return utils.tool_shell_check(job_id=arguments["job_id"], tail_lines=arguments.get("tail_lines", 200))
     if name == "plan_update":
@@ -1671,7 +1804,24 @@ def execute_tool(
                 "finish and say so in your result; the parent agent will follow up."
             )
         return _ask_user(arguments, ui)
-    if not request_approval(name, arguments, ui=ui):
+    outside = []
+    turn_note = ""
+    shell_cwd = ""
+    if name == "shell_run":
+        shell_cwd = str(arguments.get("working_directory") or "")
+        # The app's own settings are refused outright: no approval, no turn allowance.
+        protected = utils.shell_protected_paths(str(arguments.get("command") or ""), shell_cwd)
+        if protected:
+            return utils.protected_denied(", ".join(protected))
+        outside = utils.shell_paths_outside_allowed(str(arguments.get("command") or ""), shell_cwd)
+        turn_allowed = _turn_allowed(ui)
+        if turn_allowed:
+            outside = [path for path in outside if not _covered_by(path, turn_allowed, shell_cwd)]
+    if outside:
+        error, turn_note = _ask_for_outside_paths(name, arguments, ui, outside, shell_cwd)
+        if error:
+            return error
+    elif not request_approval(name, arguments, ui=ui):
         return "ERROR: Tool call denied by user."
     try:
         if name == "file_write":
@@ -1704,7 +1854,7 @@ def execute_tool(
                 session_id=getattr(ui, "session_id", None),
             )
             utils._invalidate_cache()
-            return result
+            return result + turn_note
         if name == "shell_kill":
             return utils.tool_shell_kill(job_id=arguments["job_id"])
     except Exception as e:
@@ -1994,6 +2144,34 @@ def guard_context_before_call(messages: list, turn_start_index: int, tools=None,
     return len(compacted), True
 
 
+TOOL_STEERING_POLL_SECONDS = 1.0
+
+
+def _tool_stop_check(cancel_event, steering_reader):
+    """Stop check polled by long-running tools (directory walks, rg, shell_run).
+
+    Cancel is checked on every poll; steering reads the session file, so it is
+    checked at most once per TOOL_STEERING_POLL_SECONDS.
+    """
+    last = {"at": 0.0, "pending": False}
+
+    def check() -> str:
+        if cancel_event is not None and cancel_event.is_set():
+            return utils.TOOL_STOP_CANCELLED
+        if steering_reader is None:
+            return ""
+        now = time.monotonic()
+        if not last["pending"] and now - last["at"] >= TOOL_STEERING_POLL_SECONDS:
+            last["at"] = now
+            try:
+                last["pending"] = bool(steering_reader(peek=True))
+            except Exception:
+                last["pending"] = False
+        return utils.TOOL_STOP_STEERING if last["pending"] else ""
+
+    return check
+
+
 def run_agent(
     user_query: str,
     messages: list,
@@ -2039,6 +2217,14 @@ def run_agent(
     messages.append(user_msg)
     turn_messages = [user_msg]
     turn_model = None
+    if ui is not None and agent_path == "/root":
+        # Refusals and "allow for this turn" of outside paths last for one
+        # turn; a new message starts asking again.
+        try:
+            ui.refused_outside_paths = set()
+            ui.turn_allowed_paths = []
+        except AttributeError:
+            pass
 
     tool_call_counts: dict[str, int] = {}
     MAX_REPEAT_TOOL_CALLS = 3
@@ -2356,8 +2542,18 @@ def run_agent(
                 )
 
                 try:
-                    if func_name in WRITE_TOOL_NAMES and orchestrator is not None and agent_path != "/root":
-                        with orchestrator.write_lock:
+                    with utils.tool_stop_scope(_tool_stop_check(cancel_event, steering_reader)):
+                        if func_name in WRITE_TOOL_NAMES and orchestrator is not None and agent_path != "/root":
+                            with orchestrator.write_lock:
+                                tool_result = execute_tool(
+                                    func_name,
+                                    func_args,
+                                    ui=ui,
+                                    cancel_event=cancel_event,
+                                    orchestrator=orchestrator,
+                                    agent_path=agent_path,
+                                )
+                        else:
                             tool_result = execute_tool(
                                 func_name,
                                 func_args,
@@ -2366,15 +2562,6 @@ def run_agent(
                                 orchestrator=orchestrator,
                                 agent_path=agent_path,
                             )
-                    else:
-                        tool_result = execute_tool(
-                            func_name,
-                            func_args,
-                            ui=ui,
-                            cancel_event=cancel_event,
-                            orchestrator=orchestrator,
-                            agent_path=agent_path,
-                        )
                 except Exception as e:
                     tool_result = f"ERROR: Tool '{func_name}' raised: {e}"
 

@@ -221,10 +221,11 @@ impl MyHarnessClient {
         session_id: &str,
         approval_id: &str,
         approved: bool,
+        scope: &str,
     ) -> Result<Value> {
         self.post_json(
             &format!("api/sessions/{session_id}/approval"),
-            &json!({ "approval_id": approval_id, "approved": approved }),
+            &json!({ "approval_id": approval_id, "approved": approved, "scope": scope }),
         )
         .await
     }

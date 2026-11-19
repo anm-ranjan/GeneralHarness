@@ -181,22 +181,41 @@ class ActiveRun:
             return self._questions.pop(question_id, None) is not None
 
     def request_approval(self, approval_id: str) -> bool:
-        waiter = {"event": threading.Event(), "result": False}
+        return self.request_approval_scope(approval_id)[0]
+
+    def begin_approval(self, approval_id: str) -> bool:
+        """Register the waiter before the card is published, so an answer that
+        arrives at once is not lost. False when cancelled or already pending."""
         with self._approval_lock:
             if self.cancel_event.is_set() or approval_id in self._approvals:
                 return False
-            self._approvals[approval_id] = waiter
+            self._approvals[approval_id] = {"event": threading.Event(), "result": False, "scope": "", "begun": True}
+            return True
+
+    def request_approval_scope(self, approval_id: str) -> tuple[bool, str]:
+        """Wait for an answer; returns (approved, scope). Scope is "" or "turn"."""
+        with self._approval_lock:
+            waiter = self._approvals.get(approval_id)
+            if waiter is not None and waiter.pop("begun", False):
+                pass  # Registered by begin_approval.
+            elif self.cancel_event.is_set() or waiter is not None:
+                return False, ""
+            else:
+                waiter = {"event": threading.Event(), "result": False, "scope": ""}
+                self._approvals[approval_id] = waiter
         waiter["event"].wait(timeout=300)
         with self._approval_lock:
             stored = self._approvals.pop(approval_id, None)
-        return bool(stored and stored["event"].is_set() and stored["result"])
+        approved = bool(stored and stored["event"].is_set() and stored["result"])
+        return approved, (stored.get("scope", "") if approved else "")
 
-    def resolve_approval(self, approval_id: str, approved: bool) -> bool:
+    def resolve_approval(self, approval_id: str, approved: bool, scope: str = "") -> bool:
         with self._approval_lock:
             waiter = self._approvals.get(approval_id)
             if waiter is None or waiter["event"].is_set():
                 return False
             waiter["result"] = approved
+            waiter["scope"] = scope if approved else ""
             waiter["event"].set()
             return True
 

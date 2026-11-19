@@ -13,13 +13,18 @@ import socket
 import ssl
 import difflib
 import fnmatch
+import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import threading
 import time
 import uuid
+import contextvars
 from collections import deque
+from contextlib import contextmanager
+from contextvars import ContextVar
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from html.parser import HTMLParser
@@ -813,9 +818,101 @@ def is_path_allowed(path: str) -> bool:
     return False
 
 
+# The application's own settings hold the permissions themselves, and the
+# credential store holds the API keys. Agent tools may never read, search or change them,
+# even when they sit inside an allowed path (an install dir often is) and in
+# every approval mode. Only agent tools are blocked; the user's own web UI
+# file preview/editor still uses is_path_allowed alone.
+APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Blocked under any folder, so copies of the config are covered too.
+PROTECTED_FILE_NAMES = frozenset({"agent_config.yaml"})
+# Blocked only inside the application folder (besides .env files).
+_PROTECTED_APP_FILES: tuple = ()
+
+
+def _protected_roots() -> list[str]:
+    roots = [str(credential_store.credential_directory())]
+    roots += normalize_allowed_paths(nested_get(CONFIG, ["permissions", "protected_paths"], []))
+    return [_resolve_path(os.path.expanduser(path)) for path in roots if str(path).strip()]
+
+
+PROTECTED_PATHS = _protected_roots()
+
+
+def _path_key(path: str) -> str:
+    return os.path.normcase(_resolve_path(path))
+
+
+def _path_within(path: str, root: str) -> bool:
+    try:
+        return os.path.commonpath([_path_key(path), _path_key(root)]) == _path_key(root)
+    except ValueError:
+        return False
+
+
+def is_protected_path(path: str) -> bool:
+    """True for the application's own settings/secret files (see PROTECTED_FILE_NAMES)."""
+    if not path:
+        return False
+    name = os.path.basename(_resolve_path(path)).lower()
+    if name in PROTECTED_FILE_NAMES:
+        return True
+    if _path_within(path, APP_ROOT):
+        if name == ".env" or name.startswith(".env."):
+            return True
+        if any(_path_key(path) == _path_key(os.path.join(APP_ROOT, rel)) for rel in _PROTECTED_APP_FILES):
+            return True
+    return any(_path_within(path, root) for root in PROTECTED_PATHS)
+
+
+def protected_denied(path: str) -> str:
+    return (
+        f"ERROR: Access denied. '{path}' holds {APP_NAME}'s own settings or credentials, which agent tools may "
+        "never read, search or change, in any approval mode. Do not try another way (shell, script, copy or "
+        "search). If the user needs something from it, tell them to open the file themselves."
+    )
+
+
+# Folders the user allowed for the current turn from an outside-path approval
+# ("Allow folder for this turn"). The agent loop sets them around read-only
+# tool calls, so file_read/file_list/... may read there too; writes may not.
+_turn_read_paths: ContextVar = ContextVar("turn_read_paths", default=())
+
+
+@contextmanager
+def turn_read_scope(paths):
+    token = _turn_read_paths.set(tuple(paths or ()))
+    try:
+        yield
+    finally:
+        _turn_read_paths.reset(token)
+
+
+def is_read_allowed(path: str) -> bool:
+    """is_path_allowed, plus folders allowed for this turn (read-only tools only)."""
+    if is_path_allowed(path):
+        return True
+    return any(_path_within(path, root) for root in _turn_read_paths.get())
+
+
+def tool_path_error(path: str, kind: str = "Path", read: bool = False) -> str | None:
+    """The access error for an agent tool touching ``path``, or None.
+
+    ``read`` lets folders allowed for this turn count (read-only tools).
+    """
+    if is_protected_path(path):
+        return protected_denied(path)
+    if not (is_read_allowed(path) if read else is_path_allowed(path)):
+        return access_denied(path, kind)
+    return None
+
+
 def validate_directory(directory: str):
-    if not is_path_allowed(directory):
-        return f"ERROR: Access denied. Directory '{directory}' is not in allowed paths."
+    """Check a directory for the read-only search/list tools."""
+    if is_protected_path(directory):
+        return protected_denied(directory)
+    if not is_read_allowed(directory):
+        return access_denied(directory, "Directory")
     if not os.path.isdir(directory):
         return f"ERROR: Directory '{directory}' does not exist."
     return None
@@ -823,14 +920,132 @@ def validate_directory(directory: str):
 
 def ensure_allowed_file(file_path: str) -> str:
     resolved = _resolve_path(file_path)
-    if not is_path_allowed(resolved):
-        raise ValueError(f"Access denied. Path '{file_path}' is not in allowed paths.")
+    error = tool_path_error(resolved)
+    if error:
+        raise ValueError(error.replace(str(resolved), str(file_path))[len("ERROR: "):])
     return resolved
 
 
 # ---------------------------------------------------------------------------
 # Read-only tool implementations
 # ---------------------------------------------------------------------------
+
+# A tool runs synchronously on the run's thread, so Cancel and steering only
+# take effect once it returns. The agent loop installs a stop check for the
+# duration of each tool call; directory walks, rg and shell_run poll it.
+# It returns "" to continue, TOOL_STOP_CANCELLED or TOOL_STOP_STEERING.
+TOOL_STOP_CANCELLED = "cancelled by the user"
+TOOL_STOP_STEERING = "the user sent a new message"
+_tool_stop_check: ContextVar = ContextVar("tool_stop_check", default=None)
+# Wall-clock budget for one directory walk or rg scan (a whole network drive can
+# take hours). The result says it is partial and asks for a narrower directory.
+WALK_TIME_LIMIT_SECONDS = max(1, config_int(CONFIG, ["search", "walk_time_limit_seconds"], 20))
+
+
+@contextmanager
+def tool_stop_scope(check):
+    """Make ``check()`` the stop check for tool code run inside this block."""
+    token = _tool_stop_check.set(check)
+    try:
+        yield
+    finally:
+        _tool_stop_check.reset(token)
+
+
+def tool_stop_reason() -> str:
+    check = _tool_stop_check.get()
+    if check is None:
+        return ""
+    try:
+        return str(check() or "")
+    except Exception:
+        return ""
+
+
+class _BoundedWalk:
+    """os.walk that stops at a deadline or when the run is cancelled/steered.
+
+    ``stopped`` holds the reason once it stopped early; ``note()`` is the line
+    to append to a tool result so the model knows the listing is partial.
+    """
+
+    def __init__(self, directory: str, time_limit: float | None = None):
+        self.directory = directory
+        self.time_limit = time_limit or WALK_TIME_LIMIT_SECONDS
+        self.deadline = time.monotonic() + self.time_limit
+        self.stopped = ""
+        self.folders = 0
+
+    def check(self) -> bool:
+        """True when the walk must stop (also usable inside per-file loops)."""
+        if not self.stopped:
+            reason = tool_stop_reason()
+            if not reason and time.monotonic() > self.deadline:
+                reason = f"time limit of {self.time_limit:g} s reached"
+            self.stopped = reason
+        return bool(self.stopped)
+
+    def __iter__(self):
+        for root, dirs, files in os.walk(self.directory):
+            if self.check():
+                return
+            self.folders += 1
+            # Never surface the application's own settings (see is_protected_path).
+            dirs[:] = [d for d in dirs if not is_protected_path(os.path.join(root, d))]
+            yield root, dirs, [f for f in files if not is_protected_path(os.path.join(root, f))]
+
+    def note(self) -> str:
+        return _partial_scan_note(self.stopped, f"after {self.folders} folder(s)") if self.stopped else ""
+
+
+PARTIAL_SCAN_MARKER = "NOTE: Search stopped early"
+
+
+def _partial_scan_note(reason: str, progress: str = "") -> str:
+    if reason in (TOOL_STOP_CANCELLED, TOOL_STOP_STEERING):
+        return f"NOTE: Search stopped early because {reason}{' ' + progress if progress else ''}; results are partial."
+    return (
+        f"NOTE: Search stopped early ({reason}{', ' + progress if progress else ''}); results are partial. "
+        "Do not repeat it on the same directory: search a narrower folder instead of a whole drive or share, "
+        "or ask the user where the files are."
+    )
+
+
+def _run_scan_process(command: list, cwd: str, time_limit: float | None = None):
+    """Run a scanner (rg) honoring the tool stop check and a deadline.
+
+    Returns ``(returncode, stdout, stderr, stopped_reason)``; on a stop the
+    process is killed and the output collected so far is returned.
+    """
+    limit = time_limit or WALK_TIME_LIMIT_SECONDS
+    deadline = time.monotonic() + limit
+    proc = subprocess.Popen(
+        command, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        encoding="utf-8", errors="replace",
+    )
+    stdout_parts, stderr_parts = [], []
+    stopped = ""
+    while True:
+        try:
+            out, err = proc.communicate(timeout=0.25)
+            stdout_parts.append(out or "")
+            stderr_parts.append(err or "")
+            break
+        except subprocess.TimeoutExpired:
+            stopped = tool_stop_reason()
+            if not stopped and time.monotonic() > deadline:
+                stopped = f"time limit of {limit:g} s reached"
+            if stopped:
+                _terminate_process(proc, wait_seconds=2)
+                try:
+                    out, err = proc.communicate(timeout=2)
+                except Exception:
+                    out, err = "", ""
+                stdout_parts.append(out or "")
+                stderr_parts.append(err or "")
+                break
+    return proc.returncode, "".join(stdout_parts), "".join(stderr_parts), stopped
+
 
 def tool_file_search(directory: str, pattern: str, recursive: bool = True) -> str:
     error = validate_directory(directory)
@@ -839,8 +1054,10 @@ def tool_file_search(directory: str, pattern: str, recursive: bool = True) -> st
 
     matches = []
     max_results = 50
+    walk = None
     if recursive:
-        for root, dirs, files in os.walk(directory):
+        walk = _BoundedWalk(directory)
+        for root, dirs, files in walk:
             for filename in fnmatch.filter(files, pattern):
                 matches.append(os.path.join(root, filename))
                 if len(matches) >= max_results:
@@ -855,9 +1072,11 @@ def tool_file_search(directory: str, pattern: str, recursive: bool = True) -> st
                 if len(matches) >= max_results:
                     break
 
+    note = walk.note() + "\n" if walk and walk.stopped else ""
     if not matches:
-        return f"No files matching '{pattern}' found in '{directory}'."
-    return "Found {count} file(s):\n{items}".format(
+        return note + f"No files matching '{pattern}' found in '{directory}'."
+    return "{note}Found {count} file(s):\n{items}".format(
+        note=note,
         count=len(matches),
         items="".join(f"  {m} ({os.path.getsize(m)} bytes)\n" for m in matches),
     )
@@ -926,16 +1145,19 @@ def tool_file_list(directory: str, glob: str = None, max_results: int = MAX_SEAR
             command.extend(["--glob", glob])
         command.append(".")
         try:
-            completed = subprocess.run(command, cwd=directory, text=True, capture_output=True, timeout=30, encoding="utf-8", errors="replace")
-            if completed.returncode in (0, 1):
-                files = completed.stdout.splitlines()[:limit]
+            returncode, stdout, _stderr, stopped = _run_scan_process(command, directory)
+            if stopped or returncode in (0, 1):
+                files = _complete_lines(stdout, stopped)[:limit]
                 full_paths = [os.path.join(directory, item) for item in files]
-                return _format_file_list(directory, full_paths, "rg")
+                listing = _format_file_list(directory, full_paths, "rg")
+                # A stopped scan must not fall through to an unbounded walk.
+                return (_partial_scan_note(stopped) + "\n" if stopped else "") + listing
         except Exception:
             pass
 
     matches = []
-    for root, dirs, files in os.walk(directory):
+    walk = _BoundedWalk(directory)
+    for root, dirs, files in walk:
         for filename in files:
             full_path = os.path.join(root, filename)
             rel_path = os.path.relpath(full_path, directory)
@@ -947,7 +1169,16 @@ def tool_file_list(directory: str, glob: str = None, max_results: int = MAX_SEAR
         if len(matches) >= limit:
             break
 
-    return _format_file_list(directory, matches, "Python fallback")
+    note = walk.note()
+    return (note + "\n" if note else "") + _format_file_list(directory, matches, "Python fallback")
+
+
+def _complete_lines(stdout: str, stopped: str) -> list:
+    """Output lines, dropping a last line a killed scanner may have cut short."""
+    lines = stdout.splitlines()
+    if stopped and lines and not stdout.endswith(("\n", "\r")):
+        lines.pop()
+    return lines
 
 
 def tool_content_search(
@@ -971,16 +1202,21 @@ def tool_content_search(
             command.extend(["--glob", glob])
         command.extend(["--", query, "."])
         try:
-            completed = subprocess.run(command, cwd=directory, text=True, capture_output=True, timeout=30, encoding="utf-8", errors="replace")
-            if completed.returncode == 0:
-                lines = completed.stdout.splitlines()[:limit]
-                return truncate_output("Found {count} matching line(s) using rg:\n{items}".format(
+            returncode, stdout, stderr, stopped = _run_scan_process(command, directory)
+            note = _partial_scan_note(stopped) + "\n" if stopped else ""
+            lines = [
+                line for line in _complete_lines(stdout, stopped)
+                if not is_protected_path(os.path.join(directory, line.split(":", 1)[0]))
+            ][:limit]
+            if lines and (stopped or returncode == 0):
+                return truncate_output("{note}Found {count} matching line(s) using rg:\n{items}".format(
+                    note=note,
                     count=len(lines),
                     items="\n".join(lines),
                 ), spill=True)
-            if completed.returncode == 1:
-                return f"No matches for '{query}' in '{directory}'."
-            return f"ERROR: rg failed with exit code {completed.returncode}: {completed.stderr}"
+            if stopped or returncode == 1:
+                return note + f"No matches for '{query}' in '{directory}'."
+            return f"ERROR: rg failed with exit code {returncode}: {stderr}"
         except Exception:
             pass
 
@@ -991,8 +1227,11 @@ def tool_content_search(
         pattern = re.compile(re.escape(query), flags)
 
     matches = []
-    for root, dirs, files in os.walk(directory):
+    walk = _BoundedWalk(directory)
+    for root, dirs, files in walk:
         for filename in files:
+            if walk.check():
+                break
             full_path = os.path.join(root, filename)
             rel_path = os.path.relpath(full_path, directory)
             if glob and not fnmatch.fnmatch(rel_path, glob) and not fnmatch.fnmatch(filename, glob):
@@ -1011,9 +1250,11 @@ def tool_content_search(
         if len(matches) >= limit:
             break
 
+    note = walk.note() + "\n" if walk.stopped else ""
     if not matches:
-        return f"No matches for '{query}' in '{directory}'."
-    return truncate_output("Found {count} matching line(s) using Python fallback:\n{items}".format(
+        return note + f"No matches for '{query}' in '{directory}'."
+    return truncate_output("{note}Found {count} matching line(s) using Python fallback:\n{items}".format(
+        note=note,
         count=len(matches),
         items="\n".join(matches),
     ), spill=True)
@@ -1092,16 +1333,13 @@ def _gather_search_rg(directory: str, patterns: list, glob: str, max_matches: in
         command.extend(["-e", str(pattern)])
     command.append(".")
     try:
-        completed = subprocess.run(
-            command, cwd=directory, text=True, capture_output=True,
-            timeout=GATHER_PER_JOB_TIMEOUT, encoding="utf-8", errors="replace",
-        )
+        returncode, stdout, _stderr, stopped = _run_scan_process(command, directory, GATHER_PER_JOB_TIMEOUT)
     except Exception:
         return None
-    if completed.returncode not in (0, 1):
+    if not stopped and returncode not in (0, 1):
         return None
     findings = []
-    for line in completed.stdout.splitlines():
+    for line in _complete_lines(stdout, stopped):
         parts = line.split(":", 2)
         if len(parts) < 3:
             continue
@@ -1109,6 +1347,8 @@ def _gather_search_rg(directory: str, patterns: list, glob: str, max_matches: in
         try:
             line_number = int(line_no)
         except ValueError:
+            continue
+        if is_protected_path(os.path.join(directory, rel)):
             continue
         findings.append({
             "file": os.path.normpath(os.path.join(directory, rel)),
@@ -1124,7 +1364,7 @@ def _gather_search_rg(directory: str, patterns: list, glob: str, max_matches: in
 def _gather_search_python(directory: str, patterns: list, glob: str, max_matches: int) -> list:
     compiled = _gather_compile_patterns(patterns)
     findings = []
-    for root, _dirs, files in os.walk(directory):
+    for root, _dirs, files in _BoundedWalk(directory, GATHER_PER_JOB_TIMEOUT):
         for filename in files:
             full_path = os.path.join(root, filename)
             rel_path = os.path.relpath(full_path, directory)
@@ -1174,7 +1414,7 @@ def _gather_run_test_discovery(job: dict) -> dict:
     warnings: list = []
     commands: set = set()
     for directory in job.get("_valid_paths", []):
-        for root, _dirs, files in os.walk(directory):
+        for root, _dirs, files in _BoundedWalk(directory, GATHER_PER_JOB_TIMEOUT):
             for filename in files:
                 if not _TEST_FILENAME_RE.match(filename):
                     continue
@@ -1308,7 +1548,7 @@ def _gather_run_inventory(job: dict) -> dict:
                     findings.append({"file": os.path.normpath(path), "line": line_no, "kind": "config", "text": " ".join(m.group(1).split())})
 
     for directory in job.get("_valid_paths", []):
-        for root, _dirs, files in os.walk(directory):
+        for root, _dirs, files in _BoundedWalk(directory, GATHER_PER_JOB_TIMEOUT):
             for filename in files:
                 if glob and not fnmatch.fnmatch(filename, glob):
                     continue
@@ -1386,7 +1626,9 @@ def _gather_validate_job(job, index: int) -> dict:
     warnings = []
     for path in raw_paths:
         candidate = str(path)
-        if not is_path_allowed(candidate):
+        if is_protected_path(candidate):
+            warnings.append(f"Path '{candidate}' holds {APP_NAME}'s own settings and is never readable; skipped.")
+        elif not is_read_allowed(candidate):
             warnings.append(f"Path '{candidate}' is not in allowed paths; skipped.")
         elif wants_files and not os.path.isfile(candidate):
             warnings.append(f"Path '{candidate}' is not a file; skipped.")
@@ -1453,7 +1695,11 @@ def tool_gather_context(jobs: list, budget: dict | None = None) -> str:
     if runnable:
         deadline = time.monotonic() + timeout_seconds
         executor = ThreadPoolExecutor(max_workers=min(len(runnable), GATHER_MAX_WORKERS))
-        future_map = {executor.submit(_gather_run_job, job): (index, job) for index, job in runnable}
+        # Each worker gets its own copy of the context so walks see the tool stop check.
+        future_map = {
+            executor.submit(contextvars.copy_context().run, _gather_run_job, job): (index, job)
+            for index, job in runnable
+        }
         try:
             for future, (index, job) in future_map.items():
                 remaining = deadline - time.monotonic()
@@ -1497,6 +1743,10 @@ def tool_gather_context(jobs: list, budget: dict | None = None) -> str:
     ok_jobs = sum(1 for j in job_results if j.get("status") == "ok")
     total_findings = sum(len(j.get("findings", [])) for j in job_results)
     summary = f"Ran {len(job_results)} job(s); {ok_jobs} ok, {total_findings} finding(s)."
+    stop_reason = tool_stop_reason()
+    if stop_reason:
+        # Also keeps this partial result out of the read-only tool cache.
+        top_warnings = [*(top_warnings or []), _partial_scan_note(stop_reason)]
 
     payload = {
         "summary": summary,
@@ -1510,8 +1760,9 @@ def tool_gather_context(jobs: list, budget: dict | None = None) -> str:
 
 
 def tool_file_read(file_path: str, read_mode: str = "full", lines: int = 200, offset: int = 0, query: str = "") -> str:
-    if not is_path_allowed(file_path):
-        return f"ERROR: Access denied. Path '{file_path}' is not in allowed paths."
+    error = tool_path_error(file_path, read=True)
+    if error:
+        return error
     if not os.path.isfile(file_path):
         return f"ERROR: File '{file_path}' does not exist."
 
@@ -1725,8 +1976,9 @@ def _read_text_file(file_path: str) -> str:
 
 
 def tool_image_read(file_path: str) -> str:
-    if not is_path_allowed(file_path):
-        return f"ERROR: Access denied. Path '{file_path}' is not in allowed paths."
+    error = tool_path_error(file_path, read=True)
+    if error:
+        return error
     if not os.path.isfile(file_path):
         return f"ERROR: File '{file_path}' does not exist."
     mime = _detect_supported_image_mime(file_path)
@@ -2458,6 +2710,192 @@ def command_is_dangerous(command: str) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# Shell command path scan
+#
+# shell_run only validates its working directory; the command text itself is
+# handed to the shell unchanged, so `diff -r <allowed> <elsewhere>` reads a
+# directory that is not in permissions.allowed_paths. This scan finds paths
+# written in the command and reports those outside the allowed roots, so the
+# caller can insist on explicit user approval. It is a best-effort guard rail,
+# not a sandbox: paths built at run time (inside scripts, from unexpanded
+# variables, via relative paths after `cd`) are not seen.
+# ---------------------------------------------------------------------------
+
+_SHELL_SEGMENT_TOKENS = frozenset({"|", "||", "&", "&&", ";", ";;", "(", ")", "\n"})
+_SHELL_REDIRECT_TOKENS = frozenset({">", ">>", "<", "<<", ">&", "<&", "&>", "&>>", ">|"})
+_SHELL_DEVICE_PATHS = frozenset({
+    "/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/zero",
+    "/dev/random", "/dev/urandom", "nul", "con",
+})
+# Paths embedded in quoted code or arguments, e.g. python -c "open('/etc/x')"
+# or cmd /c "dir D:\x". The lookbehind keeps URL schemes (`http://`) and
+# ordinary division (`1/2`) out.
+_EMBEDDED_POSIX_PATH = re.compile(r"(?:(?<=^)|(?<=[\s'\"=(,\[{]))(~?/[A-Za-z0-9._~$-][^\s'\"`,;)\]}]*)")
+_EMBEDDED_WINDOWS_PATH = re.compile(
+    r"(?:(?<=^)|(?<=[\s'\"=(,\[{]))((?:[A-Za-z]:[\\/]|\\\\[^\\/\s'\"]+[\\/])[^\s'\"`,;)\]}|<>]*)"
+)
+
+
+def _shell_tokens(command: str, windows: bool) -> list[str]:
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    if windows:
+        # Backslash is the path separator in cmd/PowerShell, not an escape.
+        lexer.escape = ""
+    try:
+        return list(lexer)
+    except ValueError:
+        # Unbalanced quotes: fall back to a plain whitespace split.
+        return command.split()
+
+
+def _looks_like_path(token: str, windows: bool) -> bool:
+    if "://" in token:
+        return False
+    if re.match(r"^[A-Za-z]:[\\/]", token) or token.startswith(("\\\\", "//")):
+        return True
+    if not windows and token.startswith(("/", "~")):
+        return True
+    return token == ".." or token.startswith(("../", "..\\")) or "/../" in token or "\\..\\" in token
+
+
+def shell_command_paths(command: str, windows: bool | None = None) -> list[str]:
+    """Paths written in a shell command, in order, without duplicates.
+
+    The program in command position (first word of each pipeline segment) is
+    skipped, since running /usr/bin/python or C:\\Tools\\x.exe reads nothing
+    the user asked to keep out. Arguments, redirection targets, `--opt=path`
+    values and paths embedded in quoted code are reported.
+    """
+    windows = (sys.platform == "win32") if windows is None else windows
+    found: list[str] = []
+
+    def add(candidate: str) -> None:
+        candidate = candidate.strip().rstrip(",;")
+        if candidate and candidate.lower() not in _SHELL_DEVICE_PATHS and candidate not in found:
+            found.append(candidate)
+
+    def scan_embedded(text: str) -> None:
+        patterns = (_EMBEDDED_WINDOWS_PATH,) if windows else (_EMBEDDED_WINDOWS_PATH, _EMBEDDED_POSIX_PATH)
+        for pattern in patterns:
+            for match in pattern.finditer(text):
+                add(match.group(1))
+
+    command_position = True
+    for token in _shell_tokens(command, windows):
+        if token in _SHELL_SEGMENT_TOKENS:
+            command_position = True
+            continue
+        if token in _SHELL_REDIRECT_TOKENS:
+            continue
+        expanded = os.path.expandvars(token)
+        if command_position:
+            command_position = False
+            # Environment assignments (`FOO=/x cmd`) keep command position open.
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", expanded):
+                command_position = True
+                add_value = expanded.split("=", 1)[1]
+                if _looks_like_path(add_value, windows):
+                    add(add_value)
+            continue
+        if _looks_like_path(expanded, windows):
+            add(expanded)
+            continue
+        if "=" in expanded:
+            value = expanded.split("=", 1)[1]
+            if _looks_like_path(value, windows):
+                add(value)
+                continue
+        if any(ch in expanded for ch in " \t'\"(=,"):
+            scan_embedded(expanded)
+    return found
+
+
+def shell_paths_outside_allowed(command: str, working_directory: str, windows: bool | None = None) -> list[str]:
+    """Paths written in ``command`` that resolve outside the allowed roots."""
+    outside = []
+    for raw in shell_command_paths(command, windows=windows):
+        path = os.path.expanduser(raw)
+        if not os.path.isabs(path) and not path.startswith(("\\\\", "//")):
+            path = os.path.join(working_directory or ".", path)
+        if not is_path_allowed(path):
+            outside.append(raw)
+    return outside
+
+
+def shell_protected_paths(command: str, working_directory: str, windows: bool | None = None) -> list[str]:
+    """Protected settings files a shell command names (see is_protected_path).
+
+    Checks every word (relative ones against the working directory), paths
+    embedded in quoted code, and bare protected file names anywhere in the
+    text. Best effort like the outside-path scan: wildcards and names built
+    at run time are not seen.
+    """
+    windows = (sys.platform == "win32") if windows is None else windows
+    hits: list[str] = []
+    for raw in [*shell_command_paths(command, windows=windows), *_shell_tokens(command, windows)]:
+        path = os.path.expanduser(os.path.expandvars(raw))
+        if not os.path.isabs(path) and not path.startswith(("\\\\", "//")):
+            path = os.path.join(working_directory or ".", path)
+        if raw not in hits and is_protected_path(path):
+            hits.append(raw)
+    for name in PROTECTED_FILE_NAMES:
+        if not any(name in hit.lower() for hit in hits) and re.search(
+            r"(?<![\w.-])" + re.escape(name) + r"(?![\w.-])", command, re.IGNORECASE
+        ):
+            hits.append(name)
+    return hits
+
+
+# Text shared by the system prompt and every "outside allowed paths" tool
+# error. It only nudges the model; the checks above are what actually refuse.
+OUTSIDE_PATHS_HINT = (
+    "This is a permission boundary, not a technical error. Stop trying to reach this path: do not retry with "
+    "another tool, a script, a copy, a symlink, `cd`, a relative path, an environment variable or a different "
+    "spelling, and do not search other drives for a copy. Do not answer with different data in place of what the "
+    "user named. Continue with the parts of the task inside the allowed directories, and tell the user which path "
+    "was outside, so they can approve it when asked or add it to the allowed directories."
+)
+
+
+def allowed_paths_prompt_rule() -> str:
+    return (
+        f"You can only access these directories: {', '.join(ALLOWED_PATHS)}. "
+        "This applies to every tool, including paths written inside shell_run commands and scripts you run. "
+        "If the user names a path outside them, read it directly with the read-only file tools (file_list, "
+        "file_read, content_search, ...): the user is asked to approve, and may allow the folder for the rest "
+        "of the turn. If they refuse, do not look for a way around it, do not search other drives for a copy, "
+        "and do not answer with different data in place of what they named: say which path is outside and let "
+        "the user decide. Do not search a whole drive (such as U:\\ or /) as a first step; search the narrowest "
+        f"folder that can hold what you need. {APP_NAME}'s own settings files (such as agent_config.yaml) are never "
+        "accessible to you, even inside these directories. "
+    )
+
+
+def access_denied(path: str, kind: str = "Path") -> str:
+    return f"ERROR: Access denied. {kind} '{path}' is not in allowed paths. {OUTSIDE_PATHS_HINT}"
+
+
+def outside_paths_warning(paths: list[str], read_only: bool = False) -> str:
+    listed = "\n".join(f"  - {path}" for path in paths)
+    if read_only:
+        return (
+            "This tool call reads paths outside the allowed directories "
+            "(permissions.allowed_paths):\n"
+            f"{listed}\n"
+            "Approving lets it read them (read only) with your account's permissions."
+        )
+    return (
+        "This command refers to paths outside the allowed directories "
+        "(permissions.allowed_paths):\n"
+        f"{listed}\n"
+        "Approving lets it read or change them with your account's permissions."
+    )
+
+
+
 def tool_shell_run(
     command: str,
     working_directory: str,
@@ -2467,7 +2905,7 @@ def tool_shell_run(
 ) -> str:
     resolved_cwd = _resolve_path(working_directory)
     if not is_path_allowed(resolved_cwd):
-        return f"ERROR: Access denied. Working directory '{working_directory}' is not in allowed paths."
+        return access_denied(working_directory, "Working directory")
     if not os.path.isdir(resolved_cwd):
         return f"ERROR: Working directory '{resolved_cwd}' does not exist."
 
@@ -2485,30 +2923,96 @@ def tool_shell_run(
         return _start_background_job(shell_command, effective_cwd, session_id=session_id)
 
     try:
-        completed = subprocess.run(
-            shell_command,
-            cwd=effective_cwd,
-            shell=True,
-            text=True,
-            capture_output=True,
-            timeout=max(1, min(int(timeout), 600)),
-            encoding="utf-8",
-            errors="replace",
+        returncode, stdout, stderr, stopped = _run_foreground_shell(
+            shell_command, effective_cwd, max(1, min(int(timeout), 600)),
         )
-        return truncate_output(
-            "Exit code: {code}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}".format(
-                code=completed.returncode,
-                stdout=completed.stdout,
-                stderr=completed.stderr,
-            ),
-            spill=True,
-        )
-    except subprocess.TimeoutExpired as e:
-        stdout = e.stdout or ""
-        stderr = e.stderr or ""
-        return truncate_output(f"ERROR: Command timed out after {timeout} seconds.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}", spill=True)
     except Exception as e:
         return f"ERROR: Could not run command: {e}"
+    if stopped == "timeout":
+        return truncate_output(f"ERROR: Command timed out after {timeout} seconds.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}", spill=True)
+    if stopped:
+        return truncate_output(f"ERROR: Command stopped because it was {stopped}.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}", spill=True)
+    return truncate_output(
+        "Exit code: {code}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}".format(
+            code=returncode,
+            stdout=stdout,
+            stderr=stderr,
+        ),
+        spill=True,
+    )
+
+
+def _terminate_process(proc, wait_seconds: int = 5) -> str:
+    """SIGTERM, then SIGKILL if it does not exit in time. Returns what happened."""
+    try:
+        proc.terminate()
+    except Exception as e:
+        return f"could not signal process: {e}"
+    try:
+        proc.wait(timeout=wait_seconds)
+        return "terminated"
+    except subprocess.TimeoutExpired:
+        pass
+    except Exception as e:
+        return f"could not wait on process: {e}"
+    try:
+        proc.kill()
+        proc.wait(timeout=wait_seconds)
+        return "killed"
+    except Exception as e:
+        return f"still running after kill attempt: {e}"
+
+
+def _kill_process_tree(proc) -> None:
+    """Kill a shell=True command with everything it started."""
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                capture_output=True, timeout=10,
+            )
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except Exception:
+        pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+
+
+def _run_foreground_shell(shell_command: str, cwd, timeout: int):
+    """Run a foreground shell command; stop it on timeout or Cancel.
+
+    Returns ``(returncode, stdout, stderr, stopped)`` where ``stopped`` is ""
+    when it finished, "timeout", or the cancel reason. Steering does not stop
+    a command (a build or test run should finish); only Cancel does.
+    """
+    popen_kwargs = {"start_new_session": True} if os.name != "nt" else {}
+    proc = subprocess.Popen(
+        shell_command, cwd=cwd, shell=True, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        encoding="utf-8", errors="replace", **popen_kwargs,
+    )
+    deadline = time.monotonic() + timeout
+    stopped = ""
+    while True:
+        try:
+            stdout, stderr = proc.communicate(timeout=0.25)
+            return proc.returncode, stdout or "", stderr or "", ""
+        except subprocess.TimeoutExpired:
+            if tool_stop_reason() == TOOL_STOP_CANCELLED:
+                stopped = TOOL_STOP_CANCELLED
+            elif time.monotonic() > deadline:
+                stopped = "timeout"
+            if stopped:
+                break
+    _kill_process_tree(proc)
+    try:
+        stdout, stderr = proc.communicate(timeout=5)
+    except Exception:
+        stdout, stderr = "", ""
+    return proc.returncode, stdout or "", stderr or "", stopped
 
 
 # ---------------------------------------------------------------------------
@@ -3148,8 +3652,21 @@ def _execute_read_only_tool_uncached(name: str, arguments: dict, cancel_event=No
 _BOUNDED_READ_TOOL_NAMES = {"file_read", "content_search", "file_list", "file_search"}
 
 
+def _read_paths(name: str, arguments: dict) -> list:
+    paths = [arguments.get(key) for key in ("directory", "file_path")]
+    if name == "gather_context":
+        for job in arguments.get("jobs") or []:
+            if isinstance(job, dict):
+                paths.extend(job.get("paths") or [])
+    return [str(path) for path in paths if path]
+
+
 def execute_read_only_tool(name: str, arguments: dict, cancel_event=None) -> str:
-    cached = None if name == "image_read" else _cache_get(name, arguments)
+    # The cache is checked before the tool's own permission check, so only use
+    # it when every path is permanently allowed: not for folders allowed just
+    # for this turn, nor for paths since removed from allowed_paths.
+    use_cache = name != "image_read" and all(is_path_allowed(p) for p in _read_paths(name, arguments))
+    cached = _cache_get(name, arguments) if use_cache else None
     if cached is not None:
         return truncate_output(cached, spill=True) if name in _BOUNDED_READ_TOOL_NAMES else cached
     result = _execute_read_only_tool_uncached(name, arguments, cancel_event)
@@ -3157,6 +3674,7 @@ def execute_read_only_tool(name: str, arguments: dict, cancel_event=None) -> str
         # Bound file observations before caching or returning them to the model.
         # Structured tools, full skills, and images retain their own size contracts.
         result = truncate_output(result, spill=True)
-    if name != "image_read" and not result.startswith("ERROR:"):
+    # A scan stopped by the deadline, Cancel or steering is partial: never cache it.
+    if use_cache and not result.startswith("ERROR:") and PARTIAL_SCAN_MARKER not in result:
         _cache_put(name, arguments, result)
     return result

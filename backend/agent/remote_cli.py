@@ -267,12 +267,11 @@ class MyHarnessRemoteClient:
             json={"text": text, "images": []},
         )
 
-    def resolve_approval(self, session_id: str, approval_id: str, approved: bool) -> dict:
-        return self.request(
-            "POST",
-            f"/api/sessions/{session_id}/approval",
-            json={"approval_id": approval_id, "approved": approved},
-        )
+    def resolve_approval(self, session_id: str, approval_id: str, approved: bool, scope: str = "") -> dict:
+        body = {"approval_id": approval_id, "approved": approved}
+        if scope:
+            body["scope"] = scope
+        return self.request("POST", f"/api/sessions/{session_id}/approval", json=body)
 
     def cancel(self, session_id: str) -> dict:
         return self.request("POST", f"/api/sessions/{session_id}/cancel")
@@ -552,6 +551,9 @@ class RemoteCliApp:
         print(f"Tool: {data.get('tool_name', '')}")
         if data.get("source_agent"):
             print(f"Agent: {data['source_agent']}")
+        warning = data.get("warning")
+        if warning:
+            print(f"WARNING: {warning}")
         args_json = data.get("args_json") or ""
         if args_json:
             print(args_json[:4000])
@@ -559,9 +561,15 @@ class RemoteCliApp:
         if diff_preview:
             print("\nProposed diff:")
             print(str(diff_preview)[:8000])
-        answer = input("Approve this tool call? [y/N]: ").strip().lower()
-        approved = answer in {"y", "yes"}
-        self.client.resolve_approval(self.session_id, approval_id, approved)
+        folders = [str(f) for f in (data.get("allow_folders") or []) if str(f).strip()]
+        if folders:
+            print(f"t = also allow {', '.join(folders)} for shell commands and file reads until this turn ends")
+            answer = input("Approve this tool call? [y/t/N]: ").strip().lower()
+        else:
+            answer = input("Approve this tool call? [y/N]: ").strip().lower()
+        scope = "turn" if folders and answer in {"t", "turn"} else ""
+        approved = answer in {"y", "yes"} or bool(scope)
+        self.client.resolve_approval(self.session_id, approval_id, approved, scope)
         self._resolved_approvals.add(approval_id)
 
     def _print_run_metrics(self, data: dict) -> None:

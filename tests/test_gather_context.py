@@ -272,12 +272,15 @@ class GatherContextTest(unittest.TestCase):
     def test_routed_as_read_only_without_approval(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(utils, "ALLOWED_PATHS", [tmp]):
             root = _make_repo(tmp)
-            with patch.object(agent, "request_approval", side_effect=AssertionError("approval requested")):
+            # The agent's own utils module (not backend.agent.utils) decides what is allowed.
+            with patch.object(agent.utils, "ALLOWED_PATHS", [tmp]), \
+                    patch.object(agent, "request_approval", side_effect=AssertionError("approval requested")):
                 out = agent.execute_tool("gather_context", {
                     "jobs": [{"type": "search", "name": "j", "paths": [str(root / "backend")],
                               "patterns": ["queue_updated"]}]
                 })
             self.assertIn("\"jobs\"", out)
+            self.assertIn("queue_updated", out)
 
 
 if __name__ == "__main__":
