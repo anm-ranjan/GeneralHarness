@@ -365,6 +365,31 @@ def _tool_path(update: dict[str, Any]) -> str:
     return ""
 
 
+COMMAND_LABEL_LIMIT = 100
+_HEREDOC = re.compile(r"""^\s*(?:\S*/)?(\S+)[^\n]*<<-?\s*['"]?\w+""")
+
+
+def command_label(command: str) -> str:
+    """A short "Run: ..." label; the full command stays in the call's details.
+
+    An inline script (``python3 - <<'PY' ...``) becomes "Run python3 script
+    (N lines)"; other multi-line or long commands keep their first line, cut.
+    """
+    lines = str(command or "").strip().splitlines()
+    if not lines:
+        return "Run: a command"
+    heredoc = _HEREDOC.match(lines[0])
+    if heredoc and len(lines) > 1:
+        # Every line between the command and the closing marker, blank ones too.
+        body = len(lines) - 2 if len(lines) > 2 else len(lines) - 1
+        return f"Run {heredoc.group(1)} script ({body} line{'s' if body != 1 else ''})"
+    first = " ".join(lines[0].split())
+    more = f" (+{len(lines) - 1} more line{'s' if len(lines) > 2 else ''})" if len(lines) > 1 else ""
+    if len(first) > COMMAND_LABEL_LIMIT:
+        first = first[:COMMAND_LABEL_LIMIT].rstrip() + "…"
+    return f"Run: {first}{more}"
+
+
 def tool_activity(update: dict[str, Any]) -> tuple[str, str]:
     """(native-style tool name, one-line label) for an ACP tool call."""
     kind = str(update.get("kind") or "other")
@@ -374,8 +399,7 @@ def tool_activity(update: dict[str, Any]) -> tuple[str, str]:
     name = os.path.basename(path.rstrip("/\\")) if path else ""
     tool = _KIND_TOOL.get(kind, str(update.get("name") or kind))
     if kind == "execute":
-        command = raw.get("CommandLine") or raw.get("command") or title
-        return tool, f"Run: {' '.join(str(command).split())}"
+        return tool, command_label(raw.get("CommandLine") or raw.get("command") or title)
     if kind == "read":
         return tool, f"Read {name or title}"
     if kind == "edit":

@@ -154,6 +154,16 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(metrics["reasoning_tokens"], 5)
         self.assertEqual(acp.usage_metrics("p", "m", {}), {})
 
+    def test_long_commands_get_short_labels(self):
+        script = "python3 - <<'PY'\nimport json\nprint(1)\nprint(2)\nPY"
+        self.assertEqual(acp.command_label(script), "Run python3 script (3 lines)")
+        self.assertEqual(acp.command_label("/usr/bin/python3 - <<PY\nprint(1)\nPY"), "Run python3 script (1 line)")
+        self.assertEqual(acp.command_label("cd src &&\nmake test"), "Run: cd src && (+1 more line)")
+        long = acp.command_label("echo " + "x" * 300)
+        self.assertTrue(long.endswith("…"))
+        self.assertLessEqual(len(long), len("Run: ") + acp.COMMAND_LABEL_LIMIT + 1)
+        self.assertEqual(acp.command_label("ls  -la"), "Run: ls -la")
+
     def test_tool_activity_labels(self):
         self.assertEqual(acp.tool_activity({"kind": "execute", "rawInput": {"CommandLine": "ls  -la"}}),
                          ("shell_run", "Run: ls -la"))
