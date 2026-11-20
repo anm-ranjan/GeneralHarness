@@ -257,7 +257,8 @@ Rules:
   {ASK_TOOL_QUALIFIED} with one concrete question and wait for the answer rather than guessing. Ask
   again for each follow-up. Do not use it for anything you can settle by reading the code.
 - {_CLAUDE_QUESTION_RULE}
-- End with a short summary: files changed, commands run, test result.
+- When you changed files or ran commands, end with a short summary: files changed, commands run,
+  test result. Leave it out when you did neither.
 {knowledge}"""
 
 

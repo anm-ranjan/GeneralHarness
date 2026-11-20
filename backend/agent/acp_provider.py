@@ -324,7 +324,9 @@ def build_system_append(meta, knowledge: str = "") -> str:
         f"Work only inside these folders:\n{roots}",
         skill_registry.prompt_fragment(),
         "Be concise. "
-        + ("Answer clearly and directly." if chat else "End with a short summary: files changed, commands run, test result."),
+        + ("Answer clearly and directly." if chat else
+           "When you changed files or ran commands, end with a short summary: files changed, "
+           "commands run, test result. Leave it out when you did neither."),
     ]
     if knowledge:
         parts.append(knowledge)

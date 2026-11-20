@@ -620,7 +620,8 @@ Rules:
 - Skip verification runs, test-scaffold generation, or demo scripts that would produce new files.
 - Be concise: no verbose tool narration, no risk disclaimers, no unnecessary explanation.
 - Only describe what you did or why when the user asks.
-- End with a short summary: files changed, commands run, test result.
+- When you changed files or ran commands, end with a short summary: files changed, commands run,
+  test result. Leave it out when you did neither.
 
 {_web_output_block()}
 {knowledge}
