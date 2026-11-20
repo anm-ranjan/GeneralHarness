@@ -1470,6 +1470,37 @@ class SessionStore:
             ).fetchone()[0]
             self._insert_event(self._conn, event, sequence)
 
+    def insert_imported_session(
+        self, meta: SessionMeta, events: list[EventEnvelope],
+        attachments: dict[str, tuple[bytes, str, str]], codex_summary: dict,
+    ) -> bool:
+        """Insert a whole imported thread, or leave an existing copy untouched."""
+        with self._lock, self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            if self._conn.execute("SELECT 1 FROM sessions WHERE id=?", (meta.id,)).fetchone():
+                return False
+            position = self._conn.execute(
+                "SELECT COALESCE(MAX(position),-1)+1 FROM sessions WHERE project_id=? AND task_id=?",
+                (meta.project_id, meta.task_id),
+            ).fetchone()[0]
+            self._insert_session(self._conn, meta, position)
+            if meta.archived:
+                self._conn.execute("UPDATE sessions SET archived=1 WHERE id=?", (meta.id,))
+            for filename, (content, mime_type, name) in attachments.items():
+                self._store_attachment_conn(
+                    self._conn, meta.id, filename, content, mime_type, "attachment", name,
+                )
+            for sequence, event in enumerate(events):
+                if event.session_id != meta.id:
+                    raise ValueError("Imported event belongs to another session")
+                self._insert_event(self._conn, event, sequence)
+            if codex_summary:
+                self._conn.execute(
+                    "INSERT INTO provider_summaries(session_id,provider,summary_json) VALUES(?,?,?)",
+                    (meta.id, "codex", _json(codex_summary)),
+                )
+        return True
+
     def event_count(self, session_id: str) -> int:
         with self._lock:
             return self._conn.execute(

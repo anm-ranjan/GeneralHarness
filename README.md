@@ -425,6 +425,29 @@ retrievable through the `myharness_context` tool (`action: evidence`); loaded
 
 The setup wizard never stores either API key in YAML.
 
+## Copy Codex desktop history
+
+Run the converter with the Python environment and Codex CLI on the same machine
+as your Codex desktop data:
+
+```bash
+./.venv/bin/python backend/codex_history_import.py --target-data-dir data
+```
+
+The default is a dry run. It converts the history into a temporary copy of the
+MyHarness database and reports what it found. Use `--codex-home` for a custom
+Codex data directory, or `--database-filename` for a custom MyHarness database
+name. After reviewing the dry run, close MyHarness and add `--apply` to write to
+the selected data directory. A rerun skips previously imported threads.
+
+Projects use their primary Codex folder and reuse existing MyHarness projects
+with that folder. Threads without a project go under Chats. The converter keeps
+readable messages, archive status, timestamps, and available images. Missing
+images are marked in the transcript and counted in the report. New
+messages use a separate Codex provider session with recent completed messages
+as context. Workspace files and Codex settings stay in place. The MyHarness
+provider and allowed paths still determine where you can run a new turn.
+
 ## Security
 
 MyHarness is designed for a trusted local network.
