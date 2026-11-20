@@ -3,6 +3,7 @@
 // label as a chip on the session row instead of as a tree level.
 
 import { CHATS_PROJECT_ID } from './constants.js'
+import { acpLabel, isAcpProvider } from './acpAgents.js'
 
 // Routine-agent runs live in the reserved Agents bucket, one task per agent.
 export const isAgentRunSession = session => session?.kind === 'agent_run' || session?.project_id === '__agents__'
@@ -13,6 +14,7 @@ const UNLABELED_TASKS = new Set(['general', 'unlabelled', 'unlabeled', 'new task
 export const MODE_LABELS = { native: 'Native', 'codex-app-server': 'Codex', 'claude-agent': 'Claude' }
 
 export function modeLabel(session) {
+  if (isAcpProvider(session?.provider)) return acpLabel(session.provider)
   return MODE_LABELS[session?.provider || 'native'] || session?.provider || 'Native'
 }
 

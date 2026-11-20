@@ -102,6 +102,7 @@ export default function Sidebar() {
       state.nativeEnabled && 'native',
       state.codexAppServerEnabled && 'codex-app-server',
       state.claudeAgentEnabled && 'claude-agent',
+      ...(state.acpAgents || []).map(agent => agent.provider),
     ].filter(Boolean)
     if (!provider && providers.length !== 1) {
       dispatch({ type: 'OPEN_PROVIDER_PICKER', payload: { projectId, taskId: '' } })

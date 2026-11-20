@@ -62,7 +62,14 @@ def record(store, session_id: str, metrics: dict) -> None:
     """Persist one api_metrics payload. Never raises into a run."""
     try:
         provider = str(metrics.get("provider") or "native")
-        auth = "api" if provider == "native" else codex_auth() if provider == CODEX_PROVIDER_ID else claude_auth()
+        if provider == "native":
+            auth = "api"
+        elif provider.startswith("acp:"):
+            auth = "subscription"  # ACP agents run on personal sign-in only
+        elif provider == CODEX_PROVIDER_ID:
+            auth = codex_auth()
+        else:
+            auth = claude_auth()
         store.record_usage(session_id, metrics, auth=auth)
     except Exception:
         log.debug("usage record failed", exc_info=True)

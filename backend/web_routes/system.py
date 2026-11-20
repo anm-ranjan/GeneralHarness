@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse
 
+import acp_provider
 import audio_transcription
 import fleet_bridge
 import web_helpers
@@ -104,6 +105,10 @@ def health():
         "codex_enabled": web_app._codex_app_server_available(),
         "codex_app_server_enabled": web_app._codex_app_server_available(),
         "claude_agent_enabled": web_app._claude_agent_available(),
+        "acp_agents": [
+            {"provider": agent.provider, "key": agent.key, "label": agent.label}
+            for agent in acp_provider.available_agents()
+        ],
         "desktop_enabled": utils.DESKTOP_ENABLED,
         "desktop_backend_url": utils.DESKTOP_BACKEND_URL,
         "desktop_prefer_existing_backend": utils.DESKTOP_PREFER_EXISTING_BACKEND,

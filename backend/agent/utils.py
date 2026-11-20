@@ -536,6 +536,9 @@ CLAUDE_AGENT_PERMISSION_MODE = str(
 CLAUDE_AGENT_TIMEOUT = config_int(CONFIG, ["claude_agent", "timeout_seconds"], 1800)
 CLAUDE_AGENT_MAX_TURNS = config_int(CONFIG, ["claude_agent", "max_turns"], 0)
 
+# ACP agents (Agent Client Protocol over stdio), parsed by acp_provider.
+ACP_CONFIG = nested_get(CONFIG, ["acp"], {}) or {}
+
 # Electron desktop shell config
 DESKTOP_ENABLED = str(
     nested_get(CONFIG, ["desktop", "enabled"], "false")

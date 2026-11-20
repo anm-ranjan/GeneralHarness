@@ -3,6 +3,7 @@ import { api, isAbandonedRequest } from '../../api'
 import { useApp } from '../../context/AppContext'
 import ProviderLogo from '../ProviderLogo'
 import { modelSentence } from '../../approvalMode'
+import { acpAgentEnabled, acpLabel, isAcpProvider } from '../../acpAgents'
 
 const PROVIDERS = [
   { id: 'native', command: 'native', label: 'Native' },
@@ -11,6 +12,7 @@ const PROVIDERS = [
 ]
 
 function providerEnabled(state, provider) {
+  if (isAcpProvider(provider)) return acpAgentEnabled(state, provider)
   if (provider === 'native') return state.nativeEnabled
   if (provider === 'codex-app-server') return state.codexAppServerEnabled
   return state.claudeAgentEnabled
@@ -74,7 +76,8 @@ export default function ModelSelector() {
     [catalog, currentModel],
   )
   const modelLabel = selected?.display_name
-    || (provider === 'claude-agent' ? 'Claude' : provider === 'codex-app-server' ? 'Codex' : state.model || 'Native')
+    || (provider === 'claude-agent' ? 'Claude' : provider === 'codex-app-server' ? 'Codex'
+      : isAcpProvider(provider) ? acpLabel(provider, state.acpAgents) : state.model || 'Native')
   const efforts = selected?.supported_efforts || []
 
   async function updateSettings(model, reasoningEffort) {
@@ -207,7 +210,8 @@ export default function ModelSelector() {
           {!providerLocked && <div className="model-section model-provider-section">
             <div className="model-section-label">Provider</div>
             <div className="provider-rail">
-              {PROVIDERS.filter(item => providerEnabled(state, item.id)).map(item => (
+              {[...PROVIDERS, ...(state.acpAgents || []).map(agent => ({ id: agent.provider, command: agent.key, label: agent.label }))]
+                .filter(item => providerEnabled(state, item.id)).map(item => (
                 <button
                   key={item.id}
                   type="button"

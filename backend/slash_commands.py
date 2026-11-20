@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from claude_agent_provider import CLAUDE_PROVIDER_ID
 
-ALL_PROVIDERS = ["native", "codex-app-server", CLAUDE_PROVIDER_ID]
+# "acp" stands for every ACP agent provider (acp:<agent>).
+ALL_PROVIDERS = ["native", "codex-app-server", CLAUDE_PROVIDER_ID, "acp"]
 
 SLASH_COMMANDS: list[dict] = [
     {
@@ -112,6 +113,10 @@ COMMAND_NOTES = [
     "Commands run only while the session is idle and are never queued (except /aside).",
     "A bare settings command (for example /thinking) shows the current value.",
 ]
+
+
+# Commands answered by web_runs._handle_slash_command (/aside has its own route).
+HANDLED_HERE = frozenset(command["name"] for command in SLASH_COMMANDS) - {"/aside"}
 
 
 def help_text() -> str:

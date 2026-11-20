@@ -11,6 +11,7 @@ import useSessionTree from '../../hooks/useSessionTree'
 import { hostStorageKey } from '../../fleet'
 import { audioBlobToWav } from '../../audioWav'
 import { continueList, toggleMarker } from '../../textFormat'
+import { acpAgentEnabled, isAcpProvider } from '../../acpAgents'
 
 // Formatting is appearance only: markers are stripped before the model sees
 // the message (see textFormat.js). Underline uses ++ because __ is common in
@@ -238,6 +239,7 @@ export default function Composer() {
       (state.currentProvider === 'native' && !state.nativeEnabled)
       || (state.currentProvider === 'codex-app-server' && !state.codexAppServerEnabled)
       || (state.currentProvider === 'claude-agent' && !state.claudeAgentEnabled)
+      || (isAcpProvider(state.currentProvider) && !acpAgentEnabled(state, state.currentProvider))
     if (currentUnavailable) {
       const fallback = state.nativeEnabled
         ? { command: 'native', label: 'Native' }

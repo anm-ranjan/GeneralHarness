@@ -72,7 +72,17 @@ export default function ProviderPicker() {
               <span className="inline-flex items-center gap-2"><ProviderLogo provider="codex-app-server" /> Codex App Server</span>
             </button>
           )}
-          {!state.nativeEnabled && !state.claudeAgentEnabled && !state.codexAppServerEnabled && (
+          {(state.acpAgents || []).map(agent => (
+            <button
+              key={agent.provider}
+              onClick={() => requestProvider(agent.provider)}
+              disabled={Boolean(selectingProvider)}
+              className="w-full py-2.5 text-[13px] font-medium text-text-bright border border-line rounded-md hover:border-accent hover:text-accent transition-colors"
+            >
+              <span className="inline-flex items-center gap-2"><ProviderLogo provider={agent.provider} /> {agent.label}</span>
+            </button>
+          ))}
+          {!state.nativeEnabled && !state.claudeAgentEnabled && !state.codexAppServerEnabled && !(state.acpAgents || []).length && (
             <p className="py-3 text-center text-[12px] text-danger">
               No authenticated provider is available. Re-run setup or configure a provider.
             </p>

@@ -265,6 +265,35 @@ claude_agent:
   # 0 uses the SDK default (unlimited turns within a run).
   max_turns: 0
 
+acp:
+  # Agents driven over the Agent Client Protocol (JSON-RPC over stdio). Each
+  # agent is a provider named acp:<key>, e.g. /model antigravity.
+  enabled: false
+  agents:
+    antigravity:
+      label: Antigravity
+      # Google's Antigravity CLI (brew install --cask antigravity-cli). Sign in
+      # once with `agy acp --login`; the binary keeps the credentials.
+      command: agy
+      args: [acp]
+      # Only personal sign-in is supported. On it, Google allows a single user
+      # driving an interactive session, so ACP agents never run in routines,
+      # agent runs, sub-agents or /aside, and --dangerously-skip-permissions is
+      # refused.
+      auth: oauth-personal
+      # Default model family; the picker lists what the agent offers that
+      # matches allowed_models.
+      model: gemini-4-neon
+      thought_level: high       # low | medium | high | xhigh (per model)
+      allowed_models: ["gemini-4-*"]
+      # The agent's own background and multi-agent commands are always refused
+      # (schedule, swarm, teamwork, boost, run-workflow); list more here.
+      hidden_commands: []
+      timeout_seconds: 1800
+      # Stop a turn after this long with no update (time spent on an approval
+      # or question does not count).
+      idle_timeout_seconds: 600
+
 desktop:
   enabled: true
   backend_url: "http://127.0.0.1:8420"

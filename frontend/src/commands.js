@@ -12,7 +12,9 @@ export function commandInsertText(usage) {
 // Providers the command does not support for the current session, or null.
 export function commandUnavailableReason(command, provider) {
   const providers = command?.providers
-  if (!provider || !Array.isArray(providers) || providers.includes(provider)) return null
-  const labels = { native: 'native', 'codex-app-server': 'Codex', 'claude-agent': 'Claude' }
+  // ACP agents (acp:<agent>) share the "acp" entry.
+  const family = String(provider || '').startsWith('acp:') ? 'acp' : provider
+  if (!provider || !Array.isArray(providers) || providers.includes(family)) return null
+  const labels = { native: 'native', 'codex-app-server': 'Codex', 'claude-agent': 'Claude', acp: 'ACP agent' }
   return `Only for ${providers.map(p => labels[p] || p).join(', ')} sessions`
 }

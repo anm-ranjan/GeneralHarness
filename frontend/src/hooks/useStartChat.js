@@ -16,6 +16,7 @@ export default function useStartChat() {
       state.nativeEnabled && 'native',
       state.codexAppServerEnabled && 'codex-app-server',
       state.claudeAgentEnabled && 'claude-agent',
+      ...(state.acpAgents || []).map(agent => agent.provider),
     ].filter(Boolean)
     if (!provider && providers.length !== 1) {
       dispatch({ type: 'OPEN_PROVIDER_PICKER', payload: { mode: 'chat' } })
@@ -27,5 +28,5 @@ export default function useStartChat() {
     } catch (err) {
       console.error('Failed to create chat:', err)
     }
-  }, [tree, selectSession, state.nativeEnabled, state.codexAppServerEnabled, state.claudeAgentEnabled, dispatch])
+  }, [tree, selectSession, state.nativeEnabled, state.codexAppServerEnabled, state.claudeAgentEnabled, state.acpAgents, dispatch])
 }

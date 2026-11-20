@@ -94,6 +94,8 @@ class SessionMeta(BaseModel):
     working_directory: str = ""
     codex_state: dict = Field(default_factory=dict)
     claude_state: dict = Field(default_factory=dict)
+    # ACP provider (acp:<agent>): agent key, ACP session id, cwd, applied options.
+    acp_state: dict = Field(default_factory=dict)
     message_queue: list["QueuedMessage"] = Field(default_factory=list)
     prompt_stash: list["QueuedMessage"] = Field(default_factory=list)
     steering_queue: list["QueuedMessage"] = Field(default_factory=list)

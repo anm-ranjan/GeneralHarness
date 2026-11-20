@@ -1,8 +1,11 @@
 // Formatting and totals for the Usage settings tab.
 
+import { acpLabel, isAcpProvider } from './acpAgents.js'
+
 const PROVIDER_LABELS = { native: 'Native', 'codex-app-server': 'Codex', 'claude-agent': 'Claude' }
 
 export function providerLabel(provider) {
+  if (isAcpProvider(provider)) return acpLabel(provider)
   return PROVIDER_LABELS[provider] || provider || 'Unknown'
 }
 

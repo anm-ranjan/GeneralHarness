@@ -71,6 +71,13 @@ class ConfigFilesTests(unittest.TestCase):
             ("native_caching", "explicit_models"),
         }
         example = yaml.safe_load(EXAMPLE_CONFIG.read_text(encoding="utf-8"))
+        # The acp block is loaded as one mapping (utils.ACP_CONFIG) and parsed
+        # per agent by acp_provider.parse_agent_configs.
+        acp_source = (AGENT / "acp_provider.py").read_text(encoding="utf-8")
+        read_elsewhere |= {
+            path for path in leaf_paths(example)
+            if path[0] == "acp" and f'.get("{path[-1]}"' in acp_source
+        }
         read = config_read_paths(UTILS_SOURCE) | read_elsewhere
         unread = [path for path in leaf_paths(example) if path not in read]
         self.assertEqual(unread, [], f"keys in the example config that nothing reads: {unread}")

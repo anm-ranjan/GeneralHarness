@@ -455,6 +455,8 @@ class SessionStore:
             conn.execute("ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
         if "agent_run_json" not in session_columns:
             conn.execute("ALTER TABLE sessions ADD COLUMN agent_run_json TEXT NOT NULL DEFAULT '{}'")
+        if "acp_state_json" not in session_columns:
+            conn.execute("ALTER TABLE sessions ADD COLUMN acp_state_json TEXT NOT NULL DEFAULT '{}'")
         # Web-only formatted rendering of a pending prompt (never model input).
         for table in ("queued_messages", "session_prompt_lists"):
             columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
@@ -478,7 +480,8 @@ class SessionStore:
             """SELECT e.session_id, e.created_at, e.data_json FROM events e
                JOIN sessions s ON s.id = e.session_id
                WHERE e.type = 'api_metrics'
-                 AND COALESCE(s.provider, 'native') NOT IN ('codex-app-server', 'claude-agent', 'codex-cli')"""
+                 AND COALESCE(s.provider, 'native') NOT IN ('codex-app-server', 'claude-agent', 'codex-cli')
+                 AND COALESCE(s.provider, 'native') NOT LIKE 'acp:%'"""
         ).fetchall()
         for row in rows:
             data = _from_json(row[2], {})
@@ -1127,7 +1130,8 @@ class SessionStore:
                 # Workspace and provider bindings belong to the old project.
                 self._conn.execute(
                     """UPDATE sessions SET project_id=?,task_id=?,position=?,working_directory='',
-                       codex_state_json='{}',claude_state_json='{}',version=version+1 WHERE id=?""",
+                       codex_state_json='{}',claude_state_json='{}',acp_state_json='{}',
+                       version=version+1 WHERE id=?""",
                     (target_project_id, target_task_id, position, session_id),
                 )
                 self._conn.execute("DELETE FROM session_labels WHERE session_id=?", (session_id,))
@@ -1187,14 +1191,14 @@ class SessionStore:
             """INSERT INTO sessions(
                 id,project_id,task_id,position,title,summary,created_at,updated_at,message_count,
                 status,provider,kind,working_directory,codex_state_json,claude_state_json,run_settings_json,
-                agent_run_json
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                agent_run_json,acp_state_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 meta.id, meta.project_id, meta.task_id, position, meta.title, meta.summary,
                 meta.created_at.isoformat(), meta.updated_at.isoformat(), meta.message_count,
                 meta.status, meta.provider, meta.kind, meta.working_directory,
                 _json(meta.codex_state), _json(meta.claude_state), _json(meta.run_settings),
-                _agent_run_json(meta),
+                _agent_run_json(meta), _json(meta.acp_state),
             ),
         )
         conn.execute("DELETE FROM queued_messages WHERE session_id=?", (meta.id,))
@@ -1268,6 +1272,7 @@ class SessionStore:
             kind=row["kind"], working_directory=row["working_directory"],
             codex_state=_from_json(row["codex_state_json"], {}),
             claude_state=_from_json(row["claude_state_json"], {}),
+            acp_state=_from_json(row["acp_state_json"], {}) if "acp_state_json" in row.keys() else {},
             message_queue=queue, run_settings=_from_json(row["run_settings_json"], {}),
             prompt_stash=prompt_lists["stash"], steering_queue=prompt_lists["steering"],
             archived=bool(row["archived"]), labels=labels,
@@ -1302,13 +1307,13 @@ class SessionStore:
                 """UPDATE sessions SET
                     project_id=?,task_id=?,title=?,summary=?,updated_at=?,message_count=?,status=?,
                     provider=?,kind=?,working_directory=?,codex_state_json=?,claude_state_json=?,
-                    run_settings_json=?,agent_run_json=?,version=version+1
+                    run_settings_json=?,agent_run_json=?,acp_state_json=?,version=version+1
                    WHERE id=?""",
                 (
                     meta.project_id, meta.task_id, meta.title, meta.summary, meta.updated_at.isoformat(),
                     meta.message_count, meta.status, meta.provider, meta.kind, meta.working_directory,
                     _json(meta.codex_state), _json(meta.claude_state), _json(meta.run_settings),
-                    _agent_run_json(meta), meta.id,
+                    _agent_run_json(meta), _json(meta.acp_state), meta.id,
                 ),
             )
             if cur.rowcount == 0:

@@ -19,6 +19,7 @@ export const initialState = {
 
   codexAppServerEnabled: false,
   claudeAgentEnabled: false,
+  acpAgents: [],
   nativeEnabled: false,
   defaultProvider: 'native',
   appName: 'MyHarness',
@@ -231,6 +232,12 @@ function queueItemView(item) {
   }
 }
 
+function sameAcpAgents(current, next) {
+  const list = Array.isArray(next) ? next : []
+  return Array.isArray(current) && current.length === list.length
+    && current.every((agent, i) => agent.provider === list[i].provider && agent.label === list[i].label)
+}
+
 export function reducer(state, action) {
   switch (action.type) {
     case 'SET_NATIVE_MODEL':
@@ -240,6 +247,10 @@ export function reducer(state, action) {
         serverOnline: true,
         codexAppServerEnabled: !!(action.payload.codex_app_server_enabled ?? action.payload.codex_enabled),
         claudeAgentEnabled: !!action.payload.claude_agent_enabled,
+        // Same list, same array: an unchanged health poll must not re-render.
+        acpAgents: sameAcpAgents(state.acpAgents, action.payload.acp_agents)
+          ? state.acpAgents
+          : (Array.isArray(action.payload.acp_agents) ? action.payload.acp_agents : []),
         nativeEnabled: !!action.payload.native_enabled,
         defaultProvider: action.payload.default_provider || 'native',
         appName: action.payload.app_name || 'MyHarness',

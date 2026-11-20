@@ -14,6 +14,9 @@ import skill_registry
 from orchestration import CombinedCancelEvent, NativeOrchestrator
 from codex_app_server_provider import CodexAppServerRuntime
 from claude_agent_provider import CLAUDE_PROVIDER_ID, ClaudeAgentProvider
+import acp_provider
+import context_handoff
+from acp_provider import AcpRuntime, is_acp
 from web_models import EventType
 from web_ui_adapter import SubagentUI, WebUI
 
@@ -46,6 +49,94 @@ def _get_codex_runtime() -> CodexAppServerRuntime:
         return _codex_runtime
 
 
+_acp_runtime: AcpRuntime | None = None
+_acp_runtime_lock = threading.Lock()
+
+
+def _get_acp_runtime() -> AcpRuntime:
+    global _acp_runtime
+    with _acp_runtime_lock:
+        if _acp_runtime is None:
+            _acp_runtime = AcpRuntime()
+        return _acp_runtime
+
+
+def shutdown_acp_runtime() -> None:
+    global _acp_runtime
+    with _acp_runtime_lock:
+        runtime = _acp_runtime
+        _acp_runtime = None
+    if runtime is not None:
+        runtime.stop()
+
+
+def _handoff_summarizer(meta, session_id: str, workspace_root: str):
+    """A callable(question) -> answer on the provider being switched away from, or None.
+
+    Codex and Claude answer on a fork (as /aside does), Native on a copy of its
+    history, an ACP agent with one silent turn in its own session.
+    """
+    import aside as aside_module
+
+    run_settings = _effective_run_settings(meta)
+    provider = meta.provider
+    if provider == "native":
+        if not web_app._native_available():
+            return None
+
+        def ask_native(question: str) -> str:
+            from web_ui_adapter import AsideUI
+
+            ui = AsideUI(web_app._store, session_id, run_settings)
+            agent.run_agent(
+                question,
+                aside_module.native_context_copy(session_id, workspace_root),
+                max_iterations=1,
+                ui=ui,
+                cancel_event=threading.Event(),
+                tools_enabled=False,
+                agent_path="/handoff",
+                tool_policy="read_only",
+                show_user=False,
+            )
+            return ui.result
+
+        return ask_native
+    if provider == "codex-app-server":
+        if not (meta.codex_state or {}).get("thread_id") or not web_app._codex_app_server_available():
+            return None
+        return lambda question: aside_module._answer_codex(session_id, meta, question, workspace_root, run_settings)
+    if provider == CLAUDE_PROVIDER_ID:
+        if not (meta.claude_state or {}).get("session_id") or not web_app._claude_agent_available():
+            return None
+        return lambda question: aside_module._answer_claude(session_id, meta, question, workspace_root, run_settings)
+    if is_acp(provider):
+        agent_config = acp_provider.agent_for(provider)
+        if agent_config is None or not web_app._acp_available(provider) or not (meta.acp_state or {}).get("session_id"):
+            return None
+
+        def ask(question: str) -> str:
+            import usage_ledger
+
+            text, metrics = _get_acp_runtime().ask(agent_config, meta, question, workspace_root, web_app._store)
+            if metrics:
+                usage_ledger.record(web_app._store, session_id, {**metrics, "purpose": "provider_handoff"})
+            return text
+
+        return ask
+    return None
+
+
+def close_acp_session(meta) -> None:
+    """Close a deleted thread's ACP session in a running agent. The agent keeps its history."""
+    runtime = _acp_runtime
+    session_id = (getattr(meta, "acp_state", None) or {}).get("session_id")
+    agent = acp_provider.agent_for(getattr(meta, "provider", ""))
+    if runtime is None or not session_id or agent is None:
+        return
+    threading.Thread(target=runtime.close_session, args=(agent, session_id), daemon=True).start()
+
+
 def shutdown_codex_runtime() -> None:
     global _codex_runtime
     with _codex_runtime_lock:
@@ -69,10 +160,13 @@ def _effective_run_settings(meta) -> dict:
         max_iters = int(max_iters) if max_iters is not None else None
     except (TypeError, ValueError):
         max_iters = None
+    acp_agent = acp_provider.agent_for(meta.provider)
     default_model = (
         utils.CODEX_APP_SERVER_MODEL
         if meta.provider == "codex-app-server"
-        else utils.CLAUDE_AGENT_MODEL if meta.provider == CLAUDE_PROVIDER_ID else utils.MODEL
+        else utils.CLAUDE_AGENT_MODEL if meta.provider == CLAUDE_PROVIDER_ID
+        else (acp_agent.model if acp_agent else "") if is_acp(meta.provider)
+        else utils.MODEL
     )
     # Native starts at agent.native_reasoning_effort (high unless configured).
     default_effort = (
@@ -80,6 +174,7 @@ def _effective_run_settings(meta) -> dict:
         if meta.provider == CLAUDE_PROVIDER_ID
         else utils.CODEX_APP_SERVER_REASONING_EFFORT
         if meta.provider == "codex-app-server"
+        else (acp_agent.thought_level if acp_agent else "high") if is_acp(meta.provider)
         else utils.NATIVE_REASONING_DEFAULT
     )
     return {
@@ -99,6 +194,9 @@ def _update_run_settings(meta, **changes) -> None:
 
 
 def _provider_label(provider: str) -> str:
+    if is_acp(provider):
+        agent = acp_provider.agent_for(provider)
+        return agent.label if agent else acp_provider.acp_key(provider).title()
     return {
         "codex-app-server": "Codex App Server",
         CLAUDE_PROVIDER_ID: "Claude",
@@ -126,6 +224,10 @@ def _message_block_detail(meta, text: str, workspace_root: str, image_count: int
         return "The Claude provider is unavailable. Run /model native to migrate this session before sending messages."
     if meta.provider == "native" and not web_app._native_available():
         return "The Native provider has no API credential. Configure it in Electron Settings, or run /model codex or /model claude."
+    if is_acp(meta.provider):
+        reason = acp_provider.unavailable_reason(meta.provider)
+        if reason:
+            return f"{reason} Run /model native to switch this session."
     return None
 
 
@@ -199,6 +301,8 @@ async def _handle_chdir_command(session_id: str, command: str, current_workspace
         meta.codex_state = {}
     elif meta.provider == CLAUDE_PROVIDER_ID:
         meta.claude_state = {}
+    elif is_acp(meta.provider):
+        meta.acp_state = {}
     web_app._store.update_session(meta)
 
     web_app._session_messages[session_id] = web_helpers._restore_session_messages(
@@ -270,7 +374,16 @@ def _emit_run_metrics(web_ui, session_id: str, meta, started_monotonic: float) -
             "elapsed_s": round(max(0.0, time.monotonic() - started_monotonic), 1),
             "estimated": True,
         }
-        if meta.provider not in ("codex-app-server", CLAUDE_PROVIDER_ID):
+        acp_context = getattr(web_ui, "acp_context", None)
+        if is_acp(meta.provider) and isinstance(acp_context, dict) and acp_context.get("size"):
+            used, size = int(acp_context.get("used") or 0), int(acp_context["size"])
+            metrics.update({
+                "context_used": used,
+                "context_source": "provider",
+                "context_limit": size,
+                "context_percent": round(min(999.9, used / size * 100), 1),
+            })
+        elif meta.provider not in ("codex-app-server", CLAUDE_PROVIDER_ID) and not is_acp(meta.provider):
             if hasattr(web_ui, "api_usage"):
                 metrics["api_usage"] = web_ui.api_usage.snapshot()
             messages = web_app._session_messages.get(session_id) or []
@@ -330,6 +443,40 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
                 )
             except Exception as e:
                 web_ui.show_error(f"Codex error: {e}")
+            finally:
+                if run.cancel_event.is_set() and not web_ui.finished_reason:
+                    web_ui.show_agent_finished("interrupted")
+                elif not web_ui.finished_reason:
+                    web_ui.show_agent_finished("error")
+                _emit_run_metrics(web_ui, session_id, meta, run_started)
+                _finish_run_and_start_next(session_id)
+    elif is_acp(meta.provider):
+        def worker():
+            web_ui = WebUI(session_id, web_app._manager, run, web_app._store, run_settings=run_settings)
+            web_ui.display_text = display_text
+            run_started = time.monotonic()
+            agent = acp_provider.agent_for(meta.provider)
+            label = agent.label if agent else _provider_label(meta.provider)
+            try:
+                if agent is None:
+                    raise RuntimeError(acp_provider.unavailable_reason(meta.provider) or "Agent not configured")
+                prompt = web_helpers._codex_prompt_with_attachments(text, saved_attachments, workspace_root)
+                _get_acp_runtime().run(
+                    agent,
+                    meta=meta,
+                    user_prompt=prompt,
+                    workspace=workspace_root,
+                    ui=web_ui,
+                    cancel_event=run.cancel_event,
+                    store=web_app._store,
+                    display_prompt=text,
+                    display_images=saved_attachments,
+                    model=run_settings["model"],
+                    reasoning_effort=run_settings["reasoning_effort"],
+                    approval_mode=run_settings["approval_mode"],
+                )
+            except Exception as e:
+                web_ui.show_error(f"{label} error: {e}")
             finally:
                 if run.cancel_event.is_set() and not web_ui.finished_reason:
                     web_ui.show_agent_finished("interrupted")
@@ -629,10 +776,18 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
     command = text.strip()
     lowered = command.lower()
     approve_modes = ("always_ask", "shell_only", "auto_approve")
+    if (lowered.split(maxsplit=1) or [""])[0] not in slash_commands.HANDLED_HERE:
+        # Not a MyHarness command (e.g. an ACP agent's own /goal): the provider
+        # records the message and answers it, so nothing is emitted here.
+        return False
 
     if lowered == "/clear":
         meta = web_app._store.load_session(session_id)
         _emit_session_event(session_id, EventType.USER_MESSAGE, {"text": text})
+        if meta is not None and is_acp(meta.provider) and meta.acp_state:
+            # The agent's next turn starts a new session of its own.
+            meta.acp_state = {}
+            web_app._store.update_session(meta)
         web_app._session_messages[session_id] = agent.build_initial_messages(
             workspace_root,
             getattr(meta, "kind", "project"),
@@ -827,6 +982,10 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
             "claude": CLAUDE_PROVIDER_ID,
             "claude-agent": CLAUDE_PROVIDER_ID,
         }
+        for acp_agent in acp_provider.configured_agents().values():
+            provider_aliases.setdefault(acp_agent.key, acp_agent.provider)
+            provider_aliases.setdefault(acp_agent.provider, acp_agent.provider)
+        choices = ", ".join(["native", "codex", "claude", *acp_provider.configured_agents().keys()])
         # Providers that share the native message history need no summarisation
         # on switch; Codex keeps a separate thread.
         native_family = {"native"}
@@ -838,7 +997,7 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
             _emit_session_event(
                 session_id,
                 EventType.STATUS,
-                {"text": f"Provider: {_provider_label(current)}. Usage: /model <native|codex|claude>"},
+                {"text": f"Provider: {_provider_label(current)}. Usage: /model <{choices.replace(', ', '|')}>"},
             )
             _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
             return True
@@ -849,7 +1008,7 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
             _emit_session_event(
                 session_id,
                 EventType.ERROR,
-                {"text": f"Unknown provider '{target_raw}'. Choose: native, codex, claude"},
+                {"text": f"Unknown provider '{target_raw}'. Choose: {choices}"},
             )
             _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
             return True
@@ -890,6 +1049,15 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
             _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
             return True
 
+        if is_acp(target) and not web_app._acp_available(target):
+            _emit_session_event(
+                session_id,
+                EventType.ERROR,
+                {"text": acp_provider.unavailable_reason(target) or "That ACP agent is unavailable."},
+            )
+            _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
+            return True
+
         if target == current:
             _emit_session_event(
                 session_id,
@@ -906,19 +1074,20 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
         same_family = current in native_family and target in native_family
 
         if has_context and not same_family:
-            _emit_session_event(session_id, EventType.STATUS, {"text": "Summarising context for provider switch…"})
-            if current in native_family:
-                msgs = web_app._session_messages.get(session_id)
-                if not msgs:
-                    msgs = web_helpers._restore_session_messages(session_id, workspace_root)
-                body = [m for m in msgs if m.get("role") != "system"]
-                if body:
-                    context_summary = agent.summarize_history([], body)
+            events = web_app._store.load_events(session_id)
+            from_label = _provider_label(current)
+            if target in native_family:
+                # Native rebuilds every message from the transcript itself, so it
+                # only needs to hear about the thread's files.
+                context_summary = context_handoff.files_note(context_handoff.collect(events))
             else:
-                codex_sum = web_app._store.load_codex_summary(meta.id)
-                if codex_sum:
-                    import json as _json
-                    context_summary = _json.dumps(codex_sum, indent=2, ensure_ascii=False)
+                _emit_session_event(session_id, EventType.STATUS, {"text": f"Summarising the thread with {from_label}…"})
+                outgoing = _handoff_summarizer(meta, session_id, workspace_root)
+                context_summary, source = await asyncio.to_thread(
+                    context_handoff.build, events, outgoing, from_label, _provider_label)
+                if source == "fallback":
+                    _emit_session_event(session_id, EventType.STATUS, {
+                        "text": f"{from_label} could not write the summary, so its replies were condensed another way."})
 
         if has_context and target == "codex-app-server":
             prior_attachment_paths = web_helpers._copy_attachments_to_codex_workspace(session_id, workspace_root)
@@ -928,6 +1097,9 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
 
         old_provider = current
         meta.provider = target
+        if is_acp(target) or is_acp(old_provider):
+            # The agent's own session misses whatever happened on the other provider.
+            meta.acp_state = {}
         # Model identifiers and thinking levels are provider-specific. Carrying
         # a Codex model into Claude (or the inverse) would fail the next run.
         meta.run_settings = {
@@ -954,6 +1126,12 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
                 claude_state = dict(meta.claude_state) if meta.claude_state else {}
                 claude_state["pending_context_summary"] = context_summary
                 meta.claude_state = claude_state
+                web_app._store.update_session(meta)
+                if session_id in web_app._session_messages:
+                    del web_app._session_messages[session_id]
+            elif is_acp(target):
+                # A different agent's session cannot be resumed: start fresh with the summary.
+                meta.acp_state = {"pending_context_summary": context_summary}
                 web_app._store.update_session(meta)
                 if session_id in web_app._session_messages:
                     del web_app._session_messages[session_id]

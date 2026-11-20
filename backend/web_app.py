@@ -184,6 +184,26 @@ def _native_available() -> bool:
     return utils.native_enabled()
 
 
+def _acp_available(provider: str) -> bool:
+    import acp_provider
+
+    return acp_provider.agent_available(acp_provider.agent_for(provider))
+
+
+def _provider_available(provider: str) -> bool:
+    import acp_provider
+
+    if provider == "native":
+        return _native_available()
+    if provider == "codex-app-server":
+        return _codex_app_server_available()
+    if provider == "claude-agent":
+        return _claude_agent_available()
+    if acp_provider.is_acp(provider):
+        return _acp_available(provider)
+    return False
+
+
 # ── app ────────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -211,6 +231,7 @@ async def _lifespan(app: FastAPI):
     yield
     fleet_bridge.tunnels.stop()
     shutdown_codex_runtime()
+    shutdown_acp_runtime()
     utils.kill_all_background_jobs()
     if _store is not None:
         _store.close()
@@ -334,6 +355,7 @@ from web_runs import (  # noqa: F401
     _handle_slash_command,
     _message_block_detail,
     _start_agent_run_locked,
+    shutdown_acp_runtime,
     shutdown_codex_runtime,
 )
 from web_routes.system import (  # noqa: F401

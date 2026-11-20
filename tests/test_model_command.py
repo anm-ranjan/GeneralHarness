@@ -18,6 +18,13 @@ from backend.web_models import EventType
 
 
 class ModelCommandTests(unittest.TestCase):
+    def setUp(self):
+        # The provider list in /model's messages must not depend on this
+        # machine's config enabling ACP agents.
+        patcher = patch.object(web_app.utils, "ACP_CONFIG", {})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _session(self, store, root, provider="native"):
         store.ensure_project("proj", "Project", str(root))
         store.ensure_task("proj", "task", "Task")

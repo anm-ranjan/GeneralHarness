@@ -122,6 +122,9 @@ def start(session_id: str, meta, question: str, workspace_root: str) -> str:
     """Record the question and answer it in the background. Returns the aside id."""
     import web_runs
 
+    if str(meta.provider).startswith("acp:"):
+        # Personal sign-in allows one interactive turn at a time, so no side questions.
+        raise ValueError("/aside is not available for ACP agents such as Antigravity.")
     answer_with = _answerer(meta.provider)
     if answer_with is None:
         raise ValueError(f"/aside is not available for the {meta.provider} provider.")

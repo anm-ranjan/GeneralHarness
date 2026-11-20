@@ -44,6 +44,10 @@ export function modelFamily(model = '') {
 
 export function providerFamily(provider, model = '') {
   if (provider === 'claude-agent') return 'anthropic'
+  // ACP agents follow their model; Antigravity is Google's even before one is known.
+  if (String(provider || '').startsWith('acp:')) {
+    return modelFamily(model) || (provider === 'acp:antigravity' ? 'google' : '')
+  }
   if (provider === 'codex-app-server' || provider === 'codex-cli') return 'openai'
   return modelFamily(model)
 }

@@ -3,6 +3,8 @@
 // Codex…" for those providers) and moves through these as the wait drags on,
 // driven by how long it has been since the last sign of life, so each tool return
 // starts again at "Thinking…". Deterministic, so the line never flickers back and forth.
+import { acpLabel } from './acpAgents.js'
+
 const WAITING_PHRASES = [
   'Computing',
   'Still thinking',
@@ -19,7 +21,7 @@ const PROVIDER_NAMES = { 'claude-agent': 'Claude', 'codex-app-server': 'Codex', 
 export function waitingPhrase(idleMs, provider = '') {
   const idle = Number.isFinite(idleMs) && idleMs > 0 ? idleMs : 0
   if (idle < FIRST_PHRASE_MS) {
-    const name = PROVIDER_NAMES[provider]
+    const name = PROVIDER_NAMES[provider] || acpLabel(provider)
     return name ? `Thinking with ${name}…` : 'Thinking…'
   }
   const step = Math.floor((idle - FIRST_PHRASE_MS) / PHRASE_MS)

@@ -11,6 +11,8 @@ from fastapi import APIRouter, HTTPException, Response
 
 import base64
 
+import acp_provider
+
 import session_backup
 import session_export
 import session_search
@@ -114,18 +116,28 @@ def create_task(req: CreateTaskRequest):
     return task.model_dump(mode="json")
 
 
+def _require_provider(provider: str) -> None:
+    """400 unless ``provider`` is known and usable on this host."""
+    if acp_provider.is_acp(provider):
+        reason = acp_provider.unavailable_reason(provider)
+        if reason:
+            raise HTTPException(status_code=400, detail=reason)
+        return
+    if provider not in {"native", "codex-app-server", "claude-agent"}:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+    if provider == "native" and not web_app._native_available():
+        raise HTTPException(status_code=400, detail="The Native provider is not available; configure its API key in Electron Settings")
+    if provider == "codex-app-server" and not web_app._codex_app_server_available():
+        raise HTTPException(status_code=400, detail="Codex app-server is not available")
+    if provider == "claude-agent" and not web_app._claude_agent_available():
+        raise HTTPException(status_code=400, detail="The Claude provider is not available")
+
+
 @router.post("/api/sessions")
 async def create_session(req: CreateSessionRequest):
     if req.project_id == AGENTS_PROJECT_ID:
         raise HTTPException(status_code=400, detail="Start runs from the Agents view")
-    if req.provider not in {"native", "codex-app-server", "claude-agent"}:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {req.provider}")
-    if req.provider == "native" and not web_app._native_available():
-        raise HTTPException(status_code=400, detail="The Native provider is not available; configure its API key in Electron Settings")
-    if req.provider == "codex-app-server" and not web_app._codex_app_server_available():
-        raise HTTPException(status_code=400, detail="Codex app-server is not available")
-    if req.provider == "claude-agent" and not web_app._claude_agent_available():
-        raise HTTPException(status_code=400, detail="The Claude provider is not available")
+    _require_provider(req.provider)
     try:
         meta = web_app._store.create_session(req.project_id, req.task_id, req.title, req.provider)
     except ValueError as e:
@@ -135,14 +147,7 @@ async def create_session(req: CreateSessionRequest):
 
 @router.post("/api/chats")
 async def create_chat(req: CreateChatRequest):
-    if req.provider not in {"native", "codex-app-server", "claude-agent"}:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {req.provider}")
-    if req.provider == "native" and not web_app._native_available():
-        raise HTTPException(status_code=400, detail="The Native provider is not available; configure its API key in Electron Settings")
-    if req.provider == "codex-app-server" and not web_app._codex_app_server_available():
-        raise HTTPException(status_code=400, detail="Codex app-server is not available")
-    if req.provider == "claude-agent" and not web_app._claude_agent_available():
-        raise HTTPException(status_code=400, detail="The Claude provider is not available")
+    _require_provider(req.provider)
     web_app._store.ensure_chats_bucket()
     try:
         meta = web_app._store.create_session(
@@ -242,6 +247,7 @@ def delete_session(session_id: str):
     web_app._session_messages.pop(session_id, None)
     _file_snapshots.pop(session_id, None)
     web_app._discard_run_lock(session_id)
+    web_runs.close_acp_session(meta)
     return {"status": "deleted"}
 
 
@@ -403,6 +409,20 @@ def get_session_model_options(session_id: str):
             "models": models,
         }
 
+    if acp_provider.is_acp(meta.provider):
+        agent = acp_provider.agent_for(meta.provider)
+        reason = acp_provider.unavailable_reason(meta.provider)
+        if agent is None or reason:
+            raise HTTPException(status_code=409, detail=reason or "ACP agent unavailable")
+        models = acp_provider.model_catalog(agent)
+        current_model = effective["model"] or next((m["id"] for m in models if m.get("is_default")), "")
+        return {
+            "provider": meta.provider,
+            "current_model": current_model,
+            "current_effort": effective["reasoning_effort"],
+            "models": models,
+        }
+
     if meta.provider == "claude-agent":
         configured_model = str(effective["model"] or "sonnet")
         current_model = next(
@@ -464,8 +484,16 @@ def update_session_run_settings(session_id: str, req: UpdateRunSettingsRequest):
     allowed_efforts = (
         _CLAUDE_EFFORTS if meta.provider == "claude-agent"
         else utils.NATIVE_REASONING_EFFORTS if meta.provider == "native"
+        else acp_provider.EFFORT_SUFFIXES if acp_provider.is_acp(meta.provider)
         else _CODEX_EFFORTS
     )
+    if acp_provider.is_acp(meta.provider):
+        agent = acp_provider.agent_for(meta.provider)
+        if agent is not None and not agent.model_allowed(model):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{model} is not available on personal sign-in. Allowed: {', '.join(agent.allowed_models)}",
+            )
     if effort and effort not in allowed_efforts:
         raise HTTPException(
             status_code=400,
