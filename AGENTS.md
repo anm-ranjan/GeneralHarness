@@ -20,7 +20,7 @@ four clients (React web UI, Electron shell, Rust TUI, CLI).
   - `system.py` — `/api/health`, `/api/shutdown`, `/api/codex/status`,
     `/api/claude/status`, `/api/project`, `/api/browse`, `/api/files/image`,
     `/api/audio/transcribe`.
-  - `sessions.py` — the project/task/session/chat tree, search, export, backup
+  - `sessions.py` — the project/thread/chat tree, labels, search, export, backup
     and import, metrics, attachments, rename/move/delete.
   - `runs.py` — the global `/api/events` socket, the per-session event socket,
     message submission, approvals, queue management, cancellation.
@@ -43,7 +43,8 @@ four clients (React web UI, Electron shell, Rust TUI, CLI).
   WebSocket connection bookkeeping.
 - `web_ui_adapter.py` — translates agent UI protocol events into persisted,
   broadcastable WebSocket events.
-- `session_store.py` — persistence for projects, tasks, sessions, and events.
+- `session_store.py` — persistence for projects, labels (stored as `tasks`),
+  sessions, and events.
 - `session_search.py`, `session_export.py`, `session_backup.py` — cross-session
   search, Markdown/HTML export, portable `.myharness.zip` backup and import.
 - `audio_transcription.py` — speech to text. `config_from_utils()` builds an
@@ -96,7 +97,7 @@ binary on PATH.
 
 ```text
 data/
-  project_index.json          projects, tasks, session ids (incl. "__chats__")
+  project_index.json          projects, labels (`tasks`), session ids (incl. "__chats__")
   sessions/<id>.json          session metadata, queued messages, overrides
   events/<id>.jsonl           append-only event stream
   attachments/                uploaded and pasted images
@@ -157,7 +158,12 @@ if the user should be asked about it.
 ## Runtime concepts
 
 - **Projects** map to filesystem roots and must be inside `permissions.allowed_paths`.
-- **Tasks** group sessions inside a project.
+- **Threads** (sessions) sit directly under their project in the sidebar;
+  there is no folder level in between.
+- **Labels** tag threads and filter the sidebar. They are stored as a
+  project's `tasks` (and `task_id` on a session is its primary label, `General`
+  by default), but they are not folders: never tell the user to expand a label
+  to find a thread. A new thread shows under its project.
 - **Chats** are project-less sessions (`SessionMeta.kind == "chat"`) in the
   reserved `__chats__` bucket. They use a lighter system prompt, run inside
   `data/chats/<chat_id>/`, and otherwise reuse the whole session pipeline. The
@@ -195,6 +201,25 @@ if the user should be asked about it.
   skips them, and a `shell_run` naming one (`shell_protected_paths`) is refused
   before any approval. The user's own web preview/editor uses
   `is_path_allowed` alone.
+- **The application's own code** (`utils.APP_CODE_PATHS`, part of
+  `is_protected_path`): every top-level entry of the application folder except
+  `skills/`, `agents/` and `data/` (symlinks skipped), plus
+  `permissions.denied_paths`. Folders the backend provisions for agents
+  (`register_allowed_path`, e.g. `logs/tool_output_spill`) stay open. Native
+  refuses it like the settings files. Claude refuses it in a PreToolUse hook
+  (`claude_agent_provider.code_guard_hooks`), which runs in every permission
+  mode. Codex keeps its legacy sandbox (a permission profile could deny the
+  folders but breaks `require_escalated`), so its prompt lists them as off
+  limits and approval requests naming them are declined unasked. Antigravity
+  gets the same note in its folder limits, and permission requests naming them
+  are rejected. Prompt text: `utils.app_code_prompt_block`.
+- **Thread guard** (`thread_guard.py`, `request_origin.py`): the backend
+  identifies the process behind each loopback request with `lsof`/`ps` and
+  walks its parents. Tools of an ACP agent (Antigravity) may not create
+  threads, start agent runs, send/steer/edit prompts or answer
+  approvals/questions; other agents may not create ACP threads, prompt them,
+  or answer approvals/questions. Everything else (reads, fleet-import) stays
+  open. Without `lsof`/`ps` (Windows) requests count as the user's.
 - **Stopping tools**: `run_agent` wraps each tool call in
   `utils.tool_stop_scope`; directory walks (`_BoundedWalk`) and rg scans stop on
   Cancel, steering or `search.walk_time_limit_seconds` and return partial
@@ -360,6 +385,9 @@ if the user should be asked about it.
 - Repository skills live under `skills/<name>/SKILL.md`. Keep them
   provider-independent; the Native provider reads them through skill tools and
   Codex/Claude receive the same catalog in their appended instructions.
+  Antigravity reads them through Settings -> Antigravity (`skills.json`), so
+  they must never name the app; `antigravity_setup.NOT_FOR_ANTIGRAVITY` leaves
+  out skills it may not use (`thread-handoff`, which starts threads).
 - Defaults must be safe: loopback bind, `always_ask` approvals, git writes off,
   empty `allowed_paths` in the example.
 - Tests patch `utils.ALLOWED_PATHS` per test, so an empty `allowed_paths` in the
@@ -396,7 +424,7 @@ if the user should be asked about it.
 | POST | `/api/browse` | Directory picker |
 | GET | `/api/files/image` | Serve an allowed local image |
 | POST | `/api/audio/transcribe` | Transcribe a composer recording |
-| GET | `/api/sessions` | Project/task/session tree |
+| GET | `/api/sessions` | Projects (with their labels as `tasks`) and threads |
 | GET | `/api/search` | Cross-session transcript/tool/file search (`session_id` limits it to one thread) |
 | GET/PUT | `/api/scratchpad` | Global scratch note (Workspace > Notes) |
 | GET/PUT | `/api/projects/{id}/instructions` | Project instructions |
@@ -406,7 +434,7 @@ if the user should be asked about it.
 | PATCH/DELETE | `/api/projects/{id}/memory/{memory_id}` | Edit/pin or delete a note (delete returns it for undo) |
 | POST | `/api/sessions/{id}/memory/from-reply` | Condense one assistant reply into a project memory note |
 | POST/PATCH/DELETE | `/api/projects[/{id}]` | Manage projects |
-| POST/PATCH/DELETE | `/api/tasks`, `/api/projects/{id}/tasks/{task_id}` | Manage tasks |
+| POST/PATCH/DELETE | `/api/tasks`, `/api/projects/{id}/tasks/{task_id}` | Manage labels (stored as tasks) |
 | POST | `/api/sessions` | Create a session |
 | POST | `/api/chats` | Create a sandboxed chat |
 | GET/PATCH/DELETE | `/api/sessions/{id}` | Read, rename, delete a session |

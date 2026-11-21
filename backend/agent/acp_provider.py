@@ -34,6 +34,7 @@ import re
 import shutil
 import threading
 import time
+import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -361,7 +362,29 @@ def command_list(commands: list[dict[str, Any]], agent: AcpAgentConfig) -> list[
 def build_system_append(meta) -> str:
     """Only the folder limits; MyHarness adds no persona, skills or project notes."""
     roots = "\n".join(f"- {root}" for root in utils.ALLOWED_PATHS) or "- (the working directory)"
-    return f"Work only inside these folders:\n{roots}"
+    text = f"Work only inside these folders:\n{roots}"
+    off_limits = utils.app_code_prompt_block()
+    if off_limits:
+        text += f"\n\n{off_limits}"
+    return text
+
+
+def _protected_in_tool_call(tool_call: dict[str, Any], cwd: str) -> list[str]:
+    """Protected paths a permission request names: its locations, and paths
+    or commands in its raw input."""
+    hits: list[str] = []
+    for loc in tool_call.get("locations") or []:
+        if isinstance(loc, dict) and isinstance(loc.get("path"), str) and utils.is_protected_path(loc["path"]):
+            hits.append(loc["path"])
+    raw = tool_call.get("rawInput")
+    values = raw.values() if isinstance(raw, dict) else [raw]
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            if os.path.isabs(value) and utils.is_protected_path(value):
+                hits.append(value)
+            else:
+                hits += utils.shell_protected_paths(value, cwd)
+    return list(dict.fromkeys(hits))
 
 
 def build_prompt_text(user_prompt: str, *, context_summary: str | None = None, note: str | None = None) -> str:
@@ -563,6 +586,15 @@ class AcpError(RuntimeError):
         self.data = data
 
 
+# Every ACP agent process this backend started, so request_origin can tell a
+# call made by one of its tools from one the user made.
+_TRANSPORTS: "weakref.WeakSet[AcpTransport]" = weakref.WeakSet()
+
+
+def live_agent_pids() -> set[int]:
+    return {t.proc.pid for t in list(_TRANSPORTS) if t.alive and t.proc is not None}
+
+
 class AcpTransport:
     """Newline-delimited JSON-RPC over a child's stdio, routed by ``sessionId``."""
 
@@ -595,6 +627,7 @@ class AcpTransport:
             env=self.env,
             limit=_LINE_LIMIT,
         )
+        _TRANSPORTS.add(self)
         self._reader = asyncio.create_task(self._read_loop())
         self._stderr_task = asyncio.create_task(self._read_stderr())
 
@@ -1291,6 +1324,15 @@ class _Turn:
             if option is not None:
                 return {"outcome": {"outcome": "selected", "optionId": option["optionId"]}}
         tool, label = tool_activity(tool_call)
+        protected = _protected_in_tool_call(tool_call, str(self.workspace or ""))
+        if protected:
+            # Never offered to the user: these paths are off limits in every mode.
+            self.denied_titles.append(label)
+            _stream(self.ui, "show_status", utils.protected_denied(", ".join(protected)))
+            option = next((o for kind in ("reject_once", "reject_always") for o in options if o.get("kind") == kind), None)
+            if option is None:
+                return {"outcome": {"outcome": "cancelled"}}
+            return {"outcome": {"outcome": "selected", "optionId": option["optionId"]}}
         detail = json.dumps({
             "title": tool_call.get("title"),
             "kind": tool_call.get("kind"),

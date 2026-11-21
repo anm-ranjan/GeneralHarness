@@ -558,7 +558,9 @@ def _allowed_paths_block() -> str:
     roots = _canonical_allowed_roots(utils.ALLOWED_PATHS)
     if not roots:
         return "Allowed filesystem roots: none configured."
-    return "Allowed filesystem roots:\n" + "\n".join(f"- {root}" for root in roots)
+    block = "Allowed filesystem roots:\n" + "\n".join(f"- {root}" for root in roots)
+    off_limits = utils.app_code_prompt_block()
+    return f"{block}\n\n{off_limits}" if off_limits else block
 
 
 def _web_output_block() -> str:
@@ -782,6 +784,11 @@ def _is_allow(answer: str) -> bool:
 _NEVER_ASK_MODES = ("never", "auto_approve", "off", "false", "0")
 _SHELL_ONLY_MODES = ("shell_only", "ask_shell_only")
 _FILE_CHANGE_REQUEST = "item/fileChange/requestApproval"
+_APPROVAL_METHODS = frozenset({
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+    "item/permissions/requestApproval",
+})
 
 
 def _auto_approves(ui, method: str) -> bool:
@@ -1341,6 +1348,19 @@ class CodexAppServerProvider:
         method = msg.get("method", "")
         params = msg.get("params") or {}
         source = self._agent_source(msg)
+        if method in _APPROVAL_METHODS:
+            protected = utils.protected_in_payload(params, str(params.get("cwd") or ""))
+            if protected:
+                # Never offered to the user, even in auto-approve: Codex's
+                # sandbox cannot deny these folders, so escalation must not
+                # reach them either.
+                show = getattr(ui, "show_status", None)
+                if callable(show):
+                    show(utils.protected_denied(", ".join(protected)))
+                reply = ({"permissions": {}, "scope": "turn"} if method == "item/permissions/requestApproval"
+                         else {"decision": "decline"})
+                await self.transport.respond(msg["id"], reply)
+                return
         if method in {
             "item/commandExecution/requestApproval",
             "item/fileChange/requestApproval",

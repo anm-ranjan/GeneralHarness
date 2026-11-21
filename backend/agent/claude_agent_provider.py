@@ -206,7 +206,9 @@ def _allowed_paths_block() -> str:
     roots = _canonical_allowed_roots(utils.ALLOWED_PATHS)
     if not roots:
         return "Allowed filesystem roots: none configured."
-    return "Allowed filesystem roots:\n" + "\n".join(f"- {root}" for root in roots)
+    block = "Allowed filesystem roots:\n" + "\n".join(f"- {root}" for root in roots)
+    off_limits = utils.app_code_prompt_block()
+    return f"{block}\n\n{off_limits}" if off_limits else block
 
 
 _CLAUDE_QUESTION_RULE = utils.question_tool_rule(
@@ -426,6 +428,50 @@ def _tool_activity(name: str, tool_input: Any) -> tuple[str, str] | None:
     if name == "WebSearch":
         return "WebSearch", f"Search the web: {data.get('query') or ''}".rstrip(": ")
     return name, name
+
+
+_PATH_KEYS = ("file_path", "path", "notebook_path")
+
+
+def protected_tool_paths(tool_name: str, tool_input: dict[str, Any], cwd: str) -> list[str]:
+    """Paths a Claude tool call would touch that agent tools may never use
+    (the application's own code, settings and credentials; see
+    utils.is_protected_path)."""
+    hits: list[str] = []
+    for key in _PATH_KEYS:
+        value = tool_input.get(key)
+        if isinstance(value, str) and value:
+            path = value if os.path.isabs(os.path.expanduser(value)) else os.path.join(cwd, value)
+            if utils.is_protected_path(os.path.expanduser(path)):
+                hits.append(value)
+    pattern = tool_input.get("pattern")
+    if tool_name == "Glob" and isinstance(pattern, str) and os.path.isabs(pattern):
+        base = pattern.split("*", 1)[0]
+        if base and utils.is_protected_path(base):
+            hits.append(pattern)
+    if tool_name == "Bash" and isinstance(tool_input.get("command"), str):
+        hits += utils.shell_protected_paths(tool_input["command"], cwd)
+    return list(dict.fromkeys(hits))
+
+
+def code_guard_hooks(sdk, workspace: str) -> dict[str, Any]:
+    """A PreToolUse hook refusing protected paths. Hooks run for every tool
+    call, even those the permission mode allows without asking, which
+    can_use_tool never sees."""
+
+    async def guard(hook_input, tool_use_id, context):
+        tool_input = hook_input.get("tool_input") or {}
+        cwd = hook_input.get("cwd") or workspace
+        hits = protected_tool_paths(hook_input.get("tool_name") or "", tool_input, cwd)
+        if not hits:
+            return {}
+        return {"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": utils.protected_denied(", ".join(hits)),
+        }}
+
+    return {"PreToolUse": [sdk.HookMatcher(hooks=[guard])]}
 
 
 def _permission_mode_for(approval_mode: str) -> str:
@@ -744,6 +790,7 @@ class ClaudeAgentProvider:
         TodoWrite, which could start writing subagents or change the plan.
         Returns the answer and the usage records for the ledger.
         """
+        import claude_agent_sdk
         from claude_agent_sdk import (
             AssistantMessage,
             ClaudeAgentOptions,
@@ -781,6 +828,7 @@ class ClaudeAgentProvider:
             cli_path=self.cli_path,
             can_use_tool=read_only,
             setting_sources=[],
+            hooks=code_guard_hooks(claude_agent_sdk, str(workspace_path)),
         )
         texts: list[str] = []
         result_msg = None
@@ -921,6 +969,7 @@ class ClaudeAgentProvider:
             # its answers collected: that callback allows everything else as-is.
             can_use_tool=can_use_tool if permission_mode not in ("bypassPermissions",) else answer_questions_only,
             setting_sources=[],
+            hooks=code_guard_hooks(sdk, str(workspace_path)),
             include_partial_messages=streaming,
             **ask_options,
         )

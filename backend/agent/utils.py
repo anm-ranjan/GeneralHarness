@@ -845,6 +845,90 @@ def _protected_roots() -> list[str]:
 
 PROTECTED_PATHS = _protected_roots()
 
+# The application's own code is off limits to agent tools too: models work on
+# the user's projects, never on the harness running them. Everything at the top
+# of the application folder is blocked except these, which agents use (skills
+# are read in place, routine agents run from agents/, thread and chat
+# workspaces live under data/). ``permissions.denied_paths`` adds more folders,
+# such as other copies of this code.
+APP_OPEN_ENTRIES = frozenset({"skills", "agents", "data"})
+
+
+def _app_code_roots() -> list[str]:
+    roots: list[str] = []
+    try:
+        names = sorted(os.listdir(APP_ROOT))
+    except OSError:
+        names = []
+    for name in names:
+        entry = os.path.join(APP_ROOT, name)
+        # A symlink points somewhere else (a shared venv, say), not at our code.
+        if name not in APP_OPEN_ENTRIES and not os.path.islink(entry):
+            roots.append(_resolve_path(entry))
+    extra = normalize_allowed_paths(nested_get(CONFIG, ["permissions", "denied_paths"], []))
+    roots += [_resolve_path(os.path.expanduser(path)) for path in extra if str(path).strip()]
+    return list(dict.fromkeys(roots))
+
+
+APP_CODE_PATHS = _app_code_roots()
+
+
+def app_code_prompt_lines() -> str:
+    """APP_CODE_PATHS for prompts: the application folder with its open
+    entries named, plus any configured extra folders, as "- path" lines."""
+    app_root = _resolve_path(APP_ROOT)
+    inside = [p for p in APP_CODE_PATHS if os.path.dirname(p) == app_root]
+    lines = []
+    if inside:
+        open_names = ", ".join(f"{name}/" for name in sorted(APP_OPEN_ENTRIES))
+        lines.append(f"- {app_root} (except its {open_names} folders)")
+    lines += [f"- {p}" for p in APP_CODE_PATHS if p not in inside]
+    return "\n".join(lines)
+
+
+def app_code_prompt_block() -> str:
+    """The off-limits note added under each provider's allowed folders."""
+    lines = app_code_prompt_lines()
+    if not lines:
+        return ""
+    return f"Never read, search or change these, even when they sit inside those folders:\n{lines}"
+
+
+def protected_in_payload(payload, cwd: str) -> list[str]:
+    """Protected paths named anywhere in a tool or approval payload: absolute
+    path strings, and paths inside command strings (see shell_protected_paths)."""
+    hits: list[str] = []
+
+    def walk(value, key=""):
+        if isinstance(value, dict):
+            for k, v in value.items():
+                walk(v, str(k))
+        elif isinstance(value, list):
+            if key in {"command", "argv", "cmd"} and all(isinstance(v, str) for v in value):
+                walk(" ".join(value), key)
+            else:
+                for v in value:
+                    walk(v, key)
+        elif isinstance(value, str) and value.strip():
+            expanded = os.path.expanduser(value)
+            if os.path.isabs(expanded) and "\n" not in value and is_protected_path(expanded):
+                hits.append(value)
+            elif key in {"command", "cmd", "argv"} or " " in value:
+                hits.extend(shell_protected_paths(value, cwd))
+
+    walk(payload)
+    return list(dict.fromkeys(hits))
+
+
+def is_app_code_path(path: str) -> bool:
+    """True inside the application's own code (see APP_CODE_PATHS).
+
+    Folders the backend provisions for agents (register_allowed_path, such as
+    logs/tool_output_spill) stay open even inside a blocked folder."""
+    if not path or not any(_path_within(path, root) for root in APP_CODE_PATHS):
+        return False
+    return not any(_path_within(path, runtime) for runtime in RUNTIME_ALLOWED_PATHS)
+
 
 def _path_key(path: str) -> str:
     return os.path.normcase(_resolve_path(path))
@@ -858,7 +942,7 @@ def _path_within(path: str, root: str) -> bool:
 
 
 def is_protected_path(path: str) -> bool:
-    """True for the application's own settings/secret files (see PROTECTED_FILE_NAMES)."""
+    """True for the application's own settings/secret files (see PROTECTED_FILE_NAMES) and its code."""
     if not path:
         return False
     name = os.path.basename(_resolve_path(path)).lower()
@@ -869,12 +953,14 @@ def is_protected_path(path: str) -> bool:
             return True
         if any(_path_key(path) == _path_key(os.path.join(APP_ROOT, rel)) for rel in _PROTECTED_APP_FILES):
             return True
+    if is_app_code_path(path):
+        return True
     return any(_path_within(path, root) for root in PROTECTED_PATHS)
 
 
 def protected_denied(path: str) -> str:
     return (
-        f"ERROR: Access denied. '{path}' holds {APP_NAME}'s own settings or credentials, which agent tools may "
+        f"ERROR: Access denied. '{path}' is part of {APP_NAME}'s own code or holds its own settings or credentials, which agent tools may "
         "never read, search or change, in any approval mode. Do not try another way (shell, script, copy or "
         "search). If the user needs something from it, tell them to open the file themselves."
     )
@@ -2878,6 +2964,7 @@ def allowed_paths_prompt_rule() -> str:
         "the user decide. Do not search a whole drive (such as U:\\ or /) as a first step; search the narrowest "
         f"folder that can hold what you need. {APP_NAME}'s own settings files (such as agent_config.yaml) are never "
         "accessible to you, even inside these directories. "
+        + (f"Neither is its own code: {app_code_prompt_lines().replace(chr(10), ' ')}. " if APP_CODE_PATHS else "")
     )
 
 

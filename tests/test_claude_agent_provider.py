@@ -96,6 +96,11 @@ def fake_sdk(captured):
         def __init__(self, **kwargs):
             captured["options"] = kwargs
 
+    class HookMatcher:
+        def __init__(self, matcher=None, hooks=None, timeout=None):
+            self.matcher = matcher
+            self.hooks = hooks or []
+
     class TextBlock:
         def __init__(self, text):
             self.text = text
@@ -178,7 +183,7 @@ def fake_sdk(captured):
             yield ResultMessage()
 
     for value in (
-        AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, PermissionResultAllow,
+        AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, PermissionResultAllow,
         PermissionResultDeny, ResultMessage, StreamEvent, SystemMessage, TextBlock,
         ThinkingBlock, ToolUseBlock, tool, create_sdk_mcp_server,
     ):
@@ -289,6 +294,8 @@ class ClaudeAgentProviderTests(unittest.TestCase):
         self.assertEqual(options["cli_path"], "/custom/bin/claude")
         self.assertEqual(options["model"], "claude-test")
         self.assertEqual(options["effort"], "medium")
+        # Every tool call passes the app-code guard, whatever the permission mode.
+        self.assertEqual(len(options["hooks"]["PreToolUse"][0].hooks), 1)
         self.assertEqual(options["max_turns"], 7)
         self.assertEqual(options["permission_mode"], "default")
         self.assertIn("Prior completed work.", captured["prompt"])

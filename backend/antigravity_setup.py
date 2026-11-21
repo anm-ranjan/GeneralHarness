@@ -12,8 +12,10 @@ where they apply to every Antigravity session, inside MyHarness or not:
 ``<config>`` is ``~/.gemini/config``. Other entries in ``skills.json`` and
 other rule files are left alone; removing takes out only what was added here.
 Skills find their thread from Antigravity's own ``ANTIGRAVITY_CONVERSATION_ID``
-(see ``/api/acp/session``), so none needs to be left out today;
-``SESSION_BOUND_SKILLS`` remains for one that cannot.
+(see ``/api/acp/session``). ``NOT_FOR_ANTIGRAVITY`` lists the skills left out
+anyway: ``thread-handoff`` starts threads, and Antigravity may only run prompts
+the user typed (the backend refuses those calls from it too; see
+``thread_guard``).
 """
 from __future__ import annotations
 
@@ -25,7 +27,7 @@ from typing import Any
 import skill_registry
 
 RULE_FILE = "working-habits.md"
-SESSION_BOUND_SKILLS: tuple[str, ...] = ()
+NOT_FOR_ANTIGRAVITY: tuple[str, ...] = ("thread-handoff",)
 
 RULE_TEXT = """---
 trigger: always_on
@@ -62,10 +64,10 @@ def _skills_root() -> str:
 
 
 def _offered_skills() -> tuple[list[str], list[str]]:
-    """(skills Antigravity gets, skills left out because they need a MyHarness session)."""
+    """(skills Antigravity gets, skills left out of it; see NOT_FOR_ANTIGRAVITY)."""
     names = [skill.name for skill in skill_registry.list_skills()]
-    return ([n for n in names if n not in SESSION_BOUND_SKILLS],
-            [n for n in names if n in SESSION_BOUND_SKILLS])
+    return ([n for n in names if n not in NOT_FOR_ANTIGRAVITY],
+            [n for n in names if n in NOT_FOR_ANTIGRAVITY])
 
 
 def _read_skills_json() -> dict[str, Any]:

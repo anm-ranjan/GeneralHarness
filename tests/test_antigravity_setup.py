@@ -32,7 +32,9 @@ class AntigravitySetupTests(unittest.TestCase):
         self.assertFalse(self.config.exists())
         self.assertIn("frontend-design", status["skills"])
         self.assertIn("fleet-import", status["skills"])
-        self.assertEqual(status["excluded_skills"], [])
+        # Starting threads is refused to Antigravity, so it never gets that skill.
+        self.assertEqual(status["excluded_skills"], ["thread-handoff"])
+        self.assertNotIn("thread-handoff", status["skills"])
 
     def test_install_writes_rule_and_skills_entry_without_naming_the_app(self):
         status = setup.install()
@@ -41,7 +43,7 @@ class AntigravitySetupTests(unittest.TestCase):
         self.assertTrue(text.startswith("---\ntrigger: always_on\n---\n"))
         self.assertNotIn("MyHarness", text)
         entries = json.loads(self.skills_json.read_text())["entries"]
-        self.assertEqual(entries, [{"path": str(skill_registry.SKILLS_ROOT.resolve())}])
+        self.assertEqual(entries, [{"path": str(skill_registry.SKILLS_ROOT.resolve()), "exclude": ["thread-handoff"]}])
         setup.install()  # idempotent: no second entry
         self.assertEqual(len(json.loads(self.skills_json.read_text())["entries"]), 1)
 

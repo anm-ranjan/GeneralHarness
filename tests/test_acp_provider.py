@@ -331,9 +331,13 @@ class ProviderRunTests(unittest.TestCase):
         self.assertEqual(self.received("session/prompt"), [])
 
     def test_system_prompt_addition_is_only_the_folder_limits(self):
-        with patch.object(acp.utils, "ALLOWED_PATHS", ["/repo"]):
+        with patch.object(acp.utils, "ALLOWED_PATHS", ["/repo"]), \
+                patch.object(acp.utils, "APP_ROOT", "/app"), \
+                patch.object(acp.utils, "APP_CODE_PATHS", ["/app/backend", "/app/frontend"]):
             text = acp.build_system_append(make_meta())
-        self.assertEqual(text, "Work only inside these folders:\n- /repo")
+        self.assertEqual(text, "Work only inside these folders:\n- /repo\n\n"
+                               "Never read, search or change these, even when they sit inside those folders:\n"
+                               "- /app (except its agents/, data/, skills/ folders)")
 
     def test_files_made_outside_the_edit_tool_are_shown(self):
         (Path(self.workspace) / "old.png").write_bytes(b"old")

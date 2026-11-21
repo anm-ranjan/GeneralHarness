@@ -257,6 +257,15 @@ async def measure_session_requests(request: Request, call_next):
                                response_bytes=int(response.headers.get("content-length", 0)))
     return response
 
+def _session_provider(session_id: str) -> str | None:
+    meta = _store.load_session(session_id) if _store is not None else None
+    return getattr(meta, "provider", None)
+
+
+import thread_guard  # noqa: E402
+
+app.middleware("http")(thread_guard.make_middleware(_session_provider))
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
