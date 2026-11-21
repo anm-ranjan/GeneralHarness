@@ -26,7 +26,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
@@ -225,19 +224,6 @@ def catalog_from_variants(agent: AcpAgentConfig, variants: list[tuple[str, str]]
     return models
 
 
-def parse_models_listing(text: str) -> list[tuple[str, str]]:
-    """``agy models`` output: one "<id>\\t<name>" line per model variant."""
-    variants = []
-    for line in text.splitlines():
-        if "\t" not in line:
-            continue
-        model_id, name = line.split("\t", 1)
-        model_id = model_id.strip()
-        if re.fullmatch(r"[A-Za-z0-9._-]+", model_id):
-            variants.append((model_id, name.strip()))
-    return variants
-
-
 def variants_from_session(result: dict[str, Any]) -> list[tuple[str, str]]:
     models = (result or {}).get("models") or {}
     return [
@@ -247,37 +233,65 @@ def variants_from_session(result: dict[str, Any]) -> list[tuple[str, str]]:
     ]
 
 
-_catalog_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
-_CATALOG_TTL = 600.0
+# The model list comes only from the agent's own ACP replies (session/new and
+# session/load), never from running its CLI. The last good list per agent is
+# kept in memory and, once the app sets CATALOG_FILE, on disk for restarts.
+_catalog_cache: dict[str, list[dict[str, Any]]] = {}
+CATALOG_FILE: str | None = None
+_catalog_lock = threading.Lock()
+
+
+def _load_catalog_file() -> dict[str, list[dict[str, Any]]]:
+    if not CATALOG_FILE:
+        return {}
+    try:
+        with open(CATALOG_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return {k: v for k, v in data.items() if isinstance(v, list)} if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def remember_catalog(agent: AcpAgentConfig, variants: list[tuple[str, str]]) -> None:
+    """Keep the allowed models from a session reply; a list with none allowed
+    (e.g. a stale list from a just-started agent) leaves the last one in place."""
     models = catalog_from_variants(agent, variants)
-    if models:
-        _catalog_cache[agent.key] = (time.monotonic(), models)
+    if not models:
+        return
+    with _catalog_lock:
+        if _catalog_cache.get(agent.key) == models:
+            return
+        _catalog_cache[agent.key] = models
+        if CATALOG_FILE:
+            stored = _load_catalog_file()
+            stored[agent.key] = models
+            try:
+                os.makedirs(os.path.dirname(CATALOG_FILE) or ".", exist_ok=True)
+                tmp = f"{CATALOG_FILE}.tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(stored, fh, indent=2)
+                os.replace(tmp, CATALOG_FILE)
+            except OSError:
+                pass
 
 
-def model_catalog(agent: AcpAgentConfig, refresh: bool = False) -> list[dict[str, Any]]:
-    """Allowed models for ``agent``: cached from its last session, else ``<command> models``."""
-    cached = _catalog_cache.get(agent.key)
-    if cached and not refresh and time.monotonic() - cached[0] < _CATALOG_TTL:
-        return cached[1]
-    try:
-        proc = subprocess.run(
-            [agent.command, "models"], capture_output=True, text=True, timeout=60,
-            stdin=subprocess.DEVNULL,
-        )
-        variants = parse_models_listing(proc.stdout)
-    except (OSError, subprocess.SubprocessError):
-        variants = []
-    if variants:
-        remember_catalog(agent, variants)
-        return _catalog_cache[agent.key][1]
+def model_catalog(agent: AcpAgentConfig) -> list[dict[str, Any]]:
+    """Allowed models for ``agent`` as its sessions last reported them.
+
+    Before any session has reported (first use on this machine), only the
+    configured default model is offered.
+    """
+    with _catalog_lock:
+        if agent.key not in _catalog_cache:
+            stored = _load_catalog_file().get(agent.key)
+            if stored:
+                _catalog_cache[agent.key] = stored
+        cached = _catalog_cache.get(agent.key)
     if cached:
-        return cached[1]
+        return cached
     if agent.model and agent.model_allowed(agent.model):
         return [{
-            "id": agent.model, "display_name": agent.model, "description": "Configured model",
+            "id": agent.model, "display_name": agent.model, "description": "Configured default",
             "supported_efforts": list(EFFORT_SUFFIXES[:3]), "default_effort": agent.thought_level,
             "is_default": True,
         }]
@@ -674,6 +688,11 @@ class AcpConnection:
         return bool(caps.get("loadSession") or (caps.get("sessionCapabilities") or {}).get("load") is not None)
 
     @property
+    def can_resume(self) -> bool:
+        caps = self.info.get("agentCapabilities") or {}
+        return (caps.get("sessionCapabilities") or {}).get("resume") is not None
+
+    @property
     def agent_version(self) -> str:
         return str((self.info.get("agentInfo") or {}).get("version") or "")
 
@@ -760,11 +779,15 @@ class AcpProvider:
         session_id = state.get("session_id") if state.get("cwd") == str(workspace_path) else None
         fallback_summary = None
         if session_id and session_id not in connection.loaded_sessions:
-            if not await self._load(connection, session_id, str(workspace_path), meta, store):
+            reopened = await self._load(connection, session_id, str(workspace_path), meta, store)
+            if reopened is None:
                 fallback_summary = self._fallback_summary(store, meta)
                 ui.show_status(f"{agent.label} could not reopen its session; continuing from this thread's summary.")
                 session_id = None
                 state.pop("applied", None)
+            elif reopened.get("configOptions"):
+                # What the agent really has now, so only real changes are sent.
+                state["applied"] = _option_values(reopened["configOptions"])
 
         try:
             if not session_id:
@@ -885,7 +908,7 @@ class AcpProvider:
             return "", {}
         connection = await self._connection_factory()
         if session_id not in connection.loaded_sessions:
-            if not await self._load(connection, session_id, cwd, meta, store):
+            if await self._load(connection, session_id, cwd, meta, store) is None:
                 return "", {}
         ui = _CollectUI()
         model = (state.get("applied") or {}).get("model") or self.agent.model
@@ -895,22 +918,29 @@ class AcpProvider:
             return "", usage_metrics(self.agent.provider, model, usage)
         return turn.final_text(), usage_metrics(self.agent.provider, model, usage)
 
-    async def _load(self, connection: AcpConnection, session_id: str, cwd: str, meta, store) -> bool:
-        if not connection.can_load:
-            return False
-        # Replayed history is already in our transcript: swallow it while loading.
+    async def _load(self, connection: AcpConnection, session_id: str, cwd: str, meta, store) -> dict[str, Any] | None:
+        """Reopen a session in this agent process; its reply, or None when it is gone.
+
+        ``session/resume`` reconnects without replaying history; agents that only
+        offer ``session/load`` replay it, which is swallowed: the transcript has it.
+        """
+        params = {"sessionId": session_id, "cwd": cwd, "mcpServers": [], "_meta": self._system_meta(meta, store)}
+        methods = [m for m, ok in (("session/resume", connection.can_resume), ("session/load", connection.can_load)) if ok]
         connection.transport.on_session(session_id, lambda _message: None)
         try:
-            await connection.transport.request("session/load", {
-                "sessionId": session_id, "cwd": cwd, "mcpServers": [],
-                "_meta": self._system_meta(meta, store),
-            }, timeout=120)
-        except AcpError:
-            return False
+            for method in methods:
+                try:
+                    result = await connection.transport.request(method, params, timeout=120)
+                except AcpError:
+                    if not connection.alive:
+                        return None
+                    continue
+                remember_catalog(self.agent, variants_from_session(result))
+                connection.loaded_sessions.add(session_id)
+                return result
+            return None
         finally:
             connection.transport.on_session(session_id, None)
-        connection.loaded_sessions.add(session_id)
-        return True
 
     def _system_meta(self, meta, store) -> dict[str, Any]:
         return {"antigravity": {"systemPrompt": {"append": build_system_append(meta, _project_knowledge(store, meta))}}}

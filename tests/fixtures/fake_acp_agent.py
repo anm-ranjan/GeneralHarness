@@ -17,6 +17,8 @@ import uuid
 
 args = sys.argv[1:]
 NO_AUTH = "--no-auth" in args
+NO_RESUME = "--no-resume" in args  # advertise load only
+RESUME_FAILS = "--resume-fails" in args  # resume errors, load works
 LOG = args[args.index("--log") + 1] if "--log" in args else ""
 write_lock = threading.Lock()
 sessions: dict[str, dict] = {}
@@ -133,10 +135,21 @@ def handle(message):
     if method == "initialize":
         send({"jsonrpc": "2.0", "id": request_id, "result": {
             "protocolVersion": 1,
-            "agentCapabilities": {"loadSession": True, "sessionCapabilities": {"load": {}, "close": {}}},
+            "agentCapabilities": {"loadSession": True, "sessionCapabilities": {
+                "load": {}, "close": {}, **({} if NO_RESUME else {"resume": {}})}},
             "agentInfo": {"name": "Fake ACP", "version": "9.9.9"},
             "authMethods": [{"id": "oauth-personal", "name": "Log in with Google"}],
         }})
+    elif method == "session/resume":
+        session_id = params["sessionId"]
+        if NO_RESUME:
+            send({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "Method not found"}})
+        elif RESUME_FAILS or session_id.startswith("gone"):
+            send({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "Session not found"}})
+        else:
+            sessions.setdefault(session_id, new_state(params))
+            send({"jsonrpc": "2.0", "id": request_id, "result": {
+                "sessionId": session_id, "configOptions": options(sessions[session_id])}})
     elif method in ("session/new", "session/load"):
         if NO_AUTH:
             send({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32000, "message": "Authentication required"}})

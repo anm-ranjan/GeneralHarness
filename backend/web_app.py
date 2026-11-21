@@ -218,6 +218,10 @@ async def _lifespan(app: FastAPI):
     performance_log.record("startup_session_recovery", started, reset=reset_count)
     _CHATS_DIR.mkdir(parents=True, exist_ok=True)
     utils.register_allowed_path(str(_CHATS_DIR))
+    import acp_provider
+
+    # The ACP agents' last reported model lists survive restarts here.
+    acp_provider.CATALOG_FILE = os.path.join(_DATA_DIR, "acp_models.json")
     _MATERIALIZATIONS_DIR.mkdir(parents=True, exist_ok=True)
     utils.register_allowed_path(str(_MATERIALIZATIONS_DIR))
     _AGENT_RUNS_DIR.mkdir(parents=True, exist_ok=True)

@@ -6,6 +6,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 AGENT = ROOT / "backend" / "agent"
@@ -121,24 +122,36 @@ class CatalogTests(unittest.TestCase):
         self.agent = acp.AcpAgentConfig(key="antigravity", label="Antigravity", command="agy", model="gemini-4-neon")
 
     def test_only_gemini_4_families_with_efforts(self):
-        listing = (
-            "Fetching available models...\n"
-            "gemini-4-neon-high\tGemini 4 Neon (High)\n"
-            "gemini-4-neon-xhigh\tGemini 4 Neon (XHigh)\n"
-            "gemini-4-neon-low\tGemini 4 Neon (Low)\n"
-            "gemini-4-argon-medium\tGemini 4 Argon (Medium)\n"
-            "gemini-pro-orchestrator-neon\tOrchestrator (Neon)\n"
-            "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n"
-            "claude-opus-5-5-high\tClaude Opus 5.5 (High)\n"
-            "gpt-oss-120b-medium\tGPT-OSS 120B (Medium)\n"
-        )
-        models = acp.catalog_from_variants(self.agent, acp.parse_models_listing(listing))
+        variants = [
+            ("gemini-4-neon-high", "Gemini 4 Neon (High)"),
+            ("gemini-4-neon-xhigh", "Gemini 4 Neon (XHigh)"),
+            ("gemini-4-neon-low", "Gemini 4 Neon (Low)"),
+            ("gemini-4-argon-medium", "Gemini 4 Argon (Medium)"),
+            ("gemini-pro-orchestrator-neon", "Orchestrator (Neon)"),
+            ("gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"),
+            ("claude-opus-5-5-high", "Claude Opus 5.5 (High)"),
+            ("gpt-oss-120b-medium", "GPT-OSS 120B (Medium)"),
+        ]
+        models = acp.catalog_from_variants(self.agent, variants)
         self.assertEqual([m["id"] for m in models], ["gemini-4-neon", "gemini-4-argon"])
         neon = models[0]
         self.assertEqual(neon["display_name"], "Gemini 4 Neon")
         self.assertEqual(neon["supported_efforts"], ["low", "high", "xhigh"])
         self.assertTrue(neon["is_default"])
         self.assertEqual(models[1]["default_effort"], "medium")
+
+    def test_catalog_comes_from_sessions_and_survives_restart(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(acp, "CATALOG_FILE", str(Path(tmp) / "acp_models.json")), \
+                patch.dict(acp._catalog_cache, {}, clear=True):
+            # Before any session: only the configured default.
+            self.assertEqual([m["id"] for m in acp.model_catalog(self.agent)], ["gemini-4-neon"])
+            acp.remember_catalog(self.agent, [("gemini-4-neon-high", "N"), ("gemini-4-argon-low", "A")])
+            # A stale list with no allowed model leaves the good one in place.
+            acp.remember_catalog(self.agent, [("gemini-3.8-flash-high", "F"), ("claude-opus-4-6", "C")])
+            self.assertEqual([m["id"] for m in acp.model_catalog(self.agent)], ["gemini-4-neon", "gemini-4-argon"])
+            acp._catalog_cache.clear()  # a restart
+            self.assertEqual([m["id"] for m in acp.model_catalog(self.agent)], ["gemini-4-neon", "gemini-4-argon"])
 
     def test_hidden_command_detection(self):
         self.assertEqual(acp.hidden_command_in("/schedule every day", self.agent), "schedule")
@@ -265,16 +278,29 @@ class ProviderRunTests(unittest.TestCase):
         self.assertIn("stopped by the user", prompt)
         self.assertTrue(prompt.endswith("next"))
 
-    def test_restart_loads_session_without_replaying(self):
-        agent, meta, store = self.agent(), make_meta(), FakeStore()
+    def restart_and_continue(self, *flags):
+        agent, meta, store = self.agent(*flags), make_meta(), FakeStore()
         self.run_turn(self.runtime(), agent, meta, "hi", store=store)
         session_id = meta.acp_state["session_id"]
         self.runtimes.pop().stop()
         ui = self.run_turn(self.runtime(), agent, meta, "after restart", store=store)
         self.assertEqual(ui.errors, [])
-        self.assertEqual(self.received("session/load")[0]["params"]["sessionId"], session_id)
         self.assertNotIn("replayed", "".join(ui.deltas))
         self.assertEqual(self.received("session/prompt")[-1]["params"]["sessionId"], session_id)
+        return session_id
+
+    def test_restart_resumes_session(self):
+        session_id = self.restart_and_continue()
+        self.assertEqual(self.received("session/resume")[0]["params"]["sessionId"], session_id)
+        self.assertIn("systemPrompt", json.dumps(self.received("session/resume")[0]["params"]["_meta"]))
+        self.assertEqual(self.received("session/load"), [])
+
+    def test_restart_loads_without_replay_when_resume_is_missing_or_fails(self):
+        for flag in ("--no-resume", "--resume-fails"):
+            with self.subTest(flag=flag):
+                self.log.unlink(missing_ok=True)
+                session_id = self.restart_and_continue(flag)
+                self.assertEqual(self.received("session/load")[0]["params"]["sessionId"], session_id)
 
     def test_failed_load_starts_new_session_with_summary(self):
         store = FakeStore()
