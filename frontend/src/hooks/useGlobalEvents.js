@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { globalWsUrl } from '../api'
+import { api, globalWsUrl } from '../api'
 import { runStateNotification } from '../runStates'
 
 // Application-level WebSocket carrying run-state changes for every session,
@@ -15,6 +15,24 @@ export default function useGlobalEvents(dispatch, stateRef, activeHostId) {
   useEffect(() => {
     let cancelled = false
     let reconnectTimer = null
+    let treeTimer = null
+    let hadSocket = false
+
+    // Threads created, moved or deleted elsewhere (the API, another window,
+    // an agent) reach this window only as a nudge; refetch the tree, coalescing
+    // bursts so a run of changes costs one request.
+    function reloadTree() {
+      if (cancelled || treeTimer) return
+      treeTimer = setTimeout(async () => {
+        treeTimer = null
+        try {
+          const data = await api('GET', '/api/sessions')
+          if (!cancelled) dispatch({ type: 'SET_TREE', payload: data })
+        } catch {
+          // The next change or reconnect retries.
+        }
+      }, 250)
+    }
 
     function notify(sessionId, state) {
       try {
@@ -36,6 +54,9 @@ export default function useGlobalEvents(dispatch, stateRef, activeHostId) {
 
       socket.onopen = () => {
         if (socket !== wsRef.current) return
+        // Changes made while the socket was down were never announced.
+        if (hadSocket) reloadTree()
+        hadSocket = true
         try {
           if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
             Notification.requestPermission().catch(() => {})
@@ -52,6 +73,7 @@ export default function useGlobalEvents(dispatch, stateRef, activeHostId) {
           if (msg.type === 'run_state_snapshot') {
             dispatch({ type: 'SET_RUN_STATES', payload: msg.sessions || [] })
           } else if (msg.type === 'run_state') {
+            if (!stateRef.current.sessionsById?.[msg.session_id]) reloadTree()
             notify(msg.session_id, msg.state)
             dispatch({
               type: 'SET_SESSION_RUN_STATE',
@@ -65,6 +87,8 @@ export default function useGlobalEvents(dispatch, stateRef, activeHostId) {
             dispatch({ type: 'SET_NATIVE_MODEL', payload: msg.model || '' })
           } else if (msg.type === 'session_updated') {
             dispatch({ type: 'PATCH_SESSION', payload: { sessionId: msg.session_id, changes: msg.changes || {} } })
+          } else if (msg.type === 'sessions_changed') {
+            reloadTree()
           } else if (msg.type === 'session_renamed') {
             dispatch({
               type: 'SET_SESSION_TITLE',
@@ -92,6 +116,7 @@ export default function useGlobalEvents(dispatch, stateRef, activeHostId) {
     return () => {
       cancelled = true
       if (reconnectTimer) clearTimeout(reconnectTimer)
+      if (treeTimer) clearTimeout(treeTimer)
       if (wsRef.current) {
         const socket = wsRef.current
         wsRef.current = null

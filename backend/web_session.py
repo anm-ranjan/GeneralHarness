@@ -300,6 +300,12 @@ class SessionManager:
                 self._loop,
             )
 
+    def notify_sessions_changed(self) -> None:
+        """Tell every window the project/thread tree changed (a thread was
+        created, deleted, moved, relabelled or archived) so it reloads the
+        sidebar, including when the change came from the API or another window."""
+        self.notify_global({"type": "sessions_changed"})
+
     def notify_session_renamed(self, session_id: str, title: str) -> None:
         """Broadcast a title change so sidebars update without a refetch."""
         if self._loop and self._loop.is_running():

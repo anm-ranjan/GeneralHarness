@@ -50,6 +50,10 @@ _CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 _CODEX_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 
 
+def _tree_changed() -> None:
+    web_app._manager.notify_sessions_changed()
+
+
 def _active_session_ids(session_ids: list[str]) -> list[str]:
     return [sid for sid in session_ids if web_app._manager.get_active_run(sid)]
 
@@ -102,6 +106,7 @@ def create_project(req: CreateProjectRequest):
     slug_source = name or root or "project"
     slug = re.sub(r"[^A-Za-z0-9_]+", "_", slug_source.strip().lower()).strip("_") or "project"
     proj = web_app._store.ensure_project(project_id=slug, name=name, root=root)
+    _tree_changed()
     return proj.model_dump(mode="json")
 
 
@@ -113,6 +118,7 @@ def create_task(req: CreateTaskRequest):
         task = web_app._store.ensure_task(req.project_id, task_id="", name=req.name)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _tree_changed()
     return task.model_dump(mode="json")
 
 
@@ -142,6 +148,7 @@ async def create_session(req: CreateSessionRequest):
         meta = web_app._store.create_session(req.project_id, req.task_id, req.title, req.provider)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _tree_changed()
     return meta.model_dump(mode="json")
 
 
@@ -157,6 +164,7 @@ async def create_chat(req: CreateChatRequest):
         raise HTTPException(status_code=400, detail=str(e))
     meta.working_directory = web_app._resolve_path(web_app._chat_workspace_dir(meta.id))
     web_app._store.update_session(meta)
+    _tree_changed()
     return meta.model_dump(mode="json")
 
 
@@ -168,6 +176,7 @@ def rename_project(project_id: str, req: RenameProjectRequest):
         proj = web_app._store.rename_project(project_id, req.name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    _tree_changed()
     return proj.model_dump(mode="json")
 
 
@@ -178,6 +187,7 @@ def set_project_session_order(project_id: str, req: SessionOrderRequest):
         project = web_app._store.set_session_order(project_id, req.session_ids)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    _tree_changed()
     return project.model_dump(mode="json")
 
 
@@ -196,6 +206,7 @@ def rename_task(project_id: str, task_id: str, req: RenameTaskRequest):
     except ValueError as e:
         status = 400 if "color" in str(e).lower() or "required" in str(e).lower() else 404
         raise HTTPException(status_code=status, detail=str(e))
+    _tree_changed()
     return task.model_dump(mode="json")
 
 
@@ -214,6 +225,7 @@ def delete_project(project_id: str):
         web_app._session_messages.pop(session_id, None)
         _file_snapshots.pop(session_id, None)
         web_app._discard_run_lock(session_id)
+    _tree_changed()
     return {"status": "deleted", "removed_sessions": removed}
 
 
@@ -230,6 +242,7 @@ def delete_task(project_id: str, task_id: str):
         web_app._session_messages.pop(session_id, None)
         _file_snapshots.pop(session_id, None)
         web_app._discard_run_lock(session_id)
+    _tree_changed()
     return {"status": "deleted", "removed_sessions": removed}
 
 
@@ -248,6 +261,7 @@ def delete_session(session_id: str):
     _file_snapshots.pop(session_id, None)
     web_app._discard_run_lock(session_id)
     web_runs.close_acp_session(meta)
+    _tree_changed()
     return {"status": "deleted"}
 
 
@@ -302,6 +316,7 @@ def rename_session(session_id: str, req: RenameSessionRequest):
             meta = web_app._store.set_session_archived(session_id, req.archived)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    _tree_changed()
     return meta.model_dump(mode="json")
 
 
@@ -334,6 +349,7 @@ def move_session(session_id: str, req: MoveSessionRequest):
         if req.project_id != meta.project_id:
             # Native history carries the old workspace; rebuild it on next use.
             web_app._session_messages.pop(session_id, None)
+    _tree_changed()
     return moved.model_dump(mode="json")
 
 
@@ -636,6 +652,7 @@ def import_session(req: _ImportSessionRequest):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    _tree_changed()
     return {"status": "imported", "session_id": meta.id, "meta": meta.model_dump(mode="json")}
 
 
