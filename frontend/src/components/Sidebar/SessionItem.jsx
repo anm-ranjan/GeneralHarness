@@ -6,8 +6,11 @@ import { relativeTime } from '../../utils'
 import { runStateBadge } from '../../runStates'
 import { copyText } from '../../clipboard'
 import { sessionReference } from '../../sessionLabels'
+import ProviderLogo from '../ProviderLogo'
+import { providerLabel } from '../../usage'
 
 const selectProjectNames = state => state.projectNames
+const selectNativeModel = state => state.model
 
 // One sidebar row. Hover shows rename and copy; everything else lives in the
 // right-click menu. `subtitle` names the project in the flat Activity view.
@@ -17,6 +20,12 @@ function SessionItem({ session, labels = [], subtitle = '', isActive, onSelect, 
   const ownRunState = useAppSelector(state => state.runStates[session.id])
   const finishedUnseen = useAppSelector(state => !!state.unseenFinished[session.id])
   const projectNames = useAppSelector(selectProjectNames)
+  const nativeModel = useAppSelector(selectNativeModel)
+  // The provider the thread last ran with (/model switches update it); for
+  // Native, the vendor of its model.
+  const provider = session.provider || 'native'
+  const model = provider === 'native' ? session.run_settings?.model || nativeModel || '' : session.run_settings?.model || ''
+  const providerTitle = provider === 'native' && model ? `${providerLabel(provider)}: ${model}` : providerLabel(provider)
   const runState = ownRunState || (session.status === 'running' ? 'running' : null)
 
   useEffect(() => {
@@ -97,6 +106,9 @@ function SessionItem({ session, labels = [], subtitle = '', isActive, onSelect, 
           ) : finishedUnseen && (
             <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-ok" title="Finished; not opened yet" />
           )}
+          <span className="shrink-0 inline-flex opacity-80" title={providerTitle}>
+            <ProviderLogo provider={provider} model={model} className="h-3.5 w-3.5" />
+          </span>
           <span className="truncate">
             {session.title || session.id.slice(0, 8)}
             {labels.length > 0 && <span className="ml-1.5 text-[12px] text-faint" title={labels.join(', ')}>{labels.join(', ')}</span>}
