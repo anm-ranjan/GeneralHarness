@@ -2638,6 +2638,7 @@ def run_agent(
 
             if (
                 published_plan
+                and utils.PLAN_REMINDER_AFTER_TOOL_CALLS > 0
                 and tool_calls_since_plan_update >= utils.PLAN_REMINDER_AFTER_TOOL_CALLS
             ):
                 reminder = utils.plan_reminder_message(published_plan)
@@ -2651,6 +2652,7 @@ def run_agent(
 
             if (
                 not checkpoint_injected
+                and utils.TOOL_CALL_CHECKPOINT > 0
                 and total_tool_calls >= utils.TOOL_CALL_CHECKPOINT
                 and not used_write_tool
             ):

@@ -202,7 +202,7 @@ export default function SettingsModal() {
               appearance: 'Applies to this browser or desktop app',
               credentials: 'Host-local encrypted values',
               usage: 'Cost, tokens and plan limits on this host',
-              native: 'OpenRouter model and provider for Native',
+              native: 'Model, provider and agent loop for Native',
               antigravity: 'Global rule and skills in ~/.gemini/config',
               app: 'Connection and quit',
             }[section]}

@@ -128,15 +128,34 @@ def price_tokens(price: dict[str, float], input_tokens: int, cache_read: int, ca
     )
 
 
+def _percentile(value, key: str = "p50"):
+    """OpenRouter reports recent throughput/latency as ``{"p50": .., "p90": ..}``."""
+    if isinstance(value, dict):
+        value = value.get(key)
+    return value if isinstance(value, (int, float)) and value > 0 else None
+
+
+def _auth_headers() -> dict[str, str]:
+    """The native key, only when native itself talks to OpenRouter.
+
+    The endpoints listing is public, but OpenRouter fills in each provider's
+    recent throughput and latency only for an authenticated request.
+    """
+    if utils.build_openrouter_provider_preferences(configured_provider=["x"]) is None:
+        return {}
+    key = utils.get_api_key()
+    return {"Authorization": f"Bearer {key}"} if key else {}
+
+
 def model_endpoints(model: str) -> dict:
-    """Name, context and providers (with ``tag``) serving an OpenRouter model."""
+    """Name, context, recent speed and providers (with ``tag``) serving an OpenRouter model."""
     model = (model or "").strip()
     if "/" not in model:
         raise CatalogError("Use the OpenRouter id, e.g. openai/gpt-6.1-terra")
     author, slug = model.split("/", 1)
     url = f"{OPENROUTER_API}/models/{quote(author, safe='')}/{quote(slug, safe=':')}/endpoints"
     try:
-        response = requests.get(url, timeout=_TIMEOUT_SECONDS)
+        response = requests.get(url, headers=_auth_headers(), timeout=_TIMEOUT_SECONDS)
     except requests.RequestException as exc:
         raise CatalogError(f"Could not reach OpenRouter: {exc}") from exc
     if response.status_code == 404:
@@ -158,6 +177,10 @@ def model_endpoints(model: str) -> dict:
             "tools": "tools" in params,
             "reasoning": "reasoning" in params,
             "implicit_caching": bool(endpoint.get("supports_implicit_caching")),
+            # Median tokens/second and time to first token (ms), last 30 minutes.
+            "throughput": _percentile(endpoint.get("throughput_last_30m")),
+            "latency_ms": _percentile(endpoint.get("latency_last_30m")),
+            "uptime": endpoint.get("uptime_last_30m") if isinstance(endpoint.get("uptime_last_30m"), (int, float)) else None,
             "pricing": {key: pricing.get(key) for key in ("prompt", "completion", "input_cache_read", "input_cache_write") if pricing.get(key) is not None},
         })
     return {

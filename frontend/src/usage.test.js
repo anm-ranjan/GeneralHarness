@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { formatCost, formatReset, formatTokens, usageTotals } from './usage.js'
-import { modelFromInput, perMillion } from './nativeModel.js'
+import { modelFromInput, perMillion, rankEndpoints, visibleEndpoints } from './nativeModel.js'
 
 test('token and cost formatting', () => {
   assert.equal(formatTokens(950), '950')
@@ -35,4 +35,21 @@ test('model ids are taken from OpenRouter URLs', () => {
   assert.equal(perMillion('0.0000012'), '$1.20')
   assert.equal(perMillion('0'), 'free')
   assert.equal(perMillion(undefined), '—')
+})
+
+test('native providers: the four fastest with tools, plus the ones picked', () => {
+  const endpoints = [
+    { tag: 'slow', tools: true, throughput: 20 },
+    { tag: 'unknown', tools: true, throughput: null },
+    { tag: 'fastest', tools: true, throughput: 300 },
+    { tag: 'toolless', tools: false, throughput: 900 },
+    { tag: 'b', tools: true, throughput: 150 },
+    { tag: 'c', tools: true, throughput: 100 },
+    { tag: 'd', tools: true, throughput: 50 },
+  ]
+  const ranked = rankEndpoints(endpoints)
+  assert.deepEqual(ranked.map(e => e.tag), ['fastest', 'b', 'c', 'd', 'slow', 'unknown', 'toolless'])
+  assert.deepEqual(visibleEndpoints(ranked, [], false).map(e => e.tag), ['fastest', 'b', 'c', 'd'])
+  assert.deepEqual(visibleEndpoints(ranked, ['unknown'], false).map(e => e.tag), ['fastest', 'b', 'c', 'd', 'unknown'])
+  assert.equal(visibleEndpoints(ranked, [], true).length, 7)
 })

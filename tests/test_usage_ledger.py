@@ -245,5 +245,61 @@ class NativeSettingsTests(unittest.TestCase):
         self.assertEqual(utils.MODEL, native_settings._CONFIG_DEFAULTS["MODEL"])
 
 
+class NativeAgentSettingsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        attrs = [attr for attr, *_ in native_settings.AGENT_FIELDS.values()]
+        self.saved = {name: getattr(utils, name) for name in ["DATA_DIR", "MODEL", "API_PROVIDER", *attrs]}
+        utils.DATA_DIR = self.tmp.name
+
+    def tearDown(self):
+        for name, value in self.saved.items():
+            setattr(utils, name, value)
+        self.tmp.cleanup()
+
+    def test_save_applies_and_keeps_the_model(self):
+        path = Path(self.tmp.name) / "native_settings.json"
+        path.write_text('{"model": "openai/gpt-6.1-terra", "providers": ["azure/eu"]}')
+        payload = usage_routes.update_native_agent_settings(usage_routes.NativeAgentSettingsRequest(
+            values={"max_iterations": 77, "tool_call_checkpoint": 0, "multi_agent_enabled": False}))
+        self.assertEqual((utils.MAX_AGENT_ITERATIONS, utils.TOOL_CALL_CHECKPOINT, utils.MULTI_AGENT_ENABLED), (77, 0, False))
+        self.assertEqual(payload["values"]["max_iterations"], 77)
+        self.assertEqual(native_settings.load()["model"], "openai/gpt-6.1-terra")
+        # Clearing the model keeps the agent loop, and a restart re-applies it.
+        native_settings.clear()
+        utils.MAX_AGENT_ITERATIONS = 1
+        native_settings.apply_saved()
+        self.assertEqual(utils.MAX_AGENT_ITERATIONS, 77)
+        self.assertEqual(native_settings.load(), {})
+
+    def test_default_values_are_not_stored_and_reset_restores_config(self):
+        default = native_settings._AGENT_DEFAULTS["max_iterations"]
+        payload = native_settings.save_agent({"max_iterations": default, "max_subagent_depth": 3})
+        self.assertEqual(payload["overridden"], ["max_subagent_depth"] if native_settings._AGENT_DEFAULTS["max_subagent_depth"] != 3 else [])
+        payload = usage_routes.reset_native_agent_settings()
+        self.assertEqual(payload["overridden"], [])
+        self.assertEqual(utils.MAX_SUBAGENT_DEPTH, native_settings._AGENT_DEFAULTS["max_subagent_depth"])
+        self.assertFalse((Path(self.tmp.name) / "native_settings.json").exists())
+
+    def test_bad_values_are_rejected(self):
+        for values in ({"max_iterations": 0}, {"max_iterations": 2.5}, {"max_iterations": True},
+                       {"multi_agent_enabled": 1}, {"nope": 1}):
+            with self.assertRaises(HTTPException) as ctx:
+                usage_routes.update_native_agent_settings(usage_routes.NativeAgentSettingsRequest(values=values))
+            self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_catalog_reads_recent_speed(self):
+        response = SimpleNamespace(status_code=200, json=lambda: {"data": {"id": "a/b", "name": "B", "endpoints": [
+            {"tag": "fast", "supported_parameters": ["tools"], "throughput_last_30m": {"p50": 156, "p90": 120},
+             "latency_last_30m": {"p50": 217}, "uptime_last_30m": 99.5},
+            {"tag": "unknown", "supported_parameters": [], "throughput_last_30m": None}]}})
+        with patch.object(openrouter_catalog.requests, "get", return_value=response) as get:
+            info = openrouter_catalog.model_endpoints("a/b")
+        self.assertIn("headers", get.call_args.kwargs)
+        fast, unknown = info["endpoints"]
+        self.assertEqual((fast["throughput"], fast["latency_ms"], fast["uptime"]), (156, 217, 99.5))
+        self.assertIsNone(unknown["throughput"])
+
+
 if __name__ == "__main__":
     unittest.main()

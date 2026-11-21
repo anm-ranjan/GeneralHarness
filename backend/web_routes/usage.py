@@ -1,4 +1,4 @@
-"""Usage, account limits, and the Native Settings model/provider."""
+"""Usage, account limits, and Native Settings (model, provider, agent loop)."""
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
@@ -94,3 +94,20 @@ def reset_native_settings():
         "type": "native_settings", "model": payload["model"], "providers": payload["providers"],
     })
     return payload
+
+
+class NativeAgentSettingsRequest(BaseModel):
+    values: dict = Field(default_factory=dict)
+
+
+@router.put("/api/native/agent-settings")
+def update_native_agent_settings(req: NativeAgentSettingsRequest):
+    try:
+        return native_settings.save_agent(req.values)
+    except native_settings.AgentSettingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/api/native/agent-settings")
+def reset_native_agent_settings():
+    return native_settings.clear_agent()
