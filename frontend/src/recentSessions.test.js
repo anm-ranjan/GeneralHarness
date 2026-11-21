@@ -87,7 +87,7 @@ test('falls back to a short id when a session has no title', () => {
 test('defaults provider and status, and skips malformed entries', () => {
   const sessionsById = {
     a: session('a', '2026-07-26T10:00:00Z'),
-    b: session('b', '2026-07-25T10:00:00Z', { provider: 'codex-app-server', status: 'running' }),
+    b: session('b', '2026-07-25T10:00:00Z', { provider: 'codex-app-server', status: 'running', run_settings: { model: 'gpt-6.1-terra' } }),
     bad: null,
     alsoBad: { title: 'no id' },
   }
@@ -96,6 +96,8 @@ test('defaults provider and status, and skips malformed entries', () => {
   assert.equal(recent[0].provider, 'native')
   assert.equal(recent[0].status, 'idle')
   assert.equal(recent[1].provider, 'codex-app-server')
+  assert.equal(recent[0].model, '')
+  assert.equal(recent[1].model, 'gpt-6.1-terra')
   assert.equal(recent[1].status, 'running')
 })
 

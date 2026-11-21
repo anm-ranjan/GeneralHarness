@@ -35,6 +35,7 @@ export function recentSessions(sessionsById, projects, limit = RECENT_SESSION_LI
       title: session.title || String(session.id).slice(0, 8),
       kind: session.kind || 'project',
       provider: session.provider || 'native',
+      model: session.run_settings?.model || '',
       status: session.status || 'idle',
       contextLabel: contextLabel(session, projects),
       updatedAt: session.updated_at || '',

@@ -4,6 +4,7 @@ import useSelectSession from '../../hooks/useSelectSession'
 import { recentSessions } from '../../recentSessions'
 import { relativeTime } from '../../utils'
 import { runStateBadge } from '../../runStates'
+import SessionProviderIcon from '../SessionProviderIcon'
 
 // One recent-session row. Mirrors SessionItem's run-state dot so a background run
 // reads the same way here as it does in the sidebar.
@@ -23,6 +24,9 @@ function RecentSessionRow({ session, onSelect }) {
           title={runStateBadge(runState).label}
         />
       )}
+      <span className="self-center inline-flex">
+        <SessionProviderIcon provider={session.provider} model={session.model} />
+      </span>
       <span className="max-w-[55%] truncate text-[14px] text-text-default group-hover:text-accent">
         {session.title}
       </span>
