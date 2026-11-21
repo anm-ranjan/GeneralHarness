@@ -517,6 +517,43 @@ def image_blocks(attachments: list[dict]) -> list[dict[str, Any]]:
     return blocks
 
 
+def workspace_previews(workspace: str) -> dict[str, tuple]:
+    """Previewable files at the top of the thread's workspace: path -> (mtime, size, digest).
+
+    The same file types and change test as native's shell_run artifacts. The
+    workspace is the folder MyHarness gave the agent, so no allowed-path check.
+    """
+    import harness_agent
+
+    types = harness_agent._BROWSER_PREVIEW_TYPES
+    snapshot = {}
+    try:
+        for entry in os.scandir(workspace):
+            if os.path.splitext(entry.name)[1].lower() not in types or not entry.is_file(follow_symlinks=False):
+                continue
+            stat = entry.stat(follow_symlinks=False)
+            snapshot[entry.path] = (stat.st_mtime_ns, stat.st_size, harness_agent._content_digest(entry.path, stat.st_size))
+    except OSError:
+        return {}
+    return snapshot
+
+
+def changed_previews(before: dict[str, tuple], after: dict[str, tuple]) -> list[tuple[str, str]]:
+    """(path, media type) of files that are new or whose content changed."""
+    import harness_agent
+
+    types = harness_agent._BROWSER_PREVIEW_TYPES
+    changed = []
+    for path, (mtime, size, digest) in after.items():
+        previous = before.get(path)
+        if previous is not None:
+            old_mtime, old_size, old_digest = previous
+            if (old_mtime, old_size) == (mtime, size) or (digest is not None and digest == old_digest):
+                continue
+        changed.append((path, types[os.path.splitext(path)[1].lower()]))
+    return sorted(changed)
+
+
 def usage_metrics(provider: str, model: str, usage: dict[str, Any] | None) -> dict[str, Any]:
     """``session/prompt`` usage -> an api_metrics record (cache counted inside input)."""
     if not isinstance(usage, dict):
@@ -936,7 +973,8 @@ class AcpProvider:
         prompt_text = build_prompt_text(
             user_prompt, context_summary=pending_summary or fallback_summary, note=note,
         )
-        turn = _Turn(self, connection, session_id, ui, cancel_event, provider, applied.get("model") or model)
+        turn = _Turn(self, connection, session_id, ui, cancel_event, provider, applied.get("model") or model,
+                     workspace=str(workspace_path))
         if self._bridge is not None:
             self._bridge.register_turn(meta.id, turn)
         try:
@@ -1099,8 +1137,11 @@ class _Turn:
     """One ``session/prompt``: routes updates to the UI and answers permission requests."""
 
     def __init__(self, provider: AcpProvider, connection: AcpConnection, session_id: str, ui,
-                 cancel_event: threading.Event, provider_name: str, model: str):
+                 cancel_event: threading.Event, provider_name: str, model: str, workspace: str | None = None):
         self.provider = provider
+        # Previewable files in the workspace, to show files the agent produced
+        # by other means than its edit tool (a shell command, an MCP tool).
+        self.workspace = workspace
         self.agent = provider.agent
         self.connection = connection
         self.session_id = session_id
@@ -1120,6 +1161,7 @@ class _Turn:
         self.commands: list[dict[str, str]] | None = None
         self.last_activity = time.monotonic()
         self.waiting_for_user = 0
+        self._artifacts = self._artifact_snapshot()
 
     def final_text(self) -> str:
         return "\n\n".join(t.strip() for t in self.texts if t.strip())
@@ -1162,7 +1204,27 @@ class _Turn:
             transport.on_request(self.session_id, None)
             self._flush_thought()
             self._flush_text()
+            self._show_new_artifacts()
         return str(result.get("stopReason") or "end_turn"), result.get("usage")
+
+    # generated files
+
+    def _artifact_snapshot(self) -> dict[str, tuple]:
+        hook = getattr(self.ui, "show_generated_artifact", None)
+        if not self.workspace or not callable(hook):
+            return {}
+        return workspace_previews(self.workspace)
+
+    def _show_new_artifacts(self) -> None:
+        """Show workspace files created or changed since the last look, as native does after shell_run."""
+        hook = getattr(self.ui, "show_generated_artifact", None)
+        if not self.workspace or not callable(hook):
+            return
+        after = workspace_previews(self.workspace)
+        changed = changed_previews(self._artifacts, after)
+        self._artifacts = after
+        for path, media_type in changed:
+            hook(path, media_type)
 
     # updates
 
@@ -1240,6 +1302,11 @@ class _Turn:
             if previous != entry:
                 self._announced[call_id] = entry
                 hook(tool, label, status, call_id)
+        if status == "completed" and update.get("kind") != "read":
+            if diffs_in(update):
+                self._artifacts = self._artifact_snapshot()  # reported as file changes below
+            else:
+                self._show_new_artifacts()
         if status == "completed":
             for diff in diffs_in(update):
                 path = str(diff["path"])

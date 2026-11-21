@@ -94,6 +94,17 @@ def prompt(request_id, params):
             time.sleep(0.05)
         send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": "end_turn", "usage": usage}})
         return
+    if "picture" in text:
+        # Produce a file by a shell command, not the edit tool (as agy did with sips).
+        call = {"sessionUpdate": "tool_call", "toolCallId": "call_img", "status": "in_progress", "kind": "execute",
+                "title": "sips", "rawInput": {"CommandLine": "sips -z 512 512 media.jpg --out fox.png"}}
+        update(session_id, call)
+        with open(os.path.join(state["cwd"], "fox.png"), "wb") as fh:
+            fh.write(b"\x89PNG\r\n\x1a\nfox")
+        update(session_id, {**call, "sessionUpdate": "tool_call_update", "status": "completed"})
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Saved fox.png"}})
+        send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": "end_turn", "usage": usage}})
+        return
     if "question" in text:
         # Ask through MyHarness's MCP server, as Antigravity would: permission, then tools/call.
         server = next((m for m in state["mcp"] if m.get("name") == "myharness"), None)

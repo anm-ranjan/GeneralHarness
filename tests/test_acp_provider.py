@@ -24,7 +24,7 @@ class FakeUI:
         self.approve = approve
         self.assistant, self.deltas, self.thinking, self.errors, self.status = [], [], [], [], []
         self.tools, self.files, self.plans, self.metrics, self.approvals = [], [], [], [], []
-        self.finished, self.context = [], []
+        self.finished, self.context, self.artifacts = [], [], []
 
     def show_user_message(self, *_args):
         pass
@@ -52,6 +52,9 @@ class FakeUI:
 
     def show_observed_file_change(self, path, action, tool):
         self.files.append((path, action, tool))
+
+    def show_generated_artifact(self, path, media_type):
+        self.artifacts.append((path, media_type))
 
     def show_plan_update(self, items):
         self.plans.append(items)
@@ -340,6 +343,15 @@ class ProviderRunTests(unittest.TestCase):
         self.assertNotIn("/tmp/fake/notes.txt", text)
         denied = [row for row in self.received("session/prompt")]
         self.assertEqual(len(denied), 3)
+
+    def test_files_made_outside_the_edit_tool_are_shown(self):
+        (Path(self.workspace) / "old.png").write_bytes(b"old")
+        ui = self.run_turn(self.runtime(), self.agent(), make_meta(), "make a picture")
+        fox = str(Path(self.workspace).resolve() / "fox.png")
+        self.assertEqual([(Path(p).resolve(), m) for p, m in ui.artifacts], [(Path(fox), "image/png")])
+        # Unchanged on the next turn: not shown again.
+        ui = self.run_turn(self.runtime(), self.agent(), make_meta(), "hi")
+        self.assertEqual(ui.artifacts, [])
 
     def test_image_attachments_go_as_image_blocks(self):
         png = Path(self.workspace) / "shot.png"
