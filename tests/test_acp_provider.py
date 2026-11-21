@@ -330,19 +330,10 @@ class ProviderRunTests(unittest.TestCase):
         self.assertIn("not available", ui.errors[0])
         self.assertEqual(self.received("session/prompt"), [])
 
-    def test_silent_ask_uses_the_thread_session_and_approves_nothing(self):
-        runtime, agent, meta, store = self.runtime(), self.agent(), make_meta(), FakeStore()
-        self.assertEqual(runtime.ask(agent, meta, "summarise", self.workspace, store), ("", {}))
-        self.run_turn(runtime, agent, meta, "hi", store=store)
-        session_id = meta.acp_state["session_id"]
-        text, metrics = runtime.ask(agent, meta, "summarise", self.workspace, store)
-        self.assertEqual(text, "Hello from fake")
-        self.assertEqual(metrics["input_tokens"], 150)
-        self.assertEqual(self.received("session/prompt")[-1]["params"]["sessionId"], session_id)
-        text, _metrics = runtime.ask(agent, meta, "edit please", self.workspace, store)
-        self.assertNotIn("/tmp/fake/notes.txt", text)
-        denied = [row for row in self.received("session/prompt")]
-        self.assertEqual(len(denied), 3)
+    def test_system_prompt_addition_is_only_the_folder_limits(self):
+        with patch.object(acp.utils, "ALLOWED_PATHS", ["/repo"]):
+            text = acp.build_system_append(make_meta())
+        self.assertEqual(text, "Work only inside these folders:\n- /repo")
 
     def test_files_made_outside_the_edit_tool_are_shown(self):
         (Path(self.workspace) / "old.png").write_bytes(b"old")

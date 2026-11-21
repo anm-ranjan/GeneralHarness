@@ -74,7 +74,8 @@ def _handoff_summarizer(meta, session_id: str, workspace_root: str):
     """A callable(question) -> answer on the provider being switched away from, or None.
 
     Codex and Claude answer on a fork (as /aside does), Native on a copy of its
-    history, an ACP agent with one silent turn in its own session.
+    history. ACP agents are never asked: MyHarness sends them only what the
+    user typed, so their threads are summarised by the native summary model.
     """
     import aside as aside_module
 
@@ -110,20 +111,6 @@ def _handoff_summarizer(meta, session_id: str, workspace_root: str):
         if not (meta.claude_state or {}).get("session_id") or not web_app._claude_agent_available():
             return None
         return lambda question: aside_module._answer_claude(session_id, meta, question, workspace_root, run_settings)
-    if is_acp(provider):
-        agent_config = acp_provider.agent_for(provider)
-        if agent_config is None or not web_app._acp_available(provider) or not (meta.acp_state or {}).get("session_id"):
-            return None
-
-        def ask(question: str) -> str:
-            import usage_ledger
-
-            text, metrics = _get_acp_runtime().ask(agent_config, meta, question, workspace_root, web_app._store)
-            if metrics:
-                usage_ledger.record(web_app._store, session_id, {**metrics, "purpose": "provider_handoff"})
-            return text
-
-        return ask
     return None
 
 
@@ -1082,11 +1069,15 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
                 # only needs to hear about the thread's files.
                 context_summary = context_handoff.files_note(context_handoff.collect(events))
             else:
-                _emit_session_event(session_id, EventType.STATUS, {"text": f"Summarising the thread with {from_label}…"})
-                outgoing = _handoff_summarizer(meta, session_id, workspace_root)
+                # Antigravity on either side: the native summary model writes the
+                # summary from the transcript; neither agent is asked for one.
+                via_native = is_acp(current) or is_acp(target)
+                status = "Summarising the thread…" if via_native else f"Summarising the thread with {from_label}…"
+                _emit_session_event(session_id, EventType.STATUS, {"text": status})
+                outgoing = None if via_native else _handoff_summarizer(meta, session_id, workspace_root)
                 context_summary, source = await asyncio.to_thread(
                     context_handoff.build, events, outgoing, from_label, _provider_label)
-                if source == "fallback":
+                if source == "fallback" and not via_native:
                     _emit_session_event(session_id, EventType.STATUS, {
                         "text": f"{from_label} could not write the summary, so its replies were condensed another way."})
 

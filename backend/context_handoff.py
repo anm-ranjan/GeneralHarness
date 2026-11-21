@@ -4,6 +4,9 @@ The handoff has three parts:
 1. the user's messages, verbatim from the transcript (very long ones trimmed),
 2. a summary of the agent's final replies, written by the provider being
    switched away from (it has seen the whole session, tool results included),
+   or, when Antigravity is on either side of the switch, by the native
+   summary model from the transcript, so Antigravity is never sent a prompt
+   the user did not type,
 3. the files and attachments the user and the agent produced, from the
    transcript's file-change, artifact and attachment records.
 
@@ -165,25 +168,29 @@ def summarize_replies(transcript: Transcript, outgoing: Callable[[str], str] | N
 
 
 def render(transcript: Transcript, summary: str, from_label: str,
-           label: Callable[[str], str] | None = None) -> str:
-    """The handoff text the next provider receives before the user's next message."""
+           label: Callable[[str], str] | None = None, *, by_outgoing: bool = True) -> str:
+    """The handoff text the next provider receives before the user's next message.
+
+    ``by_outgoing`` says whether ``from_label`` wrote the summary itself.
+    """
     parts = [
         f"This thread was moved to you from {from_label}. What happened so far:",
     ]
     names = list(dict.fromkeys((label or str)(p) for p in transcript.providers))
     if len(names) > 1:
-        parts.append(
-            f"Assistants that worked in this thread, in order: {', '.join(names)}. "
-            f"{from_label} saw the earlier assistants' replies as its own history, so its summary "
-            "may describe their work as its own."
-        )
+        note = f"Assistants that worked in this thread, in order: {', '.join(names)}."
+        if by_outgoing:
+            note += (f" {from_label} saw the earlier assistants' replies as its own history, so its summary "
+                     "may describe their work as its own.")
+        parts.append(note)
     if transcript.user_messages:
         lines = "\n".join(
             f"{i}. {_trim(text, USER_MESSAGE_LIMIT)}" for i, text in enumerate(transcript.user_messages, 1)
         )
         parts.append(f"The user's messages, oldest first:\n{lines}")
     if summary:
-        parts.append(f"Summary of the replies so far, written by {from_label}:\n{summary}")
+        by = f", written by {from_label}" if by_outgoing else ""
+        parts.append(f"Summary of the replies so far{by}:\n{summary}")
     if transcript.files:
         lines = "\n".join(f"- {path} ({how})" for path, how in transcript.files)
         parts.append(f"Files and attachments in this thread:\n{lines}")
@@ -205,4 +212,4 @@ def build(events, outgoing: Callable[[str], str] | None, from_label: str,
     if transcript.empty:
         return None, "none"
     summary, source = summarize_replies(transcript, outgoing)
-    return render(transcript, summary, from_label, label), source
+    return render(transcript, summary, from_label, label, by_outgoing=source == "outgoing"), source

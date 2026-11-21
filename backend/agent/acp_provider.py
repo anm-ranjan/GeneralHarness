@@ -12,7 +12,10 @@ owns sign-in. Concretely (see ``AcpAgentConfig`` and ``_policy_error``):
 - only models matching ``allowed_models`` (Gemini 4 by default),
 - the agent's background and multi-agent slash commands are refused,
 - no routines, agent runs, sub-agents or asides (enforced by their callers,
-  which accept native only, and by ``aside`` refusing ACP providers).
+  which accept native only, and by ``aside`` refusing ACP providers),
+- every prompt is one the user typed: provider handoffs in and out are
+  summarised by the native summary model, never by a hidden agent turn,
+- the system prompt addition is only the folder limits.
 
 Provider ids are ``acp:<agent key>``, e.g. ``acp:antigravity``.
 """
@@ -36,7 +39,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 import utils
-import skill_registry
 
 
 ACP_PREFIX = "acp:"
@@ -355,38 +357,10 @@ def command_list(commands: list[dict[str, Any]], agent: AcpAgentConfig) -> list[
 # ── prompt building ─────────────────────────────────────────────────
 
 
-def _project_knowledge(store, meta) -> str:
-    """Project instructions + memory text, as the Claude provider includes them."""
-    if store is None or getattr(meta, "kind", "project") == "chat":
-        return ""
-    try:
-        import project_knowledge
-
-        return project_knowledge.prompt_fragment(store, meta.project_id, "inline") or ""
-    except Exception:
-        return ""
-
-
-def build_system_append(meta, knowledge: str = "") -> str:
+def build_system_append(meta) -> str:
+    """Only the folder limits; MyHarness adds no persona, skills or project notes."""
     roots = "\n".join(f"- {root}" for root in utils.ALLOWED_PATHS) or "- (the working directory)"
-    chat = getattr(meta, "kind", "project") == "chat"
-    parts = [
-        "You are running inside MyHarness, a local desktop app that shows your work to the user"
-        + (" as a general-purpose assistant." if chat else " for coding sessions."),
-        f"MyHarness session id: {meta.id}.",
-        f"Work only inside these folders:\n{roots}",
-        skill_registry.prompt_fragment(),
-        f"When the request is genuinely ambiguous and the readings lead to materially different work, "
-        f"call the ask_user tool of the {ASK_SERVER_NAME} MCP server with one concrete question and wait "
-        "for the answer rather than guessing. Do not use it for anything you can settle by reading the code.",
-        "Be concise. "
-        + ("Answer clearly and directly." if chat else
-           "When you changed files or ran commands, end with a short summary: files changed, "
-           "commands run, test result. Leave it out when you did neither."),
-    ]
-    if knowledge:
-        parts.append(knowledge)
-    return "\n\n".join(part.strip() for part in parts if part and part.strip())
+    return f"Work only inside these folders:\n{roots}"
 
 
 def build_prompt_text(user_prompt: str, *, context_summary: str | None = None, note: str | None = None) -> str:
@@ -1029,30 +1003,6 @@ class AcpProvider:
         self._update_summary(meta, user_prompt, final_text, store)
         ui.show_agent_finished("completed")
 
-    async def ask(self, meta, question: str, workspace: str, store, cancel_event: threading.Event) -> tuple[str, dict[str, Any]]:
-        """One silent turn in the thread's own session (e.g. a handoff summary).
-
-        Nothing reaches the thread: replies are collected, every permission
-        request is declined. Returns (reply text, usage metrics); ("", {}) when
-        the thread has no session to ask.
-        """
-        state = dict(getattr(meta, "acp_state", None) or {})
-        session_id = state.get("session_id")
-        cwd = str(Path(workspace).expanduser().resolve())
-        if not session_id or state.get("agent") != self.agent.key or state.get("cwd") != cwd:
-            return "", {}
-        connection = await self._connection_factory()
-        if session_id not in connection.loaded_sessions:
-            if await self._load(connection, session_id, cwd, meta, store) is None:
-                return "", {}
-        ui = _CollectUI()
-        model = (state.get("applied") or {}).get("model") or self.agent.model
-        turn = _Turn(self, connection, session_id, ui, cancel_event, self.agent.provider, model)
-        stop_reason, usage = await turn.run(question)
-        if stop_reason == "cancelled":
-            return "", usage_metrics(self.agent.provider, model, usage)
-        return turn.final_text(), usage_metrics(self.agent.provider, model, usage)
-
     async def _load(self, connection: AcpConnection, session_id: str, cwd: str, meta, store) -> dict[str, Any] | None:
         """Reopen a session in this agent process; its reply, or None when it is gone.
 
@@ -1084,7 +1034,7 @@ class AcpProvider:
             connection.transport.on_session(session_id, None)
 
     def _system_meta(self, meta, store) -> dict[str, Any]:
-        return {"antigravity": {"systemPrompt": {"append": build_system_append(meta, _project_knowledge(store, meta))}}}
+        return {"antigravity": {"systemPrompt": {"append": build_system_append(meta)}}}
 
     @staticmethod
     def _fallback_summary(store, meta) -> str | None:
@@ -1111,19 +1061,6 @@ class AcpProvider:
             "provider": self.agent.provider,
             "message_count": meta.message_count,
         })
-
-
-class _CollectUI:
-    """Keeps the reply of a silent turn; shows nothing and approves nothing."""
-
-    def show_assistant_markdown(self, _text: str) -> None:
-        pass
-
-    def show_thinking(self, _text: str) -> None:
-        pass
-
-    def request_approval_for_agent(self, *_args) -> bool:
-        return False
 
 
 def _request_approval(ui, tool_name: str, detail: str) -> bool:
@@ -1530,22 +1467,6 @@ class AcpRuntime:
             return self._submit(check(), timeout=timeout + 30)
         except Exception:
             return None
-
-    def ask(self, agent: AcpAgentConfig, meta, question: str, workspace: str, store,
-            timeout: float = 120) -> tuple[str, dict[str, Any]]:
-        """Blocking ``AcpProvider.ask``; stops the turn (session/cancel) on timeout."""
-        self.start()
-        assert self._loop is not None
-        cancel_event = threading.Event()
-        provider = AcpProvider(agent, lambda: self.connection(agent), bridge=self)
-        future = asyncio.run_coroutine_threadsafe(provider.ask(meta, question, workspace, store, cancel_event), self._loop)
-        try:
-            return future.result(timeout)
-        except Exception:
-            cancel_event.set()
-            with contextlib.suppress(Exception):
-                future.result(15)
-            raise
 
     def close_session(self, agent: AcpAgentConfig, session_id: str) -> None:
         async def close():

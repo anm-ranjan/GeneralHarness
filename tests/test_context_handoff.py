@@ -59,6 +59,9 @@ class CollectTests(unittest.TestCase):
         named = handoff.render(handoff.collect(EVENTS), "", "Codex", {"acp:antigravity": "Antigravity",
                                                                       "codex-app-server": "Codex"}.get)
         self.assertIn("in order: Antigravity, Codex.", named)
+        neutral = handoff.render(handoff.collect(EVENTS), "Fixed it.", "Antigravity", by_outgoing=False)
+        self.assertIn("Summary of the replies so far:\nFixed it.", neutral)
+        self.assertNotIn("written by", neutral)
         self.assertIn("- /repo/test_parser.py (created by the agent)", text)
         self.assertNotIn("private reasoning", text)
         self.assertNotIn("pytest", text)
