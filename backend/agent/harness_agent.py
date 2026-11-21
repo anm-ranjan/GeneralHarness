@@ -41,6 +41,7 @@ import utils
 import prompt_cache
 import request_capture
 import history_tokens
+import image_budget
 from history_evidence import HistoryEvidence
 from tool_defs import (
     COLLABORATION_TOOLS,
@@ -194,6 +195,21 @@ def _get_api_failure() -> str | None:
 
 def _set_api_metrics(value: dict) -> None:
     _api_state.metrics = value
+
+
+def _set_stream_error(status: int | None, text: str = "") -> None:
+    _api_state.stream_error = (status, text) if status else None
+
+
+def _get_stream_error():
+    return getattr(_api_state, "stream_error", None)
+
+
+def _status_line(ui, text: str) -> None:
+    if ui is not None and hasattr(ui, "show_status"):
+        ui.show_status(text)
+    elif ui is None:
+        ui_print(text, style="yellow")
 
 
 class _DeltaStreamer:
@@ -424,7 +440,17 @@ def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int, head
 
     if response.status_code != 200:
         status = response.status_code
+        try:
+            error_text = response.text[:4000]
+        except Exception:
+            error_text = ""
         response.close()
+        _set_stream_error(status, error_text)
+        if image_budget.parse_image_error(status, error_text,
+                                          image_budget.count_images(payload.get("messages") or [])):
+            # The images are the problem, not the stream options; the caller
+            # trims them and asks again.
+            return _STREAM_UNSUPPORTED
         if include_usage and status in (400, 422):
             # Possibly the option itself was rejected: retry without it, and
             # stop sending it only if that retry is accepted. Any other error
@@ -495,6 +521,32 @@ def _call_api_streaming(payload: dict, ui, cancel_event, payload_size: int, head
     }
 
 
+_NOT_RETRIED = object()
+
+
+def _retry_after_image_error(status: int, text: str, messages: list, model: str, ui, retry):
+    """Retry once with fewer images when a provider rejected them.
+
+    A limit the provider names is remembered for this model and route, so
+    later requests stay under it without failing first.
+    """
+    parsed = image_budget.parse_image_error(status, text, image_budget.count_images(messages))
+    if parsed is None:
+        return _NOT_RETRIED
+    limit, remember = parsed
+    if remember:
+        image_budget.remember_limit(model, limit, text)
+    removed = image_budget.enforce_limit(messages, limit)
+    if not removed:
+        return _NOT_RETRIED
+    _status_line(ui, (
+        f"The provider does not accept images for {model}; retrying with them as a text note."
+        if limit == 0 else
+        f"The provider accepts at most {limit} image(s) per request; "
+        f"retrying with {removed} older image(s) replaced by a note."))
+    return retry()
+
+
 def call_api(
     messages: list,
     tools: list = None,
@@ -507,11 +559,22 @@ def call_api(
     timeout: float | None = None,
     reasoning_effort: str | None = None,
     capture_purpose: str = "agent",
+    _image_retry: bool = False,
 ) -> dict:
     capture = request_capture.start_call(capture_purpose)
     _set_api_failure(None)
     _set_api_metrics({})
+    _set_stream_error(None)
+    requested_max_tokens = max_tokens
     selected_model = choose_model_for_tools(tools, model or _thread_model(ui))
+    # Changes the history in place, and only when the model's image limit
+    # would be exceeded, so the cached prompt prefix rarely moves.
+    removed_images, image_limit = image_budget.prepare(messages, selected_model)
+    if removed_images:
+        _status_line(ui, (
+            f"{selected_model} does not accept images; sent {removed_images} as a text note."
+            if image_limit == 0 else
+            f"Replaced {removed_images} older image(s) with a note to stay within {image_limit} per request."))
     max_tokens = output_token_budget(messages, tools, max_tokens)
     payload = {
         "model": selected_model,
@@ -564,6 +627,14 @@ def call_api(
                                      capture=capture)
         if result is not _STREAM_UNSUPPORTED:
             return result
+        stream_error = _get_stream_error()
+        if stream_error and not _image_retry:
+            retried = _retry_after_image_error(
+                stream_error[0], stream_error[1], messages, selected_model, ui,
+                lambda: call_api(messages, tools, model, ui, cancel_event, requested_max_tokens, cache_session_key,
+                                 report_context, timeout, reasoning_effort, capture_purpose, _image_retry=True))
+            if retried is not _NOT_RETRIED:
+                return retried
         # Streaming rejected by the provider — retry as a plain request.
 
     t0 = time.monotonic()
@@ -601,6 +672,13 @@ def call_api(
     elapsed = time.monotonic() - t0
 
     if response.status_code != 200:
+        if not _image_retry:
+            retried = _retry_after_image_error(
+                response.status_code, response.text[:4000], messages, selected_model, ui,
+                lambda: call_api(messages, tools, model, ui, cancel_event, requested_max_tokens, cache_session_key,
+                                 report_context, timeout, reasoning_effort, capture_purpose, _image_retry=True))
+            if retried is not _NOT_RETRIED:
+                return retried
         _set_api_failure("status")
         msg = f"API Error ({response.status_code}), payload {payload_size // 1024}KB: {response.text[:300]}"
         if ui:
@@ -2363,6 +2441,9 @@ def run_agent(
         if assistant_msg.get("tool_calls"):
             used_write_tool = False
             pending_steering = False
+            # image_read output: tool messages carry text only, so the images
+            # follow the results as one user message.
+            tool_images: list[tuple[str, dict]] = []
             for tool_call in assistant_msg["tool_calls"]:
                 if cancel_event and cancel_event.is_set():
                     interrupted = True
@@ -2598,10 +2679,22 @@ def run_agent(
                     if ui and not tool_result.startswith("ERROR"):
                         _emit_file_changes(ui, func_name, func_args, tool_result)
 
+                model_result = tool_result
+                if func_name == "image_read" and utils.LOCAL_IMAGE_RESULT_MARKER in tool_result:
+                    try:
+                        visible, image = utils.image_attachment_from_tool_result(tool_result)
+                    except (ValueError, OSError) as exc:
+                        model_result = f"ERROR: {exc}"
+                    else:
+                        if image:
+                            tool_images.append((func_args.get("file_path") or image["name"], image))
+                            model_result = visible + "\nThe image follows this result for you to look at."
+                        else:
+                            model_result = visible
                 tool_msg = {
                     "role": "tool",
                     "tool_call_id": tool_call["id"],
-                    "content": utils.slim_tool_result(tool_result),
+                    "content": utils.slim_tool_result(model_result),
                 }
                 try:
                     archive = getattr(ui, "archive_tool_evidence", None) if ui else None
@@ -2629,6 +2722,14 @@ def run_agent(
                     tool_calls_since_plan_update += 1
 
                 # Completed-turn compression keeps active prefixes stable.
+
+            if tool_images and not (cancel_event and cancel_event.is_set()):
+                image_msg = {"role": "user", "content": [
+                    {"type": "text", "text": "Image(s) from image_read: " + ", ".join(path for path, _ in tool_images)},
+                    *({"type": "image_url", "image_url": {"url": image["data"]}} for _, image in tool_images),
+                ]}
+                messages.append(image_msg)
+                turn_messages.append(image_msg)
 
             if cancel_event and cancel_event.is_set():
                 interrupted = True

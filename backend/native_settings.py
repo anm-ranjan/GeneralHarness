@@ -34,12 +34,12 @@ _CONFIG_DEFAULTS = {
 }
 # Agent-loop settings: key -> (utils attribute, kind, minimum, maximum).
 # Each is read from utils when it is used, so a save applies to the next turn.
-# For the two nudges 0 turns them off.
+# For the two nudges 0 turns them off; 0 images per request sends none.
 AGENT_FIELDS = {
     "max_iterations": ("MAX_AGENT_ITERATIONS", int, 1, 1000),
     "tool_call_checkpoint": ("TOOL_CALL_CHECKPOINT", int, 0, 1000),
     "plan_reminder_after_tool_calls": ("PLAN_REMINDER_AFTER_TOOL_CALLS", int, 0, 100),
-    "shell_default_timeout": ("DEFAULT_SHELL_TIMEOUT", int, 5, 3600),
+    "max_images_per_request": ("MAX_IMAGES_PER_REQUEST", int, 0, 50),
     "multi_agent_enabled": ("MULTI_AGENT_ENABLED", bool, None, None),
     "max_concurrent_subagents": ("MAX_CONCURRENT_SUBAGENTS", int, 1, 16),
     "max_total_subagents": ("MAX_TOTAL_SUBAGENTS", int, 1, 200),

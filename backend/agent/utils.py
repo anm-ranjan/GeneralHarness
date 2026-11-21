@@ -389,6 +389,8 @@ _APPROVAL_MODE_DEFAULT = str(
 ).lower()
 APPROVAL_MODE = _APPROVAL_MODE_DEFAULT
 MAX_TOOL_OUTPUT = config_int(CONFIG, ["limits", "max_tool_output"], 12000)
+# Most images one native request carries (backend/agent/image_budget.py).
+MAX_IMAGES_PER_REQUEST = config_int(CONFIG, ["limits", "max_images_per_request"], 8)
 DEFAULT_SHELL_TIMEOUT = config_int(CONFIG, ["shell", "default_timeout"], 120)
 MAX_BACKGROUND_JOBS = config_int(CONFIG, ["shell", "max_background_jobs"], 10)
 BACKGROUND_OUTPUT_MAX_LINES = config_int(CONFIG, ["shell", "background_output_max_lines"], 2000)

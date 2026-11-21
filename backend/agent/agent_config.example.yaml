@@ -73,6 +73,11 @@ limits:
   # Largest reply requested per call; also capped by the room left in the
   # context window. Raise it for models with large output limits.
   max_output_tokens: 65000
+  # Most images a native request carries. Past it, older images become a text
+  # note in one batch (down to half), so the cached prompt prefix rarely moves.
+  # Lower limits a provider reports (e.g. "At most 1 image(s)") are learned
+  # per model and provider into data/native_image_limits.json.
+  max_images_per_request: 8
 
 search:
   max_results: 100

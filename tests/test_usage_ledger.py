@@ -281,6 +281,20 @@ class NativeAgentSettingsTests(unittest.TestCase):
         self.assertEqual(utils.MAX_SUBAGENT_DEPTH, native_settings._AGENT_DEFAULTS["max_subagent_depth"])
         self.assertFalse((Path(self.tmp.name) / "native_settings.json").exists())
 
+    def test_images_per_request_is_set_here_and_shell_timeout_no_longer(self):
+        native_settings.save_agent({"max_images_per_request": 2})
+        self.assertEqual(utils.MAX_IMAGES_PER_REQUEST, 2)
+        native_settings.save_agent({"max_images_per_request": 0})
+        self.assertEqual(utils.MAX_IMAGES_PER_REQUEST, 0)
+        for values in ({"max_images_per_request": -1}, {"max_images_per_request": 51},
+                       {"shell_default_timeout": 300}):
+            with self.assertRaises(HTTPException):
+                usage_routes.update_native_agent_settings(usage_routes.NativeAgentSettingsRequest(values=values))
+        # A file saved before the change keeps loading; the old key is ignored.
+        path = Path(self.tmp.name) / "native_settings.json"
+        path.write_text('{"agent": {"shell_default_timeout": 300, "max_iterations": 9}}')
+        self.assertEqual(native_settings.load_agent(), {"max_iterations": 9})
+
     def test_bad_values_are_rejected(self):
         for values in ({"max_iterations": 0}, {"max_iterations": 2.5}, {"max_iterations": True},
                        {"multi_agent_enabled": 1}, {"nope": 1}):
