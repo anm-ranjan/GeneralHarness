@@ -16,8 +16,8 @@ You need this session's id and the backend's address (`API`).
 
 Every call below goes to that backend on `127.0.0.1`. If your shell commands run in a sandbox that blocks local network access, run these calls outside it from the first attempt (ask for that permission if your tools require it) instead of trying inside the sandbox first.
 
-- If your instructions give them (a line like "session id: ... Local API: ...", or `session_id` in a SESSION IDENTITY line), use those.
-- Otherwise find them with this snippet, which works when the `ANTIGRAVITY_CONVERSATION_ID` environment variable is set:
+- **Session id given:** if your instructions give the session id (a line like "session id: ... Local API: ...", or `session_id` in a SESSION IDENTITY line), use it. For `API`, use the address given there; if none is given, use `$AGENT_HOST_API` when it is set, else `http://127.0.0.1:8420`. Skip the snippet below.
+- **No session id given:** find both with this snippet, which works when the `ANTIGRAVITY_CONVERSATION_ID` environment variable is set:
 
 ```bash
 API="${AGENT_HOST_API:-http://127.0.0.1:8420}"
