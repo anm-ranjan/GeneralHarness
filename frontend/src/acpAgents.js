@@ -22,3 +22,9 @@ export function acpLabel(provider, agents = []) {
 export function acpAgentEnabled(state, provider) {
   return (state?.acpAgents || []).some(item => item.provider === provider)
 }
+
+// The composer notice for a signed-out agent, or '' when none is needed.
+export function signInNotice(status) {
+  if (!status || status.signed_in !== false) return ''
+  return `${status.label} is not signed in. In a terminal, run \`${status.login_command}\` and sign in with your Google account, then send your message.`
+}

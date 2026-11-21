@@ -11,7 +11,8 @@ import useSessionTree from '../../hooks/useSessionTree'
 import { hostStorageKey } from '../../fleet'
 import { audioBlobToWav } from '../../audioWav'
 import { continueList, toggleMarker } from '../../textFormat'
-import { acpAgentEnabled, isAcpProvider } from '../../acpAgents'
+import { acpAgentEnabled, isAcpProvider, signInNotice } from '../../acpAgents'
+import useAcpStatus from '../../hooks/useAcpStatus'
 
 // Formatting is appearance only: markers are stripped before the model sees
 // the message (see textFormat.js). Underline uses ++ because __ is common in
@@ -25,6 +26,9 @@ const FORMATS = [
 
 export default function Composer() {
   const { state, dispatch } = useApp()
+  const acpStatus = useAcpStatus(state.currentSessionId, state.currentProvider, state.isRunning)
+  const acpNotice = signInNotice(acpStatus)
+  const acpCommands = acpStatus?.commands || []
   const profiles = useAgentProfiles()
   const tree = useSessionTree()
   const [agentIndex, setAgentIndex] = useState(0)
@@ -534,6 +538,27 @@ export default function Composer() {
               className="w-full min-h-[56px] max-h-[32vh] resize-y bg-transparent border border-line rounded-xl px-4 py-3 text-[14.5px] leading-6 text-text-default placeholder:text-faint outline-none focus:border-accent transition-colors disabled:opacity-50"
             />
             {!!agentOptions.length && <div role="listbox" aria-label="Agents" className="mt-2 border border-line rounded-lg overflow-hidden">{agentOptions.map((p,n)=><button key={p.name} type="button" role="option" aria-selected={n===agentIndex%agentOptions.length} onClick={()=>{setInput('@'+p.name+' ');inputRef.current?.focus()}} className={`block w-full text-left p-2 text-sm ${n===agentIndex%agentOptions.length?'bg-accent-soft text-accent':'text-text-default'}`}>@{p.name}<span className="ml-2 text-faint">{p.description}</span></button>)}</div>}
+            {acpNotice && (
+              <p role="status" className="mt-2 text-[12.5px] text-warn">{acpNotice}</p>
+            )}
+            {input.startsWith('/') && !!acpCommands.length && (
+              <div className="mt-2 flex flex-wrap items-baseline gap-1.5">
+                <span className="text-[12px] text-muted">{acpStatus.label}:</span>
+                {acpCommands
+                  .filter(cmd => input.trim() === '/' || cmd.name.startsWith(input.trim().split(/\s/)[0]))
+                  .map(cmd => (
+                    <button
+                      key={cmd.name}
+                      type="button"
+                      title={cmd.description}
+                      onClick={() => setInput(`${cmd.name} `)}
+                      className="text-[12px] text-faint underline decoration-line underline-offset-4 hover:text-accent"
+                    >
+                      {cmd.name}
+                    </button>
+                  ))}
+              </div>
+            )}
             {input.startsWith('/') && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {SUGGESTED_SLASH_COMMANDS.map(cmd => (

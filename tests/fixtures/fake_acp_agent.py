@@ -94,6 +94,29 @@ def prompt(request_id, params):
             time.sleep(0.05)
         send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": "end_turn", "usage": usage}})
         return
+    if "question" in text:
+        # Ask through MyHarness's MCP server, as Antigravity would: permission, then tools/call.
+        server = next((m for m in state["mcp"] if m.get("name") == "myharness"), None)
+        call = {"sessionUpdate": "tool_call", "toolCallId": "call_q", "status": "pending", "kind": "other",
+                "name": "mcp_myharness_ask_user", "title": "Run mcp_myharness_ask_user",
+                "rawInput": {"question": "Which colour?"}}
+        update(session_id, call)
+        answer_text = "no server"
+        if server and (ask(session_id, call).get("outcome") or {}).get("optionId") == "allow":
+            import subprocess
+            env = dict(os.environ, **{e["name"]: e["value"] for e in server.get("env", [])})
+            proc = subprocess.Popen([server["command"], *server["args"]], stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, text=True, env=env)
+            proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}) + "\n")
+            proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                "name": "ask_user", "arguments": {"question": "Which colour?", "options": ["red", "blue"]}}}) + "\n")
+            proc.stdin.flush()
+            proc.stdout.readline()
+            answer_text = json.loads(proc.stdout.readline())["result"]["content"][0]["text"]
+            proc.terminate()
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": answer_text}})
+        send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": "end_turn", "usage": usage}})
+        return
     if "edit" in text:
         call = {"sessionUpdate": "tool_call", "toolCallId": "call_1", "status": "in_progress", "kind": "edit",
                 "title": "File ../../x/notes.txt", "locations": [{"path": "/tmp/fake/notes.txt"}],
@@ -120,7 +143,7 @@ def prompt(request_id, params):
 
 def new_state(params):
     return {"cwd": params.get("cwd"), "model": "gemini-4-neon", "thought_level": "high", "mode": "default",
-            "meta": params.get("_meta"), "prompts": []}
+            "meta": params.get("_meta"), "prompts": [], "mcp": params.get("mcpServers") or []}
 
 
 def handle(message):
@@ -135,11 +158,17 @@ def handle(message):
     if method == "initialize":
         send({"jsonrpc": "2.0", "id": request_id, "result": {
             "protocolVersion": 1,
-            "agentCapabilities": {"loadSession": True, "sessionCapabilities": {
+            "agentCapabilities": {"loadSession": True, "promptCapabilities": {"image": True}, "sessionCapabilities": {
                 "load": {}, "close": {}, **({} if NO_RESUME else {"resume": {}})}},
             "agentInfo": {"name": "Fake ACP", "version": "9.9.9"},
             "authMethods": [{"id": "oauth-personal", "name": "Log in with Google"}],
         }})
+    elif method == "session/list":
+        if NO_AUTH:
+            send({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32000, "message": "Authentication required"}})
+        else:
+            send({"jsonrpc": "2.0", "id": request_id, "result": {"sessions": [
+                {"sessionId": sid, "cwd": st["cwd"]} for sid, st in sessions.items()]}})
     elif method == "session/resume":
         session_id = params["sessionId"]
         if NO_RESUME:
@@ -148,6 +177,8 @@ def handle(message):
             send({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "Session not found"}})
         else:
             sessions.setdefault(session_id, new_state(params))
+            update(session_id, {"sessionUpdate": "available_commands_update", "availableCommands": [
+                {"name": "goal", "description": "g"}, {"name": "swarm", "description": "s"}]})
             send({"jsonrpc": "2.0", "id": request_id, "result": {
                 "sessionId": session_id, "configOptions": options(sessions[session_id])}})
     elif method in ("session/new", "session/load"):

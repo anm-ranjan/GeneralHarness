@@ -469,6 +469,28 @@ def get_session_model_options(session_id: str):
     }
 
 
+@router.get("/api/sessions/{session_id}/acp-status")
+def get_session_acp_status(session_id: str):
+    """Sign-in state and the agent's own slash commands for an ACP thread."""
+    meta = web_app._store.load_session(session_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    agent = acp_provider.agent_for(meta.provider)
+    if agent is None:
+        raise HTTPException(status_code=400, detail="Not an ACP agent thread")
+    reason = acp_provider.unavailable_reason(meta.provider)
+    signed_in = None if reason else web_runs._get_acp_runtime().sign_in_status(agent)
+    return {
+        "provider": meta.provider,
+        "label": agent.label,
+        "available": reason is None,
+        "unavailable_reason": reason or "",
+        "signed_in": signed_in,
+        "login_command": f"{agent.command} acp --login",
+        "commands": (meta.acp_state or {}).get("commands") or [],
+    }
+
+
 @router.patch("/api/sessions/{session_id}/run-settings")
 def update_session_run_settings(session_id: str, req: UpdateRunSettingsRequest):
     if web_app._manager.get_active_run(session_id):

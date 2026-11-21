@@ -1,3 +1,4 @@
+import base64
 import json
 import sys
 import tempfile
@@ -339,6 +340,53 @@ class ProviderRunTests(unittest.TestCase):
         self.assertNotIn("/tmp/fake/notes.txt", text)
         denied = [row for row in self.received("session/prompt")]
         self.assertEqual(len(denied), 3)
+
+    def test_image_attachments_go_as_image_blocks(self):
+        png = Path(self.workspace) / "shot.png"
+        png.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+        big = Path(self.workspace) / "big.png"
+        big.write_bytes(b"0" * (acp.MAX_IMAGE_BYTES + 1))
+        doc = Path(self.workspace) / "notes.pdf"
+        doc.write_bytes(b"%PDF")
+        attachments = [
+            {"path": str(png), "mime": "image/png", "filename": "shot.png"},
+            {"path": str(big), "mime": "image/png", "filename": "big.png"},
+            {"path": str(doc), "mime": "application/pdf", "filename": "notes.pdf"},
+        ]
+        self.run_turn(self.runtime(), self.agent(), make_meta(), "look at this", images=attachments)
+        prompt = self.received("session/prompt")[-1]["params"]["prompt"]
+        self.assertEqual([block["type"] for block in prompt], ["text", "image"])
+        self.assertEqual(prompt[1]["mimeType"], "image/png")
+        self.assertEqual(base64.b64decode(prompt[1]["data"]), png.read_bytes())
+
+    def test_agent_can_ask_the_user_through_myharness(self):
+        ui = FakeUI()
+        ui.ask_user_question = lambda question, options, free: ui.asked.append((question, options)) or "blue"
+        ui.asked = []
+        with patch.object(acp, "ASK_FILE", str(Path(self.workspace) / "acp_ask.json")):
+            ui = self.run_turn(self.runtime(), self.agent(), make_meta(), "a question please", ui=ui)
+        self.assertEqual(ui.errors, [])
+        self.assertEqual(ui.asked, [("Which colour?", ["red", "blue"])])
+        self.assertEqual(ui.approvals, [])  # its own tool needs no approval card
+        self.assertEqual(ui.tools, [])  # nor a tool card: the question card shows it
+        self.assertEqual(ui.assistant, ["The user answered: blue"])
+        server = self.received("session/new")[0]["params"]["mcpServers"][0]
+        self.assertEqual(server["name"], "myharness")
+        self.assertEqual(oct(Path(self.workspace, "acp_ask.json").stat().st_mode & 0o777), "0o600")
+
+    def test_sign_in_status_and_agent_commands(self):
+        for flags, expected in (((), True), (("--no-auth",), False)):
+            with self.subTest(flags=flags):
+                acp._signed_in.clear()
+                self.assertIs(self.runtime().sign_in_status(self.agent(*flags)), expected)
+        acp._signed_in.clear()
+        runtime, agent, meta = self.runtime(), self.agent(), make_meta()
+        self.run_turn(runtime, agent, meta, "hi")
+        self.assertIs(acp.known_sign_in(agent), True)
+        # Hidden commands never reach the composer.
+        self.assertEqual(meta.acp_state["commands"], [{"name": "/goal", "description": "g"}])
+        self.run_turn(self.runtime(), self.agent("--no-auth"), make_meta(), "hi")
+        self.assertIs(acp.known_sign_in(agent), False)
 
     def test_crash_fails_turn_and_next_turn_restarts(self):
         runtime, agent, meta = self.runtime(), self.agent(), make_meta()

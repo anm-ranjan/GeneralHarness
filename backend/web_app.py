@@ -222,6 +222,8 @@ async def _lifespan(app: FastAPI):
 
     # The ACP agents' last reported model lists survive restarts here.
     acp_provider.CATALOG_FILE = os.path.join(_DATA_DIR, "acp_models.json")
+    # Port and token of the socket behind ACP agents' ask_user tool (mode 600).
+    acp_provider.ASK_FILE = os.path.join(_DATA_DIR, "acp_ask.json")
     _MATERIALIZATIONS_DIR.mkdir(parents=True, exist_ok=True)
     utils.register_allowed_path(str(_MATERIALIZATIONS_DIR))
     _AGENT_RUNS_DIR.mkdir(parents=True, exist_ok=True)
@@ -391,6 +393,7 @@ from web_routes.sessions import (  # noqa: F401
     get_session,
     get_session_attachment,
     get_session_events,
+    get_session_acp_status,
     get_session_model_options,
     get_session_metrics,
     list_sessions,

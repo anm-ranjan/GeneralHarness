@@ -474,6 +474,7 @@ def _start_agent_run_locked(session_id: str, meta, text: str, saved_attachments:
                     model=run_settings["model"],
                     reasoning_effort=run_settings["reasoning_effort"],
                     approval_mode=run_settings["approval_mode"],
+                    images=saved_attachments,
                 )
             except Exception as e:
                 web_ui.show_error(f"{label} error: {e}")

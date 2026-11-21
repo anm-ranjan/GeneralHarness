@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { acpAgentEnabled, acpKey, acpLabel, isAcpProvider } from './acpAgents.js'
+import { acpAgentEnabled, acpKey, acpLabel, isAcpProvider, signInNotice } from './acpAgents.js'
 import { providerFamily } from './providerFamily.js'
 import { commandUnavailableReason } from './commands.js'
 import { modeLabel } from './sessionLabels.js'
@@ -39,4 +39,12 @@ test('Antigravity shows the Google logo, following its model when known', () => 
 test('commands listed for "acp" apply to every ACP agent', () => {
   assert.equal(commandUnavailableReason({ providers: ['native', 'acp'] }, 'acp:antigravity'), null)
   assert.equal(commandUnavailableReason({ providers: ['native'] }, 'acp:antigravity'), 'Only for native sessions')
+})
+
+test('a signed-out agent gets a login hint; unknown or signed-in gets none', () => {
+  const base = { label: 'Antigravity', login_command: 'agy acp --login' }
+  assert.match(signInNotice({ ...base, signed_in: false }), /Antigravity is not signed in.*`agy acp --login`/)
+  assert.equal(signInNotice({ ...base, signed_in: true }), '')
+  assert.equal(signInNotice({ ...base, signed_in: null }), '')
+  assert.equal(signInNotice(null), '')
 })

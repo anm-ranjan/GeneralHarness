@@ -22,7 +22,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import fnmatch
+import hmac
 import json
+import secrets
+import sys
 import os
 import re
 import shutil
@@ -45,6 +48,13 @@ DEFAULT_HIDDEN_COMMANDS = ("schedule", "swarm", "teamwork", "boost", "run-workfl
 EFFORT_SUFFIXES = ("low", "medium", "high", "xhigh")
 APPROVAL_TO_MODE = {"always_ask": "default", "shell_only": "accept-edits", "auto_approve": "auto"}
 _LINE_LIMIT = 64 * 1024 * 1024
+# The question tool MyHarness gives every ACP session (acp_ask_mcp.py). Agents
+# name MCP tools mcp_<server>_<tool>; this one never needs the user's approval.
+ASK_SERVER_NAME = "myharness"
+ASK_TOOL_ACP_NAME = f"mcp_{ASK_SERVER_NAME}_ask_user"
+ASK_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "acp_ask_mcp.py")
+# Where the runtime publishes its question socket (port + token); set by the app.
+ASK_FILE: str | None = None
 
 
 def is_acp(provider: str | None) -> bool:
@@ -298,6 +308,27 @@ def model_catalog(agent: AcpAgentConfig) -> list[dict[str, Any]]:
     return []
 
 
+# ── sign-in state ──────────────────────────────────────────────────
+# What the last turn or check learned, per agent key: True, False or absent.
+_signed_in: dict[str, tuple[float, bool]] = {}
+SIGN_IN_TTL = 60.0
+
+
+def note_signed_in(agent: AcpAgentConfig, value: bool) -> None:
+    _signed_in[agent.key] = (time.monotonic(), value)
+
+
+def known_sign_in(agent: AcpAgentConfig) -> bool | None:
+    entry = _signed_in.get(agent.key)
+    if entry and time.monotonic() - entry[0] < SIGN_IN_TTL:
+        return entry[1]
+    return None
+
+
+def is_auth_error(exc: BaseException) -> bool:
+    return isinstance(exc, AcpError) and (exc.code == AUTH_REQUIRED_CODE or "authentication required" in str(exc).lower())
+
+
 # ── policy ──────────────────────────────────────────────────────────
 
 
@@ -311,6 +342,14 @@ def hidden_command_in(text: str, agent: AcpAgentConfig) -> str | None:
 
 def filter_commands(commands: list[dict[str, Any]], agent: AcpAgentConfig) -> list[dict[str, Any]]:
     return [c for c in commands if str(c.get("name", "")).lstrip("/").lower() not in agent.hidden_commands]
+
+
+def command_list(commands: list[dict[str, Any]], agent: AcpAgentConfig) -> list[dict[str, str]]:
+    """The agent's slash commands the user may use, as {name, description} for the composer."""
+    return [
+        {"name": "/" + str(c.get("name", "")).lstrip("/"), "description": str(c.get("description") or "")[:200]}
+        for c in filter_commands(commands, agent) if str(c.get("name", "")).strip()
+    ]
 
 
 # ── prompt building ─────────────────────────────────────────────────
@@ -337,6 +376,9 @@ def build_system_append(meta, knowledge: str = "") -> str:
         f"MyHarness session id: {meta.id}.",
         f"Work only inside these folders:\n{roots}",
         skill_registry.prompt_fragment(),
+        f"When the request is genuinely ambiguous and the readings lead to materially different work, "
+        f"call the ask_user tool of the {ASK_SERVER_NAME} MCP server with one concrete question and wait "
+        "for the answer rather than guessing. Do not use it for anything you can settle by reading the code.",
         "Be concise. "
         + ("Answer clearly and directly." if chat else
            "When you changed files or ran commands, end with a short summary: files changed, "
@@ -443,6 +485,36 @@ def diffs_in(update: dict[str, Any]) -> list[dict[str, Any]]:
         item for item in update.get("content") or []
         if isinstance(item, dict) and item.get("type") == "diff" and item.get("path")
     ]
+
+
+MAX_PROMPT_IMAGES = 8
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+IMAGE_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp")
+
+
+def image_blocks(attachments: list[dict]) -> list[dict[str, Any]]:
+    """ACP image content blocks for the image attachments of a prompt.
+
+    The attachment paths are listed in the prompt text too, so an image left
+    out here (too large, unsupported type, beyond the count) stays reachable.
+    """
+    import base64
+
+    blocks = []
+    for attachment in attachments:
+        mime = str(attachment.get("mime") or attachment.get("mime_type") or "").lower()
+        path = attachment.get("path")
+        if mime not in IMAGE_TYPES or not path or len(blocks) >= MAX_PROMPT_IMAGES:
+            continue
+        try:
+            if os.path.getsize(path) > MAX_IMAGE_BYTES:
+                continue
+            with open(path, "rb") as fh:
+                data = base64.b64encode(fh.read()).decode("ascii")
+        except OSError:
+            continue
+        blocks.append({"type": "image", "mimeType": mime, "data": data})
+    return blocks
 
 
 def usage_metrics(provider: str, model: str, usage: dict[str, Any] | None) -> dict[str, Any]:
@@ -688,6 +760,11 @@ class AcpConnection:
         return bool(caps.get("loadSession") or (caps.get("sessionCapabilities") or {}).get("load") is not None)
 
     @property
+    def accepts_images(self) -> bool:
+        caps = self.info.get("agentCapabilities") or {}
+        return bool((caps.get("promptCapabilities") or {}).get("image"))
+
+    @property
     def can_resume(self) -> bool:
         caps = self.info.get("agentCapabilities") or {}
         return (caps.get("sessionCapabilities") or {}).get("resume") is not None
@@ -715,9 +792,16 @@ class AcpRunError(RuntimeError):
 class AcpProvider:
     """Runs one MyHarness turn on an ACP agent. Lives on the runtime's event loop."""
 
-    def __init__(self, agent: AcpAgentConfig, connection_factory: Callable[[], Any]):
+    def __init__(self, agent: AcpAgentConfig, connection_factory: Callable[[], Any], bridge: Any = None):
         self.agent = agent
         self._connection_factory = connection_factory
+        self._bridge = bridge  # AcpRuntime: question socket + active turns; None in bare use
+        self._reopen_commands: list[dict[str, str]] | None = None
+
+    async def _mcp_servers(self, meta) -> list[dict[str, Any]]:
+        if self._bridge is None:
+            return []
+        return await self._bridge.mcp_servers(meta)
 
     async def run(
         self,
@@ -732,6 +816,7 @@ class AcpProvider:
         model: str = "",
         reasoning_effort: str = "",
         approval_mode: str = "always_ask",
+        images: list[dict] | None = None,
     ) -> None:
         agent = self.agent
         provider = agent.provider
@@ -793,7 +878,7 @@ class AcpProvider:
             if not session_id:
                 result = await connection.transport.request("session/new", {
                     "cwd": str(workspace_path),
-                    "mcpServers": [],
+                    "mcpServers": await self._mcp_servers(meta),
                     "_meta": self._system_meta(meta, store),
                 }, timeout=120)
                 session_id = str(result.get("sessionId") or "")
@@ -808,7 +893,8 @@ class AcpProvider:
                     "applied": _option_values(result.get("configOptions") or []),
                 }
         except AcpError as exc:
-            if exc.code == AUTH_REQUIRED_CODE or "auth" in str(exc).lower():
+            if is_auth_error(exc):
+                note_signed_in(agent, False)
                 ui.show_error(
                     f"{agent.label} is not signed in. Run `{agent.command} acp --login` in a terminal, "
                     "sign in with your Google account, then send your message again."
@@ -818,7 +904,10 @@ class AcpProvider:
             ui.show_agent_finished("error")
             return
 
+        note_signed_in(agent, True)
         state["agent_version"] = connection.agent_version
+        if self._reopen_commands is not None:
+            state["commands"] = self._reopen_commands
         meta.acp_state = state
         store.update_session(meta)
 
@@ -848,8 +937,11 @@ class AcpProvider:
             user_prompt, context_summary=pending_summary or fallback_summary, note=note,
         )
         turn = _Turn(self, connection, session_id, ui, cancel_event, provider, applied.get("model") or model)
+        if self._bridge is not None:
+            self._bridge.register_turn(meta.id, turn)
         try:
-            stop_reason, usage = await turn.run(prompt_text)
+            blocks = image_blocks(images or []) if connection.accepts_images else []
+            stop_reason, usage = await turn.run(prompt_text, blocks)
         except AcpError as exc:
             state["resume_note"] = "Your previous turn in this thread ended with an error before it finished."
             meta.acp_state = state
@@ -859,6 +951,9 @@ class AcpProvider:
             ui.show_error(f"{agent.label} error: {exc}")
             ui.show_agent_finished("error")
             return
+        finally:
+            if self._bridge is not None:
+                self._bridge.unregister_turn(meta.id, turn)
 
         metrics = usage_metrics(provider, applied.get("model") or model, usage)
         if metrics:
@@ -889,6 +984,8 @@ class AcpProvider:
             ui.show_error(f"{agent.label} stopped early ({stop_reason.replace('_', ' ')}). Send a message to continue.")
         elif stop_reason == "refusal":
             ui.show_error(f"{agent.label} declined to continue this request.")
+        if turn.commands is not None:
+            state["commands"] = turn.commands
         meta.acp_state = state
         store.update_session(meta)
         self._update_summary(meta, user_prompt, final_text, store)
@@ -924,9 +1021,15 @@ class AcpProvider:
         ``session/resume`` reconnects without replaying history; agents that only
         offer ``session/load`` replay it, which is swallowed: the transcript has it.
         """
-        params = {"sessionId": session_id, "cwd": cwd, "mcpServers": [], "_meta": self._system_meta(meta, store)}
+        params = {"sessionId": session_id, "cwd": cwd, "mcpServers": await self._mcp_servers(meta),
+                  "_meta": self._system_meta(meta, store)}
         methods = [m for m, ok in (("session/resume", connection.can_resume), ("session/load", connection.can_load)) if ok]
-        connection.transport.on_session(session_id, lambda _message: None)
+        def swallow(message: dict[str, Any]) -> None:
+            update = (message.get("params") or {}).get("update") or {}
+            if update.get("sessionUpdate") == "available_commands_update":
+                self._reopen_commands = command_list(update.get("availableCommands") or [], self.agent)
+
+        connection.transport.on_session(session_id, swallow)
         try:
             for method in methods:
                 try:
@@ -1009,18 +1112,19 @@ class _Turn:
         self._text: list[str] = []
         self._thought: list[str] = []
         self._announced: dict[str, tuple[str, str, str]] = {}
+        self._hidden_calls: set[str] = set()
         self._changed: set[tuple[str, str]] = set()
         self.denied_titles: list[str] = []
         self.last_tool_title = ""
         self.context: dict[str, int] = {}
-        self.commands: list[dict[str, Any]] = []
+        self.commands: list[dict[str, str]] | None = None
         self.last_activity = time.monotonic()
         self.waiting_for_user = 0
 
     def final_text(self) -> str:
         return "\n\n".join(t.strip() for t in self.texts if t.strip())
 
-    async def run(self, prompt_text: str) -> tuple[str, dict[str, Any] | None]:
+    async def run(self, prompt_text: str, extra_blocks: list[dict[str, Any]] | None = None) -> tuple[str, dict[str, Any] | None]:
         transport = self.connection.transport
         transport.on_session(self.session_id, self._on_update)
         transport.on_request(self.session_id, self._on_request)
@@ -1028,7 +1132,7 @@ class _Turn:
         try:
             task = asyncio.ensure_future(transport.request("session/prompt", {
                 "sessionId": self.session_id,
-                "prompt": [{"type": "text", "text": prompt_text}],
+                "prompt": [{"type": "text", "text": prompt_text}, *(extra_blocks or [])],
             }))
             started = time.monotonic()
             while not task.done():
@@ -1100,7 +1204,7 @@ class _Turn:
             if isinstance(used, int) and isinstance(size, int) and size > 0:
                 self.context = {"used": used, "size": size}
         elif kind == "available_commands_update":
-            self.commands = filter_commands(update.get("availableCommands") or [], self.agent)
+            self.commands = command_list(update.get("availableCommands") or [], self.agent)
 
     def _flush_text(self) -> None:
         if self._text:
@@ -1119,6 +1223,10 @@ class _Turn:
 
     def _tool(self, update: dict[str, Any]) -> None:
         call_id = str(update.get("toolCallId") or "")
+        if update.get("name") == ASK_TOOL_ACP_NAME or call_id in self._hidden_calls:
+            # The question card already shows MyHarness's own question tool.
+            self._hidden_calls.add(call_id)
+            return
         tool, label = tool_activity(update)
         status = tool_status(update.get("status"))
         if update.get("title"):
@@ -1143,6 +1251,21 @@ class _Turn:
                 if callable(hook):
                     hook(path, action, self.agent.key)
 
+    # the question tool
+
+    async def ask_user(self, question: str, options: list[str]) -> str | None:
+        """Show one question from the agent's ask_user tool; the answer or None."""
+        ask = getattr(self.ui, "ask_user_question", None)
+        if not callable(ask) or self.cancel_event.is_set():
+            return None
+        self.waiting_for_user += 1
+        try:
+            answer = await asyncio.to_thread(ask, question, options, True)
+        finally:
+            self.waiting_for_user -= 1
+            self.last_activity = time.monotonic()
+        return str(answer).strip() if answer is not None and str(answer).strip() else None
+
     # requests from the agent
 
     async def _on_request(self, message: dict[str, Any]) -> dict[str, Any]:
@@ -1154,6 +1277,11 @@ class _Turn:
         options = params.get("options") or []
         if self.cancel_event.is_set():
             return {"outcome": {"outcome": "cancelled"}}
+        if tool_call.get("name") == ASK_TOOL_ACP_NAME:
+            # MyHarness's own question tool: asking is its own confirmation.
+            option = next((o for o in options if o.get("kind") == "allow_once"), None)
+            if option is not None:
+                return {"outcome": {"outcome": "selected", "optionId": option["optionId"]}}
         tool, label = tool_activity(tool_call)
         detail = json.dumps({
             "title": tool_call.get("title"),
@@ -1197,6 +1325,9 @@ class AcpRuntime:
         self._lock = threading.Lock()
         self._connections: dict[str, AcpConnection] = {}
         self._starting: dict[str, asyncio.Lock] = {}
+        self._turns: dict[str, _Turn] = {}
+        self._ask_server: asyncio.AbstractServer | None = None
+        self._ask_token = secrets.token_hex(24)
 
     def start(self) -> None:
         with self._lock:
@@ -1242,9 +1373,96 @@ class AcpRuntime:
             self._connections[agent.key] = connection
             return connection
 
+    # question bridge: acp_ask_mcp.py -> local socket -> the thread's active turn
+
+    def register_turn(self, session_id: str, turn: "_Turn") -> None:
+        self._turns[session_id] = turn
+
+    def unregister_turn(self, session_id: str, turn: "_Turn") -> None:
+        if self._turns.get(session_id) is turn:
+            self._turns.pop(session_id, None)
+
+    async def mcp_servers(self, meta) -> list[dict[str, Any]]:
+        """The question MCP server for this thread, once its socket is published."""
+        if not ASK_FILE or not await self._ensure_ask_server():
+            return []
+        return [{
+            "name": ASK_SERVER_NAME,
+            "command": sys.executable,
+            "args": [ASK_SCRIPT],
+            "env": [
+                {"name": "MYHARNESS_ASK_FILE", "value": ASK_FILE},
+                {"name": "MYHARNESS_SESSION_ID", "value": str(meta.id)},
+            ],
+        }]
+
+    async def _ensure_ask_server(self) -> bool:
+        if self._ask_server is not None:
+            return True
+        try:
+            server = await asyncio.start_server(self._serve_question, "127.0.0.1", 0, limit=_LINE_LIMIT)
+            port = server.sockets[0].getsockname()[1]
+            os.makedirs(os.path.dirname(ASK_FILE) or ".", exist_ok=True)
+            tmp = f"{ASK_FILE}.tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump({"port": port, "token": self._ask_token}, fh)
+            os.replace(tmp, ASK_FILE)
+        except OSError:
+            return False
+        self._ask_server = server
+        return True
+
+    async def _serve_question(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        answer = None
+        try:
+            request = json.loads(await reader.readline() or b"{}")
+            token = str(request.get("token") or "")
+            if hmac.compare_digest(token, self._ask_token):
+                turn = self._turns.get(str(request.get("session_id") or ""))
+                question = str(request.get("question") or "").strip()
+                raw = request.get("options")
+                options = [str(o) for o in raw if str(o).strip()] if isinstance(raw, list) else []
+                if turn is not None and question:
+                    answer = await turn.ask_user(question, options)
+            writer.write((json.dumps({"answer": answer}) + "\n").encode("utf-8"))
+            await writer.drain()
+        except (OSError, ValueError):
+            pass
+        finally:
+            with contextlib.suppress(Exception):
+                writer.close()
+
     def run(self, agent: AcpAgentConfig, **kwargs: Any) -> None:
-        provider = AcpProvider(agent, lambda: self.connection(agent))
+        provider = AcpProvider(agent, lambda: self.connection(agent), bridge=self)
         self._submit(provider.run(**kwargs))
+
+    def sign_in_status(self, agent: AcpAgentConfig, timeout: float = 30) -> bool | None:
+        """Whether the agent is signed in: from the last turn, else a session/list check.
+
+        session/list creates nothing and answers "Authentication required" when
+        signed out. None when it cannot tell (e.g. the agent would not start).
+        """
+        known = known_sign_in(agent)
+        if known is not None:
+            return known
+
+        async def check() -> bool | None:
+            connection = await self.connection(agent)
+            try:
+                await connection.transport.request("session/list", {}, timeout=timeout)
+            except AcpError as exc:
+                if is_auth_error(exc):
+                    note_signed_in(agent, False)
+                    return False
+                return None
+            note_signed_in(agent, True)
+            return True
+
+        try:
+            return self._submit(check(), timeout=timeout + 30)
+        except Exception:
+            return None
 
     def ask(self, agent: AcpAgentConfig, meta, question: str, workspace: str, store,
             timeout: float = 120) -> tuple[str, dict[str, Any]]:
@@ -1252,7 +1470,7 @@ class AcpRuntime:
         self.start()
         assert self._loop is not None
         cancel_event = threading.Event()
-        provider = AcpProvider(agent, lambda: self.connection(agent))
+        provider = AcpProvider(agent, lambda: self.connection(agent), bridge=self)
         future = asyncio.run_coroutine_threadsafe(provider.ask(meta, question, workspace, store, cancel_event), self._loop)
         try:
             return future.result(timeout)
@@ -1280,6 +1498,9 @@ class AcpRuntime:
             return
 
         async def shutdown():
+            if self._ask_server is not None:
+                self._ask_server.close()
+                self._ask_server = None
             for connection in list(self._connections.values()):
                 with contextlib.suppress(Exception):
                     await connection.transport.stop()
