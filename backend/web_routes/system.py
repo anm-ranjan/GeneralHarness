@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse
 
 import acp_provider
+import antigravity_setup
 import audio_transcription
 import fleet_bridge
 import web_helpers
@@ -118,6 +119,45 @@ def health():
         "audio": audio_transcription.public_config(audio_config),
         "config_warnings": utils.memory_config_warnings(),
     }
+
+
+
+@router.get("/api/acp/session")
+def acp_session(conversation_id: str):
+    """The thread an ACP agent's conversation belongs to, for skills run inside it.
+
+    Antigravity puts its conversation id in ANTIGRAVITY_CONVERSATION_ID for the
+    commands it runs; it is the ACP session id this backend keeps per thread.
+    """
+    session_id = web_app._store.find_session_by_acp_session(conversation_id.strip())
+    if not session_id:
+        raise HTTPException(status_code=404, detail="No thread here uses that conversation.")
+    return {"session_id": session_id, "api": utils.local_api_url()}
+
+
+def _antigravity_call(action):
+    try:
+        return action()
+    except antigravity_setup.SetupError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not update Antigravity's config: {exc}") from exc
+
+
+@router.get("/api/antigravity/customizations")
+def antigravity_customizations():
+    """What the Settings button would add to Antigravity's global config, and whether it is there."""
+    return _antigravity_call(antigravity_setup.status)
+
+
+@router.post("/api/antigravity/customizations")
+def install_antigravity_customizations():
+    return _antigravity_call(antigravity_setup.install)
+
+
+@router.delete("/api/antigravity/customizations")
+def remove_antigravity_customizations():
+    return _antigravity_call(antigravity_setup.remove)
 
 
 SCRATCHPAD_MAX_CHARS = 1_000_000

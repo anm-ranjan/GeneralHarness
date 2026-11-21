@@ -53,6 +53,7 @@ _LINE_LIMIT = 64 * 1024 * 1024
 # The question tool MyHarness gives every ACP session (acp_ask_mcp.py). Agents
 # name MCP tools mcp_<server>_<tool>; this one never needs the user's approval.
 ASK_SERVER_NAME = "myharness"
+API_ENV = "AGENT_HOST_API"
 ASK_TOOL_ACP_NAME = f"mcp_{ASK_SERVER_NAME}_ask_user"
 ASK_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "acp_ask_mcp.py")
 # Where the runtime publishes its question socket (port + token); set by the app.
@@ -749,7 +750,10 @@ class AcpConnection:
 
     def __init__(self, agent: AcpAgentConfig):
         self.agent = agent
-        self.transport = AcpTransport([agent.command, *agent.args])
+        # Commands the agent runs can reach this backend (skills use it with
+        # ANTIGRAVITY_CONVERSATION_ID to find their thread; see /api/acp/session).
+        env = {**os.environ, API_ENV: utils.local_api_url()}
+        self.transport = AcpTransport([agent.command, *agent.args], env=env)
         self.info: dict[str, Any] = {}
         self.loaded_sessions: set[str] = set()
 

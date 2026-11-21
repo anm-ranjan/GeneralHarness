@@ -19,9 +19,38 @@ class SkillInfo:
     path: Path
 
 
-def _skill_info(path: Path) -> SkillInfo:
-    text = path.read_text(encoding="utf-8")
+def split_frontmatter(text: str) -> tuple[dict[str, str], str]:
+    """(fields, body) for a SKILL.md that may start with a ``---`` YAML block.
+
+    Only flat ``key: value`` lines are read; ``>-`` / ``|`` folded values are
+    joined from their indented continuation lines.
+    """
     lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}, text
+    try:
+        end = next(i for i in range(1, len(lines)) if lines[i].strip() == "---")
+    except StopIteration:
+        return {}, text
+    fields: dict[str, str] = {}
+    key = None
+    for line in lines[1:end]:
+        if key and line[:1].isspace():
+            fields[key] = (fields[key] + " " + line.strip()).strip()
+            continue
+        name, sep, value = line.partition(":")
+        if not sep or not name.strip():
+            key = None
+            continue
+        key = name.strip()
+        value = value.strip()
+        fields[key] = "" if value in (">", ">-", "|", "|-") else value.strip("'\"")
+    return fields, "\n".join(lines[end + 1:])
+
+
+def _skill_info(path: Path) -> SkillInfo:
+    fields, body = split_frontmatter(path.read_text(encoding="utf-8"))
+    lines = body.splitlines()
     title = next(
         (line.lstrip("#").strip() for line in lines if line.startswith("#") and line.lstrip("#").strip()),
         path.parent.name,
@@ -40,7 +69,7 @@ def _skill_info(path: Path) -> SkillInfo:
     return SkillInfo(
         name=path.parent.name,
         title=title,
-        description=" ".join(description_lines) or "No description provided.",
+        description=fields.get("description") or " ".join(description_lines) or "No description provided.",
         path=path,
     )
 

@@ -1,17 +1,38 @@
+---
+name: fleet-import
+description: >-
+  Copy a folder from another host in this fleet (for example the Macbook or Jarvis) into a new folder in this session's workspace. Use it when the user asks to bring code or files over from another machine.
+---
+
 # Fleet import
 
-Copy a folder from another MyHarness host (for example the Macbook or Jarvis) into a new folder in this session's workspace. Use it when the user asks to bring code or files over from another machine.
+Copy a folder from another host in this fleet (for example the Macbook or Jarvis) into a new folder in this session's workspace. Use it when the user asks to bring code or files over from another machine.
 
 ## How to call it
 
-The request goes to this machine's own MyHarness backend, which does the copy over SSH. You do not need SSH access yourself, and you must not run `ssh` or `rsync` directly for this.
+The request goes to this machine's local agent backend, which does the copy over SSH. You do not need SSH access yourself, and you must not run `ssh` or `rsync` directly for this.
 
-Your prompt gives the session id and the local API address ("MyHarness session id: ... Local API: ..."). A native session has its id as `session_id` in the MYHARNESS SESSION IDENTITY line; if no API address is given, use `http://127.0.0.1:8420`. Use them:
+You need this session's id and the backend's address (`API`).
+
+Every call below goes to that backend on `127.0.0.1`. If your shell commands run in a sandbox that blocks local network access, run these calls outside it from the first attempt (ask for that permission if your tools require it) instead of trying inside the sandbox first.
+
+- If your instructions give them (a line like "session id: ... Local API: ...", or `session_id` in a SESSION IDENTITY line), use those.
+- Otherwise find them with this snippet, which works when the `ANTIGRAVITY_CONVERSATION_ID` environment variable is set:
+
+```bash
+API="${AGENT_HOST_API:-http://127.0.0.1:8420}"
+SESSION_ID=$(curl -sS --max-time 10 "$API/api/acp/session?conversation_id=$ANTIGRAVITY_CONVERSATION_ID" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["session_id"])')
+```
+
+If that fails (no such variable, or a "No thread here uses that conversation" error), this skill cannot be used in this session; tell the user.
+
+Then make the request:
 
 ```bash
 curl -sS --max-time 1000 -X POST "$API/api/sessions/$SESSION_ID/fleet-import" \
   -H 'Content-Type: application/json' \
-  -d '{"host": "mac", "source_path": "/Users/animesh/Documents/Scripting/MyHarness", "dest_name": "Electron_App"}'
+  -d '{"host": "mac", "source_path": "/Users/animesh/Documents/Scripting/example-project", "dest_name": "Electron_App"}'
 ```
 
 - `host` is the fleet host id: `mac` for the Macbook, `jarvis` for Jarvis. List the other hosts and whether they are online with `curl -sS "$API/api/fleet/bridge"`.
@@ -19,7 +40,7 @@ curl -sS --max-time 1000 -X POST "$API/api/sessions/$SESSION_ID/fleet-import" \
 - `dest_name` is a single new folder name. It is created inside this session's workspace and must not exist yet. Nothing is ever overwritten.
 - `include_everything` (optional, default `false`): by default only source files are copied, meaning the git-tracked files for a repository, otherwise everything except `.git`, `node_modules`, `.venv`, `venv`, `__pycache__`, `dist` and `target`. Set it to `true` only if the user asks for the full folder.
 
-The user is asked to approve every import, with the host, source, destination and size shown. Wait for the answer. The call returns when the copy is done:
+The user is asked to approve every import, with the host, source, destination and size shown. The call returns only after the user has answered and the copy is done, so run it in the foreground and wait for its output; do not start it in the background or end your turn while it runs. Then report the result:
 
 ```json
 {"path": ".../Electron_App", "source": "...", "host": "mac", "file_count": 245, "size": "3.0 MB", "mode": "git"}
@@ -29,6 +50,7 @@ The user is asked to approve every import, with the host, source, destination an
 
 - The source path is on the other host. It does not need to be in this machine's allowed paths, so never ask the user to add it. Only the new folder in this workspace is written here.
 - Do not set a short `curl` timeout: the call waits for the user's approval (up to 5 minutes) and then for the copy. Use `--max-time 1000`.
+- Do not tell the user the import is still running or waiting for approval and then stop: by the time the call returns, it has either finished or failed. Report what the response says.
 - Do not work around a failure with `ssh`, `rsync`, `scp` or by reading the other host's files some other way. Report the `detail` message and let the user decide.
 - Only one import at a time per question: wait for the response before calling again.
 

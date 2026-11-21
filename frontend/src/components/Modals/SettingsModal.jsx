@@ -5,6 +5,7 @@ import CredentialSettings from './CredentialSettings'
 import AppSettings from './AppSettings'
 import UsageSettings from './UsageSettings'
 import NativeSettings from './NativeSettings'
+import AntigravitySettings from './AntigravitySettings'
 import {
   DEFAULT_SPEC, FONT_PRESETS, GLASS_PRESETS, PALETTES, RADIUS_PRESETS,
   applySpec, auditTokens, completePalette, exportPalette, findPalette,
@@ -50,6 +51,7 @@ export default function SettingsModal() {
   const [importText, setImportText] = useState('')
   const [notice, setNotice] = useState(null)
   const [section, setSection] = useState('appearance')
+  const antigravity = (state.acpAgents || []).some(agent => agent.key === 'antigravity')
 
   // Live preview: every edit paints the running app, but nothing is persisted
   // until Done, so Cancel can put the old theme back.
@@ -181,6 +183,7 @@ export default function SettingsModal() {
               ['credentials', 'Credentials'],
               ['usage', 'Usage'],
               ['native', 'Native Settings'],
+              ...(antigravity ? [['antigravity', 'Antigravity']] : []),
               ['app', 'App'],
             ].map(([id, label]) => (
               <button
@@ -200,6 +203,7 @@ export default function SettingsModal() {
               credentials: 'Host-local encrypted values',
               usage: 'Cost, tokens and plan limits on this host',
               native: 'OpenRouter model and provider for Native',
+              antigravity: 'Global rule and skills in ~/.gemini/config',
               app: 'Connection and quit',
             }[section]}
           </span>
@@ -214,7 +218,8 @@ export default function SettingsModal() {
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
           {section === 'credentials' ? <CredentialSettings /> : section === 'app' ? <AppSettings />
-            : section === 'usage' ? <UsageSettings /> : section === 'native' ? <NativeSettings /> : <>
+            : section === 'usage' ? <UsageSettings /> : section === 'native' ? <NativeSettings />
+            : section === 'antigravity' ? <AntigravitySettings /> : <>
           {/* ── Theme grid ── */}
           <div className="flex items-center gap-2">
             <input

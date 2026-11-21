@@ -1,3 +1,9 @@
+---
+name: frontend-design
+description: >-
+  Use this skill when redesigning or extending the project's frontend interface. The goal is a mature, functional, engineering-oriented UI with controlled contrast, generous spacing, and minimal accent color usage.
+---
+
 # Frontend Design Skill: Restrained Industrial Dark UI
 
 Use this skill when redesigning or extending the project's frontend interface. The goal is a mature, functional, engineering-oriented UI with controlled contrast, generous spacing, and minimal accent color usage.

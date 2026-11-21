@@ -1240,6 +1240,18 @@ class SessionStore:
             row = self._conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
             return self._row_to_session(row) if row else None
 
+    def find_session_by_acp_session(self, acp_session_id: str) -> str | None:
+        """The thread whose ACP agent session (an Antigravity conversation id) is ``acp_session_id``."""
+        if not acp_session_id:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id FROM sessions WHERE provider LIKE 'acp:%' "
+                "AND json_extract(acp_state_json, '$.session_id')=? ORDER BY updated_at DESC LIMIT 1",
+                (acp_session_id,),
+            ).fetchone()
+            return row["id"] if row else None
+
     def _row_to_session(self, row: sqlite3.Row) -> SessionMeta:
         queue = []
         for item in self._conn.execute(
