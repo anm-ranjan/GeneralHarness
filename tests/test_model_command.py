@@ -77,6 +77,30 @@ class ModelCommandTests(unittest.TestCase):
                 self._statuses(store, meta.id),
             )
 
+    def test_switch_patches_the_thread_list_at_once(self):
+        # The sidebar logo comes from the thread list, which only this patch
+        # updates without waiting for an unrelated refetch.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = SessionStore(str(root / "data"))
+            meta = self._session(store, root)
+
+            with (
+                patch.object(web_app, "_store", store),
+                patch.object(web_app.utils, "ALLOWED_PATHS", [str(root)]),
+                patch.object(web_app._manager, "notify_session_updated") as notify,
+                patch.object(web_app, "_codex_app_server_available", lambda: True),
+                patch.object(web_app.utils, "CODEX_APP_SERVER_ENABLED", True, create=True),
+                patch.dict(web_app._session_messages, {}, clear=True),
+            ):
+                asyncio.run(web_app._handle_slash_command(meta.id, "/model codex", str(root)))
+
+            self.assertEqual(store.load_session(meta.id).provider, "codex-app-server")
+            notify.assert_called_once()
+            session_id, changes = notify.call_args.args
+            self.assertEqual((session_id, changes["provider"]), (meta.id, "codex-app-server"))
+            self.assertIn("run_settings", changes)
+
     def test_model_rejects_unknown_provider(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

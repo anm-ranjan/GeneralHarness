@@ -1164,6 +1164,10 @@ async def _handle_slash_command(session_id: str, text: str, workspace_root: str)
             EventType.PROVIDER_SWITCH,
             {"provider": target, "text": f"Switched to {target_label}{detail}."},
         )
+        # The sidebar and home screen read the thread list, not this thread's
+        # events, so patch their copy now; their logo follows the provider.
+        web_app._manager.notify_session_updated(
+            session_id, {"provider": target, "run_settings": dict(meta.run_settings or {})})
         _emit_session_event(session_id, EventType.RUN_FINISHED, {"reason": "command"})
         return True
 

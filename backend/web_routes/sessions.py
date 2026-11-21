@@ -549,6 +549,8 @@ def update_session_run_settings(session_id: str, req: UpdateRunSettingsRequest):
         settings["reasoning_effort"] = effort
     meta.run_settings = settings
     web_app._store.update_session(meta)
+    # Native threads show their model's vendor logo in the sidebar.
+    web_app._manager.notify_session_updated(session_id, {"run_settings": dict(settings)})
     return meta.model_dump(mode="json")
 
 

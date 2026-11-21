@@ -2328,6 +2328,10 @@ def run_agent(
         return bool(texts)
     published_plan: list[dict] = []
     tool_calls_since_plan_update = 0
+    # Work (tool calls other than plan_update) since the plan was last
+    # updated. The end-of-turn reminder needs it: steps left open on purpose
+    # (for a later turn) are not stale when nothing happened since.
+    worked_since_plan_update = False
     plan_final_nudge_used = False
     if api_caller is not None:
         model_call = api_caller
@@ -2718,8 +2722,10 @@ def run_agent(
                     except ValueError:
                         published_plan = []
                     tool_calls_since_plan_update = 0
+                    worked_since_plan_update = False
                 else:
                     tool_calls_since_plan_update += 1
+                    worked_since_plan_update = True
 
                 # Completed-turn compression keeps active prefixes stable.
 
@@ -2787,7 +2793,9 @@ def run_agent(
             # The plan is most often left stale right at the end of a turn: the
             # work is done but the last steps were never marked completed. Give
             # the model one chance to reconcile before the answer is shown.
-            if published_plan and not plan_final_nudge_used:
+            # Only after work since the last plan_update: otherwise the reply
+            # would be written twice for a plan the model just set.
+            if published_plan and worked_since_plan_update and not plan_final_nudge_used:
                 plan_final_nudge_used = True
                 reminder = utils.plan_reminder_message(published_plan)
                 if reminder:
