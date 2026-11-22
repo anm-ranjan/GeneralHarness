@@ -9,9 +9,190 @@ The same backend drives four clients: a React web UI, an Electron desktop shell,
 a Rust terminal UI, and a plain CLI.
 
 ```
-npx .            # interactive setup wizard
+npx .            # setup wizard; can also build the desktop installer
 ./run.sh         # http://127.0.0.1:8420
 ```
+
+See [Installation](#installation) for the desktop installer and the
+from-source setup.
+
+## Installation
+
+There are two ways to install MyHarness:
+
+- **Desktop installer** (recommended): a DMG, Windows installer or DEB that you
+  build once per operating system and can copy to any machine. On first launch
+  it asks for an install folder and your settings, and sets everything up.
+- **From a source checkout**: a terminal wizard that configures this checkout
+  in place. Use it for development, a browser-only or headless server, or the
+  Rust TUI on its own.
+
+### Requirements
+
+On the machine where MyHarness runs:
+
+- Python 3.10 or newer
+- Node.js 20 or newer with npm, to install the Codex or Claude CLIs (and to
+  build the installer or the web UI)
+- Rust via [rustup](https://rustup.rs), only for the Rust TUI
+- The `codex`, `claude` or `agy` CLI, only for those providers; both installers
+  can install them for you
+
+### Option 1: Desktop installer
+
+**1. Build the installer** on the operating system you want it for
+(cross-OS builds are not supported):
+
+```bash
+npx .        # run the setup wizard and answer "yes" to the desktop package
+```
+
+or build it directly:
+
+```bash
+(cd frontend && npm ci --legacy-peer-deps && npm run build)
+cd electron && npm ci
+MYHARNESS_PORTABLE_BUILD=1 npm run dist:mac      # or dist:win, dist:linux
+```
+
+The installer lands in `electron/dist/`: a `.dmg` on macOS, an NSIS `.exe` on
+Windows, and a `.deb` plus an AppImage on Linux (prefer the DEB on Ubuntu).
+Set `MYHARNESS_PRODUCT_NAME="My Name"` to change the app's name.
+`MYHARNESS_PORTABLE_BUILD=1` matters only on a machine whose own config sets
+`desktop.backend_repo`: without it, that path is baked into the package so the
+build machine's app keeps running from its checkout and skips setup.
+
+The package carries the backend, skills, agents, built UI and TUI sources. It
+carries no Python environment and no configuration, so it holds nothing
+specific to the machine that built it.
+
+**2. Install and launch it.** Open the DMG and drag the app to Applications,
+run the `.exe`, or `sudo dpkg -i <package>.deb`. On first launch a setup
+window walks you through:
+
+1. **Install**: choose an install folder (suggested: a folder named after the
+   app in its per-user data directory) and a Python 3.10 or newer. It copies the
+   backend there, creates `.venv` and installs `requirements.txt`.
+2. **App name** and splash-screen ASCII art.
+3. **Providers**: Codex and Claude (install with npm, log in, enabled only once
+   the login is verified), the Native API key, and Antigravity. Antigravity runs
+   on your personal Google sign-in, so the step first asks you to check Google's
+   terms, and states that MyHarness accepts no responsibility if your account is
+   restricted or blocked; it installs and enables Antigravity only after you
+   confirm.
+4. **Voice dictation**: local, remote (SSH) or API speech to text.
+5. **Server and workspaces**: allowed folders, approval mode, bind address and
+   port, storage and logging.
+6. **Fleet** (optional): other machines to switch between.
+7. **Terminal UI** (optional): builds the Rust TUI. This step needs `cargo`;
+   when it is missing it says so and links to rustup.rs, and it can be skipped.
+8. **Review and save**: writes `backend/agent/agent_config.yaml` in the install
+   folder and stores API keys in the encrypted credential file
+   (`~/.myharness`). Then the app starts.
+
+**Afterwards.** File → Setup… reopens the window; saved changes apply after a
+restart. When a newer build of the app starts, it first copies its files into
+the install folder, keeping `agent_config.yaml`, `.venv`, `data/`, `logs/`, your
+own agents and skills, and a built TUI. The chosen folder is recorded in
+`install-<app name>.json` in the app's per-user data directory, so differently
+named builds keep separate installs. If you install a second copy on the same
+machine, give it a different port in step 5: the app connects to a backend
+that is already running on its port instead of starting its own.
+
+### Option 2: From a source checkout
+
+From the repository root:
+
+```bash
+npx .                             # installs the wizard's deps, then runs it
+# or, if you prefer to install them yourself:
+npm install && npm run setup
+```
+
+The interactive installer asks for everything it needs and does the rest:
+
+1. A display name, and generates ASCII art for the splash screen.
+2. Whether to enable Codex and Claude. It installs missing CLIs, runs their
+   subscription login flows, and enables them only after authentication passes.
+   It then offers Antigravity (Google's `agy` CLI): it first shows a notice to
+   check Google's terms, since Antigravity runs on a personal Google sign-in,
+   and that MyHarness accepts no responsibility if the account is restricted
+   or blocked. Only after you confirm does it install `agy` (Homebrew on
+   macOS, Google's install script on Linux), run `agy acp --login` and enable
+   it.
+3. Native and STT API keys. Blank answers keep them disabled or preserve existing
+   values; entered keys go into this host's encrypted credential file.
+4. Native base URL, model, timeout and iteration limit, followed by the voice
+   dictation backend, model, language, device, timeout, upload limit, and
+   either direct SSH or API configuration.
+5. Browser UI, the desktop installer for the current OS (Option 1), and the
+   Rust TUI.
+6. Trusted-LAN bind address, port, allowed workspaces, approvals, data directory,
+   SQLite database filename, logging policy, verbose tools, and Git writes.
+
+It then creates `./.venv`, installs `requirements.txt` into it, and writes
+`backend/agent/agent_config.yaml`. Re-running it is safe: it offers to back the
+existing config up to `agent_config.yaml.bak` before overwriting.
+
+Then launch:
+
+```bash
+./run.sh                # web UI (builds the frontend if it is stale)
+./run.sh --dev          # backend + Vite dev server with hot reload
+./run.sh --electron     # Electron desktop shell
+./run.sh --tui          # Rust TUI
+./run.sh --cli          # terminal CLI
+```
+
+On Windows, `run.cmd` takes the same flags (and defaults to the Electron shell).
+
+### Linux notes
+
+Building on Linux produces both an AppImage and a DEB in `electron/dist/`.
+Prefer the DEB on Ubuntu and other Debian-based systems.
+
+Ubuntu 24.04 and newer can restrict the unprivileged user namespaces Electron
+normally uses for Chromium sandboxing. When the terminal wizard (`npx .`)
+detects that restriction, it:
+
+1. Checks the `chrome-sandbox` helpers created under Electron's dependencies and
+   the unpacked application.
+2. Offers to use `sudo` to set those helpers to owner `root:root` and mode
+   `4755`, then verifies the result.
+3. Offers to install and load a per-application AppArmor profile allowing
+   user namespaces for generated AppImages.
+
+Both privileged operations require explicit confirmation and an interactive
+sudo password. Setup never adds `--no-sandbox`, disables AppArmor, or changes
+the system-wide user-namespace setting. Running `npm ci` or rebuilding Electron
+can replace the sandbox helpers, so rerun setup if the SUID sandbox error
+returns.
+
+### Manual setup
+
+If you would rather not use the installer:
+
+```bash
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+
+cp backend/agent/agent_config.example.yaml backend/agent/agent_config.yaml
+# edit it: models.*, permissions.allowed_paths, provider settings
+# run npm run setup or use Electron Settings to create encrypted API credentials
+
+(cd frontend && npm ci --legacy-peer-deps && npm run build)
+(cd electron && npm ci)      # only for the desktop shell
+
+./run.sh
+```
+
+`run.sh` and `run.cmd` look for an interpreter in this order: `$MYHARNESS_PYTHON`,
+`./.venv/bin/python` (`.venv\Scripts\python.exe` on Windows), `python3`, `python`.
+
+For the Rust TUI, install Rust from [rustup.rs](https://rustup.rs) — on Windows
+accept the default stable/MSVC toolchain and let rustup install the Visual Studio
+C++ Build Tools, or builds fail with `link.exe not found`. Then `./run.sh --tui`
+compiles and runs it; keybindings are documented in `tui-rs/README.md`.
 
 ## Features
 
@@ -71,150 +252,13 @@ existing thread over, carrying the completed context across.
 
 - **Web UI** — React 19 + Vite + Tailwind CSS v4, fully themeable at runtime.
 - **Desktop** — Electron shell around the same app, which additionally unlocks
-  in-app file editing. Setup builds NSIS on Windows, DMG on macOS, and
-  AppImage and DEB packages on Linux; cross-OS builds should run on their
-  target OS. On Ubuntu, the DEB is preferred. When AppArmor restricts
-  unprivileged user namespaces, setup offers to configure the Electron SUID
-  helpers and install an AppImage-specific AppArmor profile; it never disables
-  Chromium's sandbox.
+  in-app file editing. It doubles as the installer: NSIS on Windows, DMG on
+  macOS, and AppImage and DEB packages on Linux, each with a first-run setup
+  window (see [Installation](#installation)).
 - **Rust TUI** — `tui-rs/`, a ratatui client that speaks only the public REST and
   WebSocket API, so it can attach to a backend on a remote host.
 - **CLI** — `./run.sh --cli`, standalone or attached to a running backend with
   `--backend-url`.
-
-## Requirements
-
-- Python 3.10 or newer
-- Node.js 20 or newer, with npm
-- Rust via [rustup](https://rustup.rs) — only for the Rust TUI
-- A `codex` and/or `claude` CLI on PATH — only for those providers
-
-## Quick start
-
-From the repository root:
-
-```bash
-npx .                             # installs the wizard's deps, then runs it
-# or, if you prefer to install them yourself:
-npm install && npm run setup
-```
-
-The interactive installer asks for everything it needs and does the rest:
-
-1. A display name, and generates ASCII art for the splash screen.
-2. Whether to enable Codex and Claude. It installs missing CLIs, runs their
-   subscription login flows, and enables them only after authentication passes.
-   It then offers Antigravity (Google's `agy` CLI): it first shows a notice to
-   check Google's terms, since Antigravity runs on a personal Google sign-in,
-   and that MyHarness accepts no responsibility if the account is restricted
-   or blocked. Only after you confirm does it install `agy` (Homebrew on
-   macOS, Google's install script on Linux), run `agy acp --login` and enable
-   it.
-3. Native and STT API keys. Blank answers keep them disabled or preserve existing
-   values; entered keys go into this host's encrypted credential file.
-4. Native base URL, model, timeout and iteration limit, followed by the voice
-   dictation backend, model, language, device, timeout, upload limit, and
-   either direct SSH or API configuration.
-5. Browser UI, an installable Electron package for the current OS, and the Rust TUI.
-6. Trusted-LAN bind address, port, allowed workspaces, approvals, data directory,
-   SQLite database filename, logging policy, verbose tools, and Git writes.
-
-It then creates `./.venv`, installs `requirements.txt` into it, and writes
-`backend/agent/agent_config.yaml`. Re-running it is safe: it offers to back the
-existing config up to `agent_config.yaml.bak` before overwriting.
-
-### Desktop installer
-
-The desktop package built by setup (`electron/dist/`: DMG, NSIS `.exe`, DEB or
-AppImage) is a self-contained installer that can be copied to other machines.
-It carries the backend, skills, agents, built UI and TUI sources, but no
-Python environment and no configuration. On first launch it opens a setup
-window that:
-
-1. Asks for an install folder (suggested: a folder named after the app in its
-   per-user data directory) and a Python 3.10+ to build the environment from,
-   then copies the backend there, creates `.venv` and installs
-   `requirements.txt`.
-2. Walks through the same choices as the terminal wizard: name and splash art,
-   Codex and Claude (install with npm, log in, enable once verified),
-   Antigravity (behind the same Google-terms notice and confirmation), the
-   Native API key, voice dictation, workspaces, approvals, bind address,
-   storage, logging and an optional fleet.
-3. Offers to build the Rust TUI. That step needs `cargo`; when it is missing
-   the step says so and links to rustup.rs, and it can be skipped.
-4. Writes `backend/agent/agent_config.yaml` in the install folder and stores
-   API keys in the encrypted credential file.
-
-File → Setup… reopens it later; saved changes apply after a restart. When a
-newer build of the app starts, it copies its files into the install folder
-before the backend starts, keeping `agent_config.yaml`, `.venv`, `data/`,
-`logs/`, your own agents and skills, and a built TUI. The chosen folder is
-recorded in `install-<app name>.json` in the app's per-user data directory, so
-differently named builds keep separate installs.
-
-A build machine whose config sets `desktop.backend_repo` bakes that path into
-its package, so its own app keeps running from that checkout and skips setup.
-Build with `MYHARNESS_PORTABLE_BUILD=1` to leave it out of an installer meant
-for other machines.
-
-### Linux desktop installation note
-
-Linux setup produces both an AppImage and a DEB in `electron/dist/`. Prefer the
-DEB on Ubuntu and other Debian-based systems.
-
-Ubuntu 24.04 and newer can restrict the unprivileged user namespaces Electron
-normally uses for Chromium sandboxing. When setup detects that restriction, it:
-
-1. Checks the `chrome-sandbox` helpers created under Electron's dependencies and
-   the unpacked application.
-2. Offers to use `sudo` to set those helpers to owner `root:root` and mode
-   `4755`, then verifies the result.
-3. Offers to install and load a per-application AppArmor profile allowing
-   user namespaces for generated AppImages.
-
-Both privileged operations require explicit confirmation and an interactive
-sudo password. Setup never adds `--no-sandbox`, disables AppArmor, or changes
-the system-wide user-namespace setting. Running `npm ci` or rebuilding Electron
-can replace the sandbox helpers, so rerun setup if the SUID sandbox error
-returns.
-
-Then launch:
-
-```bash
-./run.sh                # web UI (builds the frontend if it is stale)
-./run.sh --dev          # backend + Vite dev server with hot reload
-./run.sh --electron     # Electron desktop shell
-./run.sh --tui          # Rust TUI
-./run.sh --cli          # terminal CLI
-```
-
-On Windows, `run.cmd` takes the same flags (and defaults to the Electron shell).
-
-## Manual setup
-
-If you would rather not use the installer:
-
-```bash
-python3 -m venv .venv
-./.venv/bin/python -m pip install -r requirements.txt
-
-cp backend/agent/agent_config.example.yaml backend/agent/agent_config.yaml
-# edit it: models.*, permissions.allowed_paths, provider settings
-# run npm run setup or use Electron Settings to create encrypted API credentials
-
-(cd frontend && npm ci --legacy-peer-deps && npm run build)
-(cd electron && npm ci)      # only for the desktop shell
-
-./run.sh
-```
-
-`run.sh` and `run.cmd` look for an interpreter in this order: `$MYHARNESS_PYTHON`,
-`./.venv/bin/python` (`.venv\Scripts\python.exe` on Windows), `python3`, `python`.
-
-For the Rust TUI, install Rust from [rustup.rs](https://rustup.rs) — on Windows
-accept the default stable/MSVC toolchain and let rustup install the Visual Studio
-C++ Build Tools, or builds fail with `link.exe not found`. Then `./run.sh --tui`
-compiles and runs it; keybindings are documented in `tui-rs/README.md`.
 
 ## Configuration
 
@@ -524,8 +568,8 @@ missing or empty allowed paths, `auto_approve`, and a `0.0.0.0` bind.
 (cd frontend && npm test)
 (cd frontend && npm run build)
 
-# Setup wizard (config writer, overwrite/backup paths)
-node --test installer/setup.test.mjs
+# Setup wizards (config writer, overwrite/backup paths, desktop install/update copy)
+node --test installer/setup.test.mjs installer/lib/config.test.cjs electron/*.test.cjs
 
 # Rust TUI
 cargo test --manifest-path tui-rs/Cargo.toml
@@ -535,6 +579,7 @@ bash -n run.sh
 node --check electron/main.js
 node --check electron/app-preload.js
 node --check installer/setup.mjs
+node --check electron/setup.js
 ```
 
 ## Layout
@@ -544,9 +589,10 @@ backend/          FastAPI app, session store, run orchestration
   agent/          agent loop, tools, config, provider adapters
   web_routes/     REST/WebSocket route groups
 frontend/         React 19 + Vite web UI
-electron/         desktop shell
+electron/         desktop shell and installer (setup/ is the first-run window)
 tui-rs/           Rust terminal client
 installer/        npx setup wizard
+  lib/            config writer shared with the desktop setup
 tests/            backend unit tests
 data/             runtime state (gitignored)
 ```
