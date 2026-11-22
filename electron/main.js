@@ -9,15 +9,32 @@ const path = require("path");
 const util = require("util");
 const { buildExecutablePath } = require("./executable-path.cjs");
 const { chooseRepoRoot } = require("./backend-repo.cjs");
+const { pointerPath, readInstallPointer, buildFingerprint } = require("./install-location.cjs");
+const { createSetup } = require("./setup");
 
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8420";
 
 const bundledRoot = app.isPackaged ? process.resourcesPath : path.resolve(__dirname, "..");
-// A packaged app may run the backend, config, skills and UI of a user-owned
-// checkout (desktop.backend_repo) instead of its own bundled, root-owned copy.
+// A packaged app runs from the folder its setup installed into (its own
+// resources are read-only). MYHARNESS_DESKTOP_INSTALL=1 gives an unpackaged
+// shell the same behaviour, for testing setup from a checkout.
+const usesInstall = app.isPackaged || process.env.MYHARNESS_DESKTOP_INSTALL === "1";
+const userDataDir = app.getPath("userData");
+// Baked in by electron-builder.config.cjs; names this product's install record
+// and default install folder inside the shared per-user data directory.
+const productSlug = require("./package.json").myharnessProductSlug || "myharness";
+const installPointerFile = pointerPath(userDataDir, productSlug);
+const installPointer = usesInstall ? readInstallPointer(installPointerFile) : null;
+const buildId = app.isPackaged
+  ? buildFingerprint({ version: app.getVersion(), appPath: app.getAppPath() })
+  : `${app.getVersion()}-dev`;
+// It may instead run the backend, config, skills and UI of a user-owned
+// checkout (desktop.backend_repo) rather than its own bundled copy.
 const repoChoice = chooseRepoRoot({
   bundledRoot,
   envValue: process.env.MYHARNESS_BACKEND_REPO,
+  installRoot: installPointer?.root || "",
+  repoSetting: require("./package.json").myharnessBackendRepo || "",
   yamlText: (() => {
     try {
       return fs.readFileSync(path.join(bundledRoot, "backend", "agent", "agent_config.yaml"), "utf-8");
@@ -30,8 +47,12 @@ const repoRoot = repoChoice.root;
 const backendScript = path.join(repoRoot, "backend", "web_app.py");
 const appPreload = path.join(__dirname, "app-preload.js");
 const configPath = path.join(repoRoot, "backend", "agent", "agent_config.yaml");
+// Before setup has installed anything, the read-only bundled folder cannot
+// hold logs, so they go to the per-user data folder.
 const electronLogPath = process.env.MYHARNESS_ELECTRON_LOG
-  || path.join(repoRoot, "logs", "deploy_logs", "electron.log");
+  || (usesInstall && repoChoice.source === "bundled"
+    ? path.join(userDataDir, "logs", `${productSlug}-setup.log`)
+    : path.join(repoRoot, "logs", "deploy_logs", "electron.log"));
 
 let mainWindow = null;
 let appTray = null;
@@ -41,6 +62,10 @@ let backendMode = "unknown";
 let activeBackendUrl = DEFAULT_BACKEND_URL;
 let isQuitting = false;
 let displayName = process.env.MYHARNESS_PRODUCT_NAME || "MyHarness";
+let setup = null;
+// True while a setup window is the only window, so closing it or the Dock
+// icon must not quit the app or open the main window.
+let setupGate = false;
 const desktopCredentialToken = crypto.randomBytes(32).toString("hex");
 const TRAY_ICON_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAKklEQVR4AWP4//8/AyUYTFhYGJqYmP4TjBqMGoQajBqMGoQajBoAAHkCErL0fR93AAAAAElFTkSuQmCC";
 
@@ -564,6 +589,15 @@ function buildAppMenu() {
     {
       label: "File",
       submenu: [
+        ...(usesInstall
+          ? [
+              { label: "Setup...", click: () => openSetupFromApp().catch((error) => {
+                console.error("Setup failed", error);
+                dialog.showErrorBox("Setup failed", error?.message || String(error));
+              }) },
+              { type: "separator" },
+            ]
+          : []),
         isMac
           ? { role: "close" }
           : { label: "Quit", accelerator: "Ctrl+Q", click: () => quitApp() },
@@ -612,6 +646,72 @@ function wireIpc() {
   });
 }
 
+function relaunchApp() {
+  requestBackendShutdown().finally(() => {
+    app.relaunch();
+    app.exit(0);
+  });
+}
+
+// File → Setup…: settings saved there apply after a restart.
+async function openSetupFromApp() {
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  const saved = await setup.open({ mode: "rerun", parent });
+  if (!saved) return;
+  const choice = await dialog.showMessageBox(parent || undefined, {
+    type: "info",
+    buttons: ["Restart now", "Later"],
+    defaultId: 0,
+    message: "Settings saved",
+    detail: `Restart ${displayName} to apply them.`,
+  });
+  if (choice.response === 0) relaunchApp();
+}
+
+function createDesktopSetup() {
+  return createSetup({
+    bundledRoot,
+    pointerFile: installPointerFile,
+    defaultInstallRoot: path.join(userDataDir, productSlug),
+    buildId,
+    appName: displayName,
+    envPath: executablePath,
+    core: require(path.join(bundledRoot, "installer", "lib", "config.cjs")),
+  });
+}
+
+// Before the backend starts: first-run setup when nothing is installed (or the
+// install has no config), and an update when a newer build starts against an
+// older install. Returns false when the app should quit instead of starting.
+async function runSetupGate() {
+  if (!usesInstall) return true;
+  setup = createDesktopSetup();
+  if (!fs.existsSync(configPath)) {
+    setupGate = true;
+    console.log(`No configuration at ${configPath}; opening setup`);
+    const saved = await setup.open({ mode: "first" });
+    if (!saved) {
+      app.quit();
+      return false;
+    }
+    // The backend folder is fixed when this process starts, so start again
+    // to run from the install that setup just made.
+    app.relaunch();
+    app.exit(0);
+    return false;
+  }
+  if (repoChoice.source === "install" && installPointer.build !== buildId) {
+    setupGate = true;
+    console.log(`Install at ${repoRoot} was made by build ${installPointer.build || "unknown"}; updating to ${buildId}`);
+    const updated = await setup.open({ mode: "update" });
+    if (!updated) {
+      app.quit();
+      return false;
+    }
+  }
+  return true;
+}
+
 function wireAppSafetyHandlers() {
   app.on("child-process-gone", (_event, details) => {
     console.warn(`Electron child process exited: type=${details.type} reason=${details.reason} exitCode=${details.exitCode}`);
@@ -622,11 +722,13 @@ app.whenReady()
   .then(async () => {
     wireAppSafetyHandlers();
     wireIpc();
+    if (!(await runSetupGate())) return;
     const health = await resolveBackend();
     applyBranding(health);
     buildAppMenu();
     buildTray();
     createMainWindow();
+    setupGate = false;
   })
   .catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
@@ -636,6 +738,7 @@ app.whenReady()
   });
 
 app.on("activate", () => {
+  if (setupGate) return;
   showMainWindow();
 });
 
@@ -670,5 +773,6 @@ app.on("before-quit", (event) => {
 });
 
 app.on("window-all-closed", () => {
+  if (setupGate) return;
   if (process.platform !== "darwin") app.quit();
 });

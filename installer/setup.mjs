@@ -31,6 +31,8 @@ import { hostname, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import core from './lib/config.cjs';
+
 // Loaded dynamically so a fresh clone that has not run `npm install` gets a
 // one-line instruction instead of a raw ERR_MODULE_NOT_FOUND stack trace.
 // `npx .` installs these for us; `npm run setup` expects them to be present.
@@ -258,239 +260,12 @@ async function configureLinuxElectronSandbox(appName) {
   }
 }
 
-// ── YAML text editing ────────────────────────────────────────────────
-// The example config is the canonical template. Rather than round-tripping it
-// through a YAML parser (which would drop every comment), the answered keys are
-// replaced in place, line by line. Indentation is a consistent two spaces.
+// ── config generation (shared with the desktop setup window) ────────
 
-function indentOf(line) {
-  return line.length - line.trimStart().length;
-}
-
-function isSkippable(line) {
-  const trimmed = line.trim();
-  return trimmed === '' || trimmed.startsWith('#');
-}
-
-/** Locate `path` (e.g. ['audio', 'transcription', 'model']) in the lines. */
-function findKey(lines, keyPath) {
-  let start = 0;
-  let end = lines.length;
-  let indent = 0;
-  let index = -1;
-
-  for (let depth = 0; depth < keyPath.length; depth++) {
-    const wanted = keyPath[depth];
-    index = -1;
-    for (let i = start; i < end; i++) {
-      const line = lines[i];
-      if (isSkippable(line)) continue;
-      const lineIndent = indentOf(line);
-      if (lineIndent < indent) break;
-      if (lineIndent !== indent) continue;
-      const match = line.trimStart().match(/^([A-Za-z0-9_.-]+)\s*:/);
-      if (match && match[1] === wanted) {
-        index = i;
-        break;
-      }
-    }
-    if (index === -1) return null;
-    if (depth < keyPath.length - 1) {
-      start = index + 1;
-      end = blockEnd(lines, index, indent);
-      indent += 2;
-    }
-  }
-  return { index, indent };
-}
-
-/** First line index after the block owned by the key at `index`. */
-function blockEnd(lines, index, indent) {
-  for (let i = index + 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.trim() === '') continue;
-    if (indentOf(line) <= indent) return i;
-  }
-  return lines.length;
-}
-
-/** End of the *value* of the key at `index`: list items, block scalar body. */
-function valueEnd(lines, index, indent) {
-  for (let i = index + 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.trim() === '') return i;
-    if (indentOf(line) <= indent) return i;
-  }
-  return lines.length;
-}
-
-function yamlScalar(value) {
-  if (typeof value === 'boolean' || typeof value === 'number') return String(value);
-  if (value === null || value === undefined) return 'null';
-  // JSON string syntax is a valid YAML double-quoted scalar and escapes safely.
-  return JSON.stringify(String(value));
-}
-
-function normalizeDatabaseFilename(value) {
-  let filename = String(value || 'myharness.sqlite3').trim();
-  const lowered = filename.toLowerCase();
-  if (
-    !filename
-    || filename === '.'
-    || filename === '..'
-    || filename.includes('..')
-    || filename.includes('/')
-    || filename.includes('\\')
-    || filename.includes('\0')
-    || ['-wal', '-shm', '-journal'].some((suffix) => lowered.endsWith(suffix))
-  ) {
-    throw new Error('Enter a filename only, without parent paths or SQLite sidecar suffixes.');
-  }
-  if (!lowered.endsWith('.sqlite3')) filename += '.sqlite3';
-  if (filename === '.sqlite3') throw new Error('Enter a database name.');
-  return filename;
-}
-
-function readScalarValue(text, keyPath, fallback = '') {
-  const lines = String(text || '').split('\n');
-  const found = findKey(lines, keyPath);
-  if (!found) return fallback;
-  const raw = lines[found.index].slice(lines[found.index].indexOf(':') + 1).trim();
-  if (!raw) return fallback;
-  if (raw.startsWith('"')) {
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return fallback;
-    }
-  }
-  if (raw.startsWith("'") && raw.endsWith("'")) return raw.slice(1, -1).replaceAll("''", "'");
-  return raw.replace(/\s+#.*$/, '').trim() || fallback;
-}
+const { ConfigEditor, findKey, dedent, yamlScalar, normalizeDatabaseFilename } = core;
 
 function readStorageDefaults(configText, repoRoot = REPO_ROOT) {
-  return {
-    dataDir: readScalarValue(
-      configText,
-      ['storage', 'data_dir'],
-      path.join(repoRoot, 'data'),
-    ) || path.join(repoRoot, 'data'),
-    databaseFilename: normalizeDatabaseFilename(readScalarValue(
-      configText,
-      ['storage', 'database_filename'],
-      'myharness.sqlite3',
-    )),
-  };
-}
-
-class ConfigEditor {
-  constructor(text) {
-    this.lines = text.split('\n');
-  }
-
-  replace(keyPath, newLines) {
-    const found = findKey(this.lines, keyPath);
-    if (!found) {
-      warn(`Could not find "${keyPath.join('.')}" in agent_config.example.yaml; left unchanged.`);
-      return false;
-    }
-    const stop = valueEnd(this.lines, found.index, found.indent);
-    this.lines.splice(found.index, stop - found.index, ...newLines);
-    return true;
-  }
-
-  set(keyPath, value) {
-    const found = findKey(this.lines, keyPath);
-    if (!found) {
-      warn(`Could not find "${keyPath.join('.')}" in agent_config.example.yaml; left unchanged.`);
-      return false;
-    }
-    const pad = ' '.repeat(found.indent);
-    const key = keyPath[keyPath.length - 1];
-    // Preserve a trailing inline comment when the template value is unquoted
-    // (a quoted value could legitimately contain a "#").
-    const original = this.lines[found.index];
-    const commentMatch = original.includes('"') || original.includes("'")
-      ? null
-      : original.match(/\s{2,}(#.*)$/);
-    const suffix = commentMatch ? `   ${commentMatch[1]}` : '';
-    return this.replace(keyPath, [`${pad}${key}: ${yamlScalar(value)}${suffix}`]);
-  }
-
-  setList(keyPath, values) {
-    const found = findKey(this.lines, keyPath);
-    if (!found) {
-      warn(`Could not find "${keyPath.join('.')}" in agent_config.example.yaml; left unchanged.`);
-      return false;
-    }
-    const pad = ' '.repeat(found.indent);
-    const key = keyPath[keyPath.length - 1];
-    if (!values.length) return this.replace(keyPath, [`${pad}${key}: []`]);
-    return this.replace(keyPath, [
-      `${pad}${key}:`,
-      ...values.map((value) => `${pad}  - ${yamlScalar(value)}`),
-    ]);
-  }
-
-  /**
-   * Write a list of mappings, e.g. fleet.hosts:
-   *
-   *   hosts:
-   *     - id: "laptop"
-   *       label: "Laptop"
-   *
-   * `fields` fixes the key order so regenerating a config produces a stable
-   * diff rather than reshuffling on object-key order.
-   */
-  setMappingList(keyPath, entries, fields) {
-    const found = findKey(this.lines, keyPath);
-    if (!found) {
-      warn(`Could not find "${keyPath.join('.')}" in agent_config.example.yaml; left unchanged.`);
-      return false;
-    }
-    const pad = ' '.repeat(found.indent);
-    const key = keyPath[keyPath.length - 1];
-    if (!entries.length) return this.replace(keyPath, [`${pad}${key}: []`]);
-
-    const body = [];
-    for (const entry of entries) {
-      const present = fields.filter((field) => entry[field] !== undefined);
-      present.forEach((field, i) => {
-        const prefix = i === 0 ? `${pad}  - ` : `${pad}    `;
-        body.push(`${prefix}${field}: ${yamlScalar(entry[field])}`);
-      });
-    }
-    return this.replace(keyPath, [`${pad}${key}:`, ...body]);
-  }
-
-  setBlockText(keyPath, text) {
-    const found = findKey(this.lines, keyPath);
-    if (!found) {
-      warn(`Could not find "${keyPath.join('.')}" in agent_config.example.yaml; left unchanged.`);
-      return false;
-    }
-    const pad = ' '.repeat(found.indent);
-    const key = keyPath[keyPath.length - 1];
-    const body = dedent(text).replace(/\s+$/, '');
-    if (!body) return this.replace(keyPath, [`${pad}${key}: ""`]);
-    // "|2-" pins the block indentation two columns past the key, so art whose
-    // first line happens to start with spaces cannot confuse the parser.
-    return this.replace(keyPath, [
-      `${pad}${key}: |2-`,
-      ...body.split('\n').map((line) => (line.trim() ? `${pad}  ${line.replace(/\s+$/, '')}` : '')),
-    ]);
-  }
-
-  toString() {
-    return this.lines.join('\n');
-  }
-}
-
-function dedent(text) {
-  const lines = text.replace(/\r\n/g, '\n').split('\n');
-  const widths = lines.filter((line) => line.trim()).map((line) => indentOf(line));
-  const shift = widths.length ? Math.min(...widths) : 0;
-  return lines.map((line) => (line.trim() ? line.slice(shift) : '')).join('\n');
+  return core.readStorageDefaults(configText, repoRoot);
 }
 
 // ── prompt helpers ───────────────────────────────────────────────────
@@ -579,16 +354,7 @@ async function stepAppName() {
 
 function cliAuthenticated(spec) {
   const result = probe(spec.binary, spec.authStatusArgs);
-  if (!result.ok) return false;
-  if (spec.authJson) {
-    try {
-      const parsed = JSON.parse(result.out);
-      return parsed.loggedIn === true || parsed.authenticated === true;
-    } catch {
-      return false;
-    }
-  }
-  return true;
+  return result.ok && core.cliAuthOutputOk(spec, result.out);
 }
 
 async function stepCliProvider(spec) {
@@ -656,6 +422,64 @@ async function stepCliProvider(spec) {
     }
   }
   return settings;
+}
+
+/** Print `text` wrapped to the wizard's width, as warnings. */
+function warnWrapped(text, width = 74) {
+  let line = '';
+  for (const word of text.split(/\s+/)) {
+    if (line && line.length + word.length + 1 > width) {
+      warn(line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  }
+  if (line) warn(line);
+}
+
+async function stepAntigravity() {
+  const spec = core.ANTIGRAVITY;
+  heading('Antigravity provider (optional)');
+  info(`Google's Antigravity CLI (${spec.binary}), driven over ACP as /model antigravity.`);
+  warnWrapped(core.ANTIGRAVITY_NOTICE);
+  info(`Google's terms: ${spec.termsUrl}`);
+  info(`Antigravity: ${spec.siteUrl}`);
+  if (!(await confirm('Do you want to use Antigravity?', false))) return { enabled: false };
+  if (!(await confirm(
+    "I have checked Google's terms, and accept that MyHarness is not responsible if my account is blocked",
+    false,
+  ))) {
+    info('Antigravity stays disabled.');
+    return { enabled: false };
+  }
+
+  if (!probe(spec.binary, ['--version']).ok) {
+    const install = core.antigravityInstallCommand(process.platform, { hasBrew: probe('brew', ['--version']).ok });
+    if (!install) {
+      fail(`${spec.binary} was not found and cannot be installed automatically on this system.`);
+      notes.push(`Antigravity: install the CLI from ${spec.siteUrl}, run "${spec.binary} ${spec.loginArgs.join(' ')}", then re-run setup.`);
+      return { enabled: false };
+    }
+    if (!(await confirm(`Install it now with "${install.display}"?`, true)) || !run(install.command, install.args)) {
+      fail('Installing Antigravity failed or was skipped. It remains disabled.');
+      return { enabled: false };
+    }
+    if (!probe(spec.binary, ['--version']).ok) {
+      warn(`${spec.binary} was installed but is not on PATH yet (Linux puts it in ~/.local/bin).`);
+      notes.push(`Antigravity: make sure ${spec.binary} is on the backend's PATH, e.g. add ~/.local/bin to PATH.`);
+    }
+  }
+  ok(`${spec.binary} is installed.`);
+
+  if (await confirm(`Sign in now with "${spec.binary} ${spec.loginArgs.join(' ')}"?`, true)) {
+    run(spec.binary, spec.loginArgs);
+  }
+  if (!(await confirm('Enable the Antigravity provider?', true))) return { enabled: false };
+  notes.push(
+    `Antigravity uses your personal Google sign-in. If threads report it is not signed in, run "${spec.binary} ${spec.loginArgs.join(' ')}".`,
+  );
+  return { enabled: true };
 }
 
 async function stepNativeProvider(credentials = {}) {
@@ -757,6 +581,8 @@ async function stepAudio(pythonInfo, credentials = {}) {
 async function stepFrontends() {
   heading('Frontends');
   const browser = await confirm('Set up the browser UI (build frontend/)?', true);
+  info('The desktop package is a self-contained installer: on first launch it asks for an');
+  info('install folder and runs its own setup, so it can be copied to other machines.');
   const desktop = await confirm('Build an installable desktop package for this OS?', false);
   const tui = await confirm('Build the Rust terminal UI?', true);
   return { browser, desktop, tui };
@@ -780,14 +606,8 @@ async function installFrontends({ browser, desktop, tui }, appName, pythonInfo) 
   }
 
   if (desktop) {
-    // The Electron package copies ./.venv wholesale, so an unusable venv is
-    // baked into the artifact. Say so at the moment it gets captured, since
-    // the symptom is otherwise a packaged app that opens and then reports its
-    // backend exiting with a nonzero code.
-    if (pythonInfo && pythonInfo.usable === false) {
-      warn('The desktop package bundles ./.venv, which cannot import the backend dependencies.');
-      warn('The built app will launch and then fail when its backend exits. Fix the venv and rebuild.');
-    }
+    // The package carries the code, not this checkout's .venv or config: it
+    // installs its own environment and asks for its settings on first launch.
     info('Installing Electron dependencies...');
     if (npmInstallIn(path.join(REPO_ROOT, 'electron'))) {
       ok('Electron dependencies installed.');
@@ -915,73 +735,7 @@ async function stepServerAndPermissions(storageDefaults = {}) {
   };
 }
 
-/**
- * A launcher for the SSH tunnels a fleet needs.
- *
- * Remote hosts are reached over loopback so their backends can stay bound to
- * 127.0.0.1, which means a tunnel has to be running before the UI can switch
- * to them. An installer cannot hold one open, so it writes this instead: the
- * tunnels are supervised and restarted, because a dropped one looks exactly
- * like a machine that went offline.
- */
-function fleetTunnelScript(tunnels) {
-  const entries = tunnels.map(
-    (tunnel) => `  "${tunnel.localPort}:127.0.0.1:${tunnel.remotePort} ${tunnel.sshHost}"`,
-  );
-  return [
-    '#!/usr/bin/env bash',
-    '# Generated by the local agent harness setup. Re-run setup to regenerate.',
-    '#',
-    '# Opens one SSH tunnel per remote fleet host and keeps them open. Leave this',
-    '# running while you want to switch hosts in the UI; Ctrl+C closes them all.',
-    '#',
-    '# Each entry is "<local port>:127.0.0.1:<remote port> <ssh host>", matching a',
-    '# url in fleet.hosts in backend/agent/agent_config.yaml.',
-    'set -uo pipefail',
-    '',
-    'TUNNELS=(',
-    ...entries,
-    ')',
-    '',
-    'pids=()',
-    'cleanup() {',
-    '  trap - INT TERM',
-    '  for pid in "${pids[@]:-}"; do',
-    '    [ -n "$pid" ] && kill "$pid" 2>/dev/null',
-    '  done',
-    '  exit 0',
-    '}',
-    'trap cleanup INT TERM',
-    '',
-    'for entry in "${TUNNELS[@]}"; do',
-    '  # Supervise each tunnel: ssh exits when the network drops or the remote',
-    '  # host reboots, and a silently dead tunnel is indistinguishable in the UI',
-    '  # from a host that is switched off.',
-    '  (',
-    '    while true; do',
-    '      # ExitOnForwardFailure makes a port that is already bound fail loudly',
-    '      # instead of leaving a tunnel that forwards nothing.',
-    '      # $entry is deliberately unquoted: it splits into the -L argument',
-    '      # and the ssh host.',
-    '      # shellcheck disable=SC2086',
-    '      ssh -N \\',
-    '        -o ExitOnForwardFailure=yes \\',
-    '        -o ServerAliveInterval=30 \\',
-    '        -o ServerAliveCountMax=3 \\',
-    '        -L ${entry} || true',
-    '      echo "tunnel ${entry} dropped; retrying in 5s" >&2',
-    '      sleep 5',
-    '    done',
-    '  ) &',
-    '  pids+=($!)',
-    '  echo "tunnel up: ${entry}"',
-    'done',
-    '',
-    'echo "Press Ctrl+C to close all tunnels."',
-    'wait',
-    '',
-  ].join('\n');
-}
+const { fleetTunnelScript, suggestHostId } = core;
 
 /** Write the tunnel launcher, returning its path (or '' when none is needed). */
 function writeFleetTunnelScript(tunnels, repoRoot = REPO_ROOT) {
@@ -1009,12 +763,6 @@ function writeFleetTunnelScript(tunnels, repoRoot = REPO_ROOT) {
     fail(`Could not write the tunnel launcher: ${error.message}`);
     return '';
   }
-}
-
-/** A plain identifier usable as a fleet host id: lowercase, no separators. */
-function suggestHostId(name) {
-  const cleaned = String(name || '').toLowerCase().split('.')[0].replace(/[^a-z0-9_-]/g, '');
-  return cleaned || 'this-machine';
 }
 
 async function askHostId(message, initial, taken) {
@@ -1143,15 +891,7 @@ function findPython() {
   return null;
 }
 
-// Import names, not distribution names: PyYAML installs as `yaml`, PyMuPDF as
-// `fitz`. These are the modules backend/web_app.py needs to reach its first
-// line of work, so if any is missing the backend cannot start at all.
-const REQUIRED_BACKEND_MODULES = ['fastapi', 'uvicorn', 'pydantic', 'yaml', 'requests'];
-
-/** Args that import every module the backend cannot start without. */
-function backendImportCheckArgs() {
-  return ['-c', `import ${REQUIRED_BACKEND_MODULES.join(', ')}`];
-}
+const { REQUIRED_BACKEND_MODULES, backendImportCheckArgs } = core;
 
 async function stepPythonEnv() {
   heading('Python environment');
@@ -1202,8 +942,7 @@ async function stepPythonEnv() {
 
   // Check the environment rather than trusting the installer's exit code: a
   // half-populated venv or a wheel that failed to build can still report
-  // success, and the desktop package is built around whatever is in .venv at
-  // this moment. Better to say so here than to ship an app that dies on launch.
+  // success. Better to say so here than to leave a backend that dies on launch.
   const usable = probe(venvPython, backendImportCheckArgs()).ok;
   if (usable) {
     if (installed) ok('Backend dependencies installed.');
@@ -1211,8 +950,7 @@ async function stepPythonEnv() {
     fail('The venv cannot import the backend dependencies, so the backend will not start.');
     notes.push(
       `Backend dependencies are missing from ${venvDir}. Install them with `
-      + `"${venvPython} -m pip install -r requirements.txt" and re-run setup before `
-      + 'building the desktop package, which bundles this venv as-is.',
+      + `"${venvPython} -m pip install -r requirements.txt" and re-run setup.`,
     );
   }
 
@@ -1277,78 +1015,9 @@ async function stepCredentials(pythonInfo) {
 
 /** Apply the answers to the template text and return the finished YAML. */
 function buildConfig(answers, templateText) {
-  const editor = new ConfigEditor(templateText);
-  const codex = typeof answers.codex === 'boolean' ? { enabled: answers.codex } : answers.codex;
-  const claude = typeof answers.claude === 'boolean' ? { enabled: answers.claude } : answers.claude;
-
-  editor.set(['api', 'enabled'], answers.native.enabled ?? Boolean(answers.native.apiKey));
-  editor.set(['api', 'base_url'], answers.native.baseUrl);
-  editor.set(['api', 'api_key'], '');
-  editor.set(['api', 'timeout_seconds'], answers.native.timeout ?? 120);
-  for (const role of ['default', 'read', 'write', 'summary']) {
-    editor.set(['models', role], answers.native.model);
-  }
-
-  editor.set(['permissions', 'approval_mode'], answers.server.approvalMode);
-  editor.setList(['permissions', 'allowed_paths'], answers.server.allowedPaths);
-
-  editor.set(['server', 'host'], answers.server.host);
-  editor.set(['server', 'port'], answers.server.port);
-  editor.set(['agent', 'default_provider'], 'native');
-  editor.set(['agent', 'max_iterations'], answers.native.maxIterations ?? 20);
-  editor.set(['storage', 'data_dir'], answers.server.dataDir || '');
-  editor.set(
-    ['storage', 'database_filename'],
-    normalizeDatabaseFilename(answers.server.databaseFilename || 'myharness.sqlite3'),
-  );
-  editor.set(['logging', 'enabled'], answers.server.loggingEnabled ?? true);
-  editor.set(['logging', 'log_dir'], answers.server.logDir || '');
-  editor.set(['logging', 'level'], answers.server.logLevel || 'info');
-  editor.set(['logging', 'retention_days'], answers.server.logRetentionDays ?? 30);
-
-  editor.set(['ui', 'app_name'], answers.app.appName);
-  editor.setBlockText(['ui', 'splash_ascii'], answers.app.splashAscii);
-  editor.set(['ui', 'verbose_tools'], answers.server.verboseTools);
-  editor.set(['ui', 'git_writes_enabled'], answers.server.gitWrites);
-
-  editor.set(['audio', 'enabled'], answers.audio.enabled);
-  editor.set(['audio', 'transcription', 'processor'], answers.audio.processor);
-  editor.set(['audio', 'transcription', 'server'], answers.audio.server);
-  editor.set(['audio', 'transcription', 'username'], answers.audio.username || '');
-  editor.set(['audio', 'transcription', 'key_file'], answers.audio.keyFile || '');
-  editor.set(['audio', 'transcription', 'app_dir'], answers.audio.appDir);
-  editor.set(['audio', 'transcription', 'api_base_url'], answers.audio.apiBaseUrl);
-  editor.set(['audio', 'transcription', 'api_key'], '');
-  editor.set(['audio', 'transcription', 'model'], answers.audio.model);
-  editor.set(['audio', 'transcription', 'language'], answers.audio.language || '');
-  editor.set(['audio', 'transcription', 'device'], answers.audio.device || 'cpu');
-  editor.set(['audio', 'transcription', 'timeout_seconds'], answers.audio.timeout ?? 1800);
-  editor.set(['audio', 'transcription', 'max_upload_mb'], answers.audio.maxUploadMb ?? 500);
-
-  editor.set(['codex_app_server', 'enabled'], Boolean(codex.enabled));
-  editor.set(['codex_app_server', 'binary'], codex.binary || 'codex');
-  editor.set(['codex_app_server', 'model'], codex.model || null);
-  editor.set(['codex_app_server', 'timeout_seconds'], codex.timeout ?? 1800);
-  editor.set(['codex_app_server', 'reasoning_effort'], codex.reasoning || 'low');
-  editor.set(['claude_agent', 'enabled'], Boolean(claude.enabled));
-  editor.set(['claude_agent', 'binary'], claude.binary || 'claude');
-  editor.set(['claude_agent', 'model'], claude.model || null);
-  editor.set(['claude_agent', 'timeout_seconds'], claude.timeout ?? 1800);
-  editor.set(['claude_agent', 'max_turns'], claude.maxTurns ?? 0);
-  editor.set(['claude_agent', 'permission_mode'], claude.permissionMode || '');
-
-  // Absent for a single-machine setup, and for configs written before fleets
-  // existed, so fall back to the template's disabled defaults.
-  const fleet = answers.fleet || { enabled: false, self: '', pollSeconds: 10, hosts: [] };
-  editor.set(['fleet', 'enabled'], Boolean(fleet.enabled));
-  editor.set(['fleet', 'self'], fleet.self || '');
-  editor.set(['fleet', 'poll_seconds'], fleet.pollSeconds ?? 10);
-  editor.setMappingList(['fleet', 'hosts'], fleet.hosts || [], ['id', 'label', 'url']);
-
-  editor.set(['desktop', 'enabled'], answers.frontends.desktop);
-  editor.set(['desktop', 'backend_url'], `http://${answers.server.host === '0.0.0.0' ? '127.0.0.1' : answers.server.host}:${answers.server.port}`);
-
-  return editor.toString();
+  return core.buildConfig(answers, templateText, {
+    onMissing: (keyPath) => warn(`Could not find "${keyPath.join('.')}" in agent_config.example.yaml; left unchanged.`),
+  });
 }
 
 function writeConfig(answers, { example = EXAMPLE_CONFIG, target = TARGET_CONFIG } = {}) {
@@ -1372,7 +1041,7 @@ function summary(answers) {
     console.log('     ./run.sh --dev        backend + Vite dev server (hot reload)');
   }
   if (answers.frontends.desktop) {
-    console.log('     electron/dist/        installable desktop package for this OS');
+    console.log('     electron/dist/        desktop installer for this OS (runs its own setup on first launch)');
     console.log('     ./run.sh --electron   unpackaged Electron desktop shell');
   }
   if (answers.frontends.tui) console.log('     ./run.sh --tui        Rust TUI');
@@ -1416,32 +1085,14 @@ async function main() {
 
   const app = await stepAppName();
 
-  const codex = await stepCliProvider({
-    title: 'Codex CLI provider',
-    label: 'Codex',
-    binary: 'codex',
-    pkg: '@openai/codex',
-    authStatusArgs: ['login', 'status'],
-    authLoginArgs: ['login'],
-    authJson: false,
-    docs: 'https://learn.chatgpt.com/docs/codex/cli',
-  });
-
-  const claude = await stepCliProvider({
-    title: 'Claude Code provider',
-    label: 'Claude',
-    binary: 'claude',
-    pkg: '@anthropic-ai/claude-code',
-    authStatusArgs: ['auth', 'status', '--json'],
-    authLoginArgs: ['auth', 'login'],
-    authJson: true,
-    docs: 'https://code.claude.com/docs/en/authentication',
-  });
+  const codex = await stepCliProvider(core.CLI_PROVIDERS.codex);
+  const claude = await stepCliProvider(core.CLI_PROVIDERS.claude);
+  const acp = await stepAntigravity();
 
   const pythonInfo = await stepPythonEnv();
   const credentials = await stepCredentials(pythonInfo);
   const native = await stepNativeProvider(credentials);
-  if (!native.enabled && !codex.enabled && !claude.enabled) {
+  if (!native.enabled && !codex.enabled && !claude.enabled && !acp.enabled) {
     warn('No authenticated provider is enabled. Setup will finish, but agent threads cannot run until one is configured.');
   }
   const audio = await stepAudio(pythonInfo, credentials);
@@ -1449,7 +1100,7 @@ async function main() {
   const server = await stepServerAndPermissions(storageDefaults);
   const fleet = await stepFleet(server);
 
-  const answers = { app, codex, claude, native, audio, frontends, server, fleet };
+  const answers = { app, codex, claude, acp, native, audio, frontends, server, fleet };
   if (!writeConfig(answers)) return;
   await installFrontends(frontends, app.appName, pythonInfo);
   summary(answers);
@@ -1468,6 +1119,7 @@ if (invokedDirectly) {
 }
 
 export {
+  stepAntigravity,
   ConfigEditor,
   buildConfig,
   writeConfig,

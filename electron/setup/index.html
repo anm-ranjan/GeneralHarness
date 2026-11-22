@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'">
+  <title>Setup</title>
+  <link rel="stylesheet" href="setup.css">
+</head>
+<body>
+  <aside class="steps" aria-label="Setup steps">
+    <h1 id="app-title">Setup</h1>
+    <ol id="step-list"></ol>
+    <p class="hint">Settings are written to <code>backend/agent/agent_config.yaml</code> in the install folder. Reopen this any time from File → Setup….</p>
+  </aside>
+
+  <main>
+    <!-- 1. Install -->
+    <section class="step" data-step="install" data-title="Install">
+      <h2>Install location</h2>
+      <p class="lead">The backend, its Python environment, your configuration and your data live in a folder you choose. The suggested folder is this app's per-user data folder. An existing install is reused: its configuration, data, environment and your own agents are kept.</p>
+      <label class="field">Install folder
+        <div class="row">
+          <input id="install-folder" spellcheck="false">
+          <button type="button" id="pick-folder">Browse…</button>
+        </div>
+      </label>
+      <p id="folder-status" class="status"></p>
+
+      <label class="field">Python 3.10 or newer, used to create the environment
+        <div class="row">
+          <input id="python-path" list="python-guesses" placeholder="python3" spellcheck="false">
+          <datalist id="python-guesses"></datalist>
+          <button type="button" id="pick-python">Browse…</button>
+          <button type="button" id="check-python">Check</button>
+        </div>
+      </label>
+      <p id="python-status" class="status"></p>
+      <p class="hint">No Python yet? <button type="button" class="link" data-link="https://www.python.org/downloads/">Download Python</button></p>
+
+      <div class="row">
+        <button type="button" id="install" class="primary">Install</button>
+        <label class="inline"><input type="checkbox" id="recreate"> Recreate the Python environment from scratch</label>
+      </div>
+      <p id="install-status" class="status"></p>
+    </section>
+
+    <!-- 2. App -->
+    <section class="step" data-step="app" data-title="App name" hidden>
+      <h2>App name</h2>
+      <p class="lead">The name shown in the window title, the sidebar and the splash screen.</p>
+      <label class="field">Display name <input id="app-name" maxlength="40"></label>
+      <label class="inline"><input type="checkbox" id="use-ascii" checked> Show this ASCII art on the splash screen</label>
+      <pre id="ascii-preview" class="ascii"></pre>
+    </section>
+
+    <!-- 3. Providers -->
+    <section class="step" data-step="providers" data-title="Providers" hidden>
+      <h2>Agent providers</h2>
+      <p class="lead">Enable at least one. Codex and Claude use their own subscription CLIs: setup can install them with npm and start their login, and enables them only after the login is verified.</p>
+
+      <div class="card" data-cli="codex">
+        <h3>Codex <span class="badge" data-role="badge">checking…</span></h3>
+        <div class="row">
+          <button type="button" data-role="install">Install with npm</button>
+          <button type="button" data-role="login">Log in</button>
+          <button type="button" data-role="cancel" hidden>Cancel login</button>
+          <button type="button" data-role="recheck" class="link">Check again</button>
+        </div>
+        <label class="inline"><input type="checkbox" data-role="enable" id="codex-enabled"> Enable Codex</label>
+        <div class="grid2">
+          <label class="field">Model override (blank uses the CLI default) <input id="codex-model" spellcheck="false"></label>
+          <label class="field">Reasoning effort
+            <select id="codex-reasoning"><option>low</option><option>medium</option><option>high</option></select>
+          </label>
+          <label class="field">Run timeout (seconds) <input id="codex-timeout" type="number" min="30" max="86400"></label>
+        </div>
+      </div>
+
+      <div class="card" data-cli="claude">
+        <h3>Claude <span class="badge" data-role="badge">checking…</span></h3>
+        <div class="row">
+          <button type="button" data-role="install">Install with npm</button>
+          <button type="button" data-role="login">Log in</button>
+          <button type="button" data-role="cancel" hidden>Cancel login</button>
+          <button type="button" data-role="recheck" class="link">Check again</button>
+        </div>
+        <label class="inline"><input type="checkbox" data-role="enable" id="claude-enabled"> Enable Claude</label>
+        <div class="grid2">
+          <label class="field">Model override (blank uses the CLI default) <input id="claude-model" spellcheck="false"></label>
+          <label class="field">Permission mode
+            <select id="claude-permission">
+              <option value="">derive from the approval mode (recommended)</option>
+              <option value="default">default</option>
+              <option value="acceptEdits">acceptEdits</option>
+              <option value="bypassPermissions">bypassPermissions</option>
+              <option value="plan">plan</option>
+            </select>
+          </label>
+          <label class="field">Run timeout (seconds) <input id="claude-timeout" type="number" min="30" max="86400"></label>
+          <label class="field">Maximum turns (0 = SDK default) <input id="claude-max-turns" type="number" min="0" max="10000"></label>
+        </div>
+        <p id="claude-permission-note" class="note" hidden>A pinned permission mode overrides the app's approval setting for Claude sessions.</p>
+      </div>
+      <div class="card" id="agy-card">
+        <h3>Antigravity <span class="badge" id="agy-badge">checking…</span></h3>
+        <p class="note" id="agy-notice"></p>
+        <div class="row">
+          <button type="button" class="link" data-link="https://policies.google.com/terms">Google's terms of service</button>
+          <button type="button" class="link" data-link="https://antigravity.google">Antigravity</button>
+        </div>
+        <label class="inline"><input type="checkbox" id="agy-accept"> I have checked Google's terms, and accept that MyHarness is not responsible if my account is restricted or blocked</label>
+        <div class="row">
+          <button type="button" id="agy-install">Install</button>
+          <button type="button" id="agy-login">Sign in</button>
+          <button type="button" id="agy-cancel" hidden>Cancel sign-in</button>
+          <button type="button" id="agy-recheck" class="link">Check again</button>
+        </div>
+        <label class="inline"><input type="checkbox" id="agy-enabled"> Enable Antigravity</label>
+        <p class="hint" id="agy-hint"></p>
+      </div>
+      <p id="cli-status" class="status"></p>
+
+      <div class="card">
+        <h3>Native (OpenAI-compatible API) <span class="badge" id="native-badge">no key</span></h3>
+        <p class="hint">The key is encrypted in this machine's credential file, never written to YAML. Leave it blank to keep the stored key.</p>
+        <div class="grid2">
+          <label class="field">API key <input id="native-key" type="password" autocomplete="off" spellcheck="false"></label>
+          <label class="field">API base URL <input id="native-url" spellcheck="false"></label>
+          <label class="field">Default model <input id="native-model" spellcheck="false"></label>
+          <label class="field">Timeout (seconds) <input id="native-timeout" type="number" min="10" max="86400"></label>
+          <label class="field">Maximum agent iterations <input id="native-iterations" type="number" min="1" max="10000"></label>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. Voice -->
+    <section class="step" data-step="voice" data-title="Voice dictation" hidden>
+      <h2>Voice dictation</h2>
+      <p class="lead">Speech to text for the message box. Optional.</p>
+      <label class="inline"><input type="checkbox" id="audio-enabled"> Enable voice dictation</label>
+      <div id="audio-box">
+        <label class="field">Transcription backend
+          <select id="audio-processor">
+            <option value="local">local: faster-whisper on this machine</option>
+            <option value="remote">remote: faster-whisper on an SSH compute host</option>
+            <option value="api">api: an OpenAI-compatible /audio/transcriptions endpoint</option>
+          </select>
+        </label>
+        <div class="grid2" data-processor="local remote">
+          <label class="field">faster-whisper model (tiny, base, small, medium, large-v3) <input id="audio-model-whisper" spellcheck="false"></label>
+          <label class="field">Device
+            <select id="audio-device"><option>cpu</option><option>auto</option><option>cuda</option></select>
+          </label>
+        </div>
+        <div class="row" data-processor="local">
+          <button type="button" id="install-whisper">Install faster-whisper</button>
+          <span id="whisper-status" class="status"></span>
+        </div>
+        <div class="grid2" data-processor="remote">
+          <label class="field">SSH host <input id="audio-server" spellcheck="false"></label>
+          <label class="field">SSH username (blank uses the SSH default) <input id="audio-username" spellcheck="false"></label>
+          <label class="field">SSH private key (blank uses ~/.ssh/id_rsa) <input id="audio-keyfile" spellcheck="false"></label>
+          <label class="field">Remote app folder (must contain .venv/bin/python) <input id="audio-appdir" spellcheck="false"></label>
+        </div>
+        <div class="grid2" data-processor="api">
+          <label class="field">STT API base URL <input id="audio-api-url" spellcheck="false"></label>
+          <label class="field">STT model <input id="audio-model-api" spellcheck="false"></label>
+          <label class="field">STT API key (blank keeps the stored key) <input id="stt-key" type="password" autocomplete="off" spellcheck="false"></label>
+        </div>
+        <div class="grid2">
+          <label class="field">Language code (blank detects it) <input id="audio-language" spellcheck="false"></label>
+          <label class="field">Timeout (seconds) <input id="audio-timeout" type="number" min="10" max="86400"></label>
+          <label class="field">Maximum upload size (MB) <input id="audio-max-upload" type="number" min="1" max="4096"></label>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. Server and workspaces -->
+    <section class="step" data-step="server" data-title="Server and workspaces" hidden>
+      <h2>Server and workspaces</h2>
+      <p class="lead">Which folders the agent may work in, how it asks before acting, and where the backend listens.</p>
+
+      <label class="field">Allowed workspace folders (at least one)</label>
+      <ul id="allowed-paths" class="list"></ul>
+      <div class="row">
+        <button type="button" id="add-path">Add folder…</button>
+      </div>
+      <p id="paths-status" class="status"></p>
+
+      <label class="field">Approval mode
+        <select id="approval-mode">
+          <option value="always_ask">always_ask: confirm file writes and shell commands (recommended)</option>
+          <option value="shell_only">shell_only: confirm shell commands only</option>
+          <option value="auto_approve">auto_approve: never confirm</option>
+        </select>
+      </label>
+      <p id="approval-note" class="note" hidden>auto_approve lets the agent write files and run shell commands in your allowed folders without asking.</p>
+
+      <div class="grid2">
+        <label class="field">Bind address
+          <select id="server-host">
+            <option value="127.0.0.1">127.0.0.1: this machine only (recommended)</option>
+            <option value="0.0.0.0">0.0.0.0: every network interface (trusted LAN)</option>
+          </select>
+        </label>
+        <label class="field">Port <input id="server-port" type="number" min="1" max="65535"></label>
+      </div>
+      <div id="lan-box" hidden>
+        <p class="note">The backend has no authentication. Anyone who can reach this port can read and write your allowed folders and run shell commands.</p>
+        <label class="inline"><input type="checkbox" id="lan-confirm"> This port is reachable only from a trusted LAN</label>
+      </div>
+
+      <label class="inline"><input type="checkbox" id="verbose-tools"> Show full tool input and output in the UI</label>
+      <label class="inline"><input type="checkbox" id="git-writes"> Let the Workspace Git panel stage and commit</label>
+
+      <details>
+        <summary>Storage and logging</summary>
+        <label class="field">Data folder
+          <div class="row"><input id="data-dir" spellcheck="false"><button type="button" data-pick-dir="data-dir">Browse…</button></div>
+        </label>
+        <label class="field">SQLite database filename <input id="db-name" spellcheck="false"></label>
+        <label class="inline"><input type="checkbox" id="logging-enabled"> Enable application logging</label>
+        <div class="grid2">
+          <label class="field">Log folder <input id="log-dir" spellcheck="false"></label>
+          <label class="field">Log level
+            <select id="log-level"><option>info</option><option>warning</option><option>debug</option><option>error</option></select>
+          </label>
+          <label class="field">Log retention in days (0 keeps logs) <input id="log-retention" type="number" min="0" max="3650"></label>
+        </div>
+      </details>
+    </section>
+
+    <!-- 6. Fleet -->
+    <section class="step" data-step="fleet" data-title="Fleet" hidden>
+      <h2>Fleet (optional)</h2>
+      <p class="lead">Run the app on more than one machine and switch between them in the UI. Each machine keeps its own projects and threads. Every machine needs the same host list, changing only which one is "this machine".</p>
+      <label class="inline"><input type="checkbox" id="fleet-enabled"> Set up a fleet</label>
+      <div id="fleet-box">
+        <div class="grid2">
+          <label class="field">Id for this machine <input id="fleet-self-id" spellcheck="false"></label>
+          <label class="field">Display name <input id="fleet-self-label"></label>
+          <label class="field">URL for this machine as the browser reaches it <input id="fleet-self-url" spellcheck="false"></label>
+          <label class="field">Check other machines every (seconds) <input id="fleet-poll" type="number" min="2" max="3600"></label>
+        </div>
+        <p class="hint">Other machines. A loopback URL (127.0.0.1) is reached through an SSH tunnel, so give its SSH host and backend port; setup writes a tunnel script.</p>
+        <table class="rows">
+          <thead><tr><th>Id</th><th>Display name</th><th>URL from here</th><th>SSH host</th><th>Backend port</th><th></th></tr></thead>
+          <tbody id="fleet-hosts"></tbody>
+        </table>
+        <button type="button" id="add-host">Add machine</button>
+        <p id="fleet-status" class="status"></p>
+      </div>
+    </section>
+
+    <!-- 7. Terminal UI -->
+    <section class="step" data-step="tui" data-title="Terminal UI" hidden>
+      <h2>Terminal UI (optional)</h2>
+      <p class="lead">A Rust terminal client is also available. It talks to the backend over HTTP, so it can attach from another machine too. Building it needs Rust's <code>cargo</code>; nothing else in the app does.</p>
+      <p id="cargo-status" class="status"></p>
+      <div class="row">
+        <button type="button" id="build-tui">Build the terminal UI</button>
+        <button type="button" id="recheck-cargo" class="link">Check for cargo again</button>
+        <button type="button" class="link" data-link="https://rustup.rs">Install Rust (rustup.rs)</button>
+      </div>
+      <p id="tui-status" class="status"></p>
+      <p class="hint">You can skip this and build it later from File → Setup….</p>
+    </section>
+
+    <!-- 8. Review -->
+    <section class="step" data-step="review" data-title="Review and save" hidden>
+      <h2>Review and save</h2>
+      <ul id="summary" class="summary"></ul>
+      <p id="save-status" class="status"></p>
+      <ul id="save-notes" class="list" hidden></ul>
+    </section>
+
+    <!-- Update mode -->
+    <section class="step" data-step="update" data-title="Update" hidden>
+      <h2 id="update-title">Updating</h2>
+      <p class="lead">This version of the app brings new backend files. They are being copied into your install folder; your configuration and data are kept.</p>
+      <p id="update-status" class="status"></p>
+      <div class="row">
+        <button type="button" id="update-retry" hidden>Try again</button>
+      </div>
+    </section>
+
+    <div class="log-wrap"><div id="log" class="log" hidden></div></div>
+
+    <footer>
+      <button type="button" id="back">Back</button>
+      <span class="spacer"></span>
+      <button type="button" id="cancel" class="link">Cancel</button>
+      <button type="button" id="next" class="primary">Next</button>
+    </footer>
+  </main>
+  <script src="setup.js"></script>
+</body>
+</html>

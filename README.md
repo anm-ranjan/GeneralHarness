@@ -104,6 +104,12 @@ The interactive installer asks for everything it needs and does the rest:
 1. A display name, and generates ASCII art for the splash screen.
 2. Whether to enable Codex and Claude. It installs missing CLIs, runs their
    subscription login flows, and enables them only after authentication passes.
+   It then offers Antigravity (Google's `agy` CLI): it first shows a notice to
+   check Google's terms, since Antigravity runs on a personal Google sign-in,
+   and that MyHarness accepts no responsibility if the account is restricted
+   or blocked. Only after you confirm does it install `agy` (Homebrew on
+   macOS, Google's install script on Linux), run `agy acp --login` and enable
+   it.
 3. Native and STT API keys. Blank answers keep them disabled or preserve existing
    values; entered keys go into this host's encrypted credential file.
 4. Native base URL, model, timeout and iteration limit, followed by the voice
@@ -116,6 +122,40 @@ The interactive installer asks for everything it needs and does the rest:
 It then creates `./.venv`, installs `requirements.txt` into it, and writes
 `backend/agent/agent_config.yaml`. Re-running it is safe: it offers to back the
 existing config up to `agent_config.yaml.bak` before overwriting.
+
+### Desktop installer
+
+The desktop package built by setup (`electron/dist/`: DMG, NSIS `.exe`, DEB or
+AppImage) is a self-contained installer that can be copied to other machines.
+It carries the backend, skills, agents, built UI and TUI sources, but no
+Python environment and no configuration. On first launch it opens a setup
+window that:
+
+1. Asks for an install folder (suggested: a folder named after the app in its
+   per-user data directory) and a Python 3.10+ to build the environment from,
+   then copies the backend there, creates `.venv` and installs
+   `requirements.txt`.
+2. Walks through the same choices as the terminal wizard: name and splash art,
+   Codex and Claude (install with npm, log in, enable once verified),
+   Antigravity (behind the same Google-terms notice and confirmation), the
+   Native API key, voice dictation, workspaces, approvals, bind address,
+   storage, logging and an optional fleet.
+3. Offers to build the Rust TUI. That step needs `cargo`; when it is missing
+   the step says so and links to rustup.rs, and it can be skipped.
+4. Writes `backend/agent/agent_config.yaml` in the install folder and stores
+   API keys in the encrypted credential file.
+
+File → Setup… reopens it later; saved changes apply after a restart. When a
+newer build of the app starts, it copies its files into the install folder
+before the backend starts, keeping `agent_config.yaml`, `.venv`, `data/`,
+`logs/`, your own agents and skills, and a built TUI. The chosen folder is
+recorded in `install-<app name>.json` in the app's per-user data directory, so
+differently named builds keep separate installs.
+
+A build machine whose config sets `desktop.backend_repo` bakes that path into
+its package, so its own app keeps running from that checkout and skips setup.
+Build with `MYHARNESS_PORTABLE_BUILD=1` to leave it out of an installer meant
+for other machines.
 
 ### Linux desktop installation note
 

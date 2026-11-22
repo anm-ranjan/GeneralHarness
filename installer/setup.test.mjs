@@ -17,6 +17,7 @@ import path from 'node:path';
 import prompts from 'prompts';
 
 import {
+  stepAntigravity,
   buildConfig,
   writeConfig,
   stepExistingConfig,
@@ -646,4 +647,11 @@ test('the tunnel script cleans up its children on interrupt', () => {
   const script = fleetTunnelScript(TUNNELS);
   assert.match(script, /trap cleanup INT TERM/);
   assert.match(script, /kill "\$pid"/);
+});
+
+test('Antigravity stays off unless the user wants it and accepts the terms notice', async () => {
+  prompts.inject([false]);
+  assert.deepEqual(await stepAntigravity(), { enabled: false });
+  prompts.inject([true, false]);
+  assert.deepEqual(await stepAntigravity(), { enabled: false });
 });

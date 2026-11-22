@@ -18,7 +18,9 @@
     "dist:mac": "electron-builder --config electron-builder.config.cjs --mac",
     "dist:linux": "electron-builder --config electron-builder.config.cjs --linux"
   },
-  "dependencies": {},
+  "dependencies": {
+    "figlet": "^1.8.0"
+  },
   "devDependencies": {
     "electron": "^37.0.0",
     "electron-builder": "^26.0.12"
@@ -30,7 +32,12 @@
       "main.js",
       "app-preload.js",
       "executable-path.cjs",
-      "backend-repo.cjs"
+      "backend-repo.cjs",
+      "install-location.cjs",
+      "install-files.cjs",
+      "setup.js",
+      "setup-preload.js",
+      "setup/**"
     ],
     "extraResources": [
       {
@@ -38,7 +45,8 @@
         "to": "backend",
         "filter": [
           "**/*",
-          "!agent/agent_config.yaml.bak",
+          "!agent/agent_config.yaml",
+          "!agent/agent_config.yaml.*",
           "!**/__pycache__/**",
           "!**/*.pyc",
           "!**/.tool_cache/**"
@@ -66,8 +74,20 @@
         "to": "requirements.txt"
       },
       {
-        "from": "../.venv",
-        "to": ".venv"
+        "from": "../installer/lib",
+        "to": "installer/lib",
+        "filter": [
+          "**/*",
+          "!**/*.test.*"
+        ]
+      },
+      {
+        "from": "../tui-rs",
+        "to": "tui-rs",
+        "filter": [
+          "**/*",
+          "!target/**"
+        ]
       }
     ],
     "directories": {

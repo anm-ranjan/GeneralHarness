@@ -57,3 +57,37 @@ test("nothing configured means the bundled copy, with no complaint", () => {
   const choice = chooseRepoRoot({ bundledRoot: BUNDLED, yamlText: yaml("\"\"") });
   assert.deepEqual(choice, { root: BUNDLED, source: "bundled", rejected: null });
 });
+
+test("the folder setup installed into wins over desktop.backend_repo, the env var over both", () => {
+  const present = exists("/home/a/install/backend/web_app.py", "/home/a/app/backend/web_app.py", "/env/backend/web_app.py");
+  const installed = chooseRepoRoot({
+    bundledRoot: BUNDLED,
+    installRoot: "/home/a/install",
+    yamlText: yaml("/home/a/app"),
+    existsSync: present,
+  });
+  assert.deepEqual(installed, { root: "/home/a/install", source: "install", rejected: null });
+  const fromEnv = chooseRepoRoot({
+    bundledRoot: BUNDLED,
+    envValue: "/env",
+    installRoot: "/home/a/install",
+    existsSync: present,
+  });
+  assert.equal(fromEnv.source, "env");
+});
+
+test("a deleted install falls back to the bundled copy, which sends the app back to setup", () => {
+  const choice = chooseRepoRoot({ bundledRoot: BUNDLED, installRoot: "/home/a/gone", existsSync: exists() });
+  assert.equal(choice.root, BUNDLED);
+  assert.equal(choice.source, "bundled");
+  assert.match(choice.rejected, /no backend\/web_app.py/);
+});
+
+test("a desktop.backend_repo baked in at build time is used like the YAML setting", () => {
+  const choice = chooseRepoRoot({
+    bundledRoot: BUNDLED,
+    repoSetting: "/home/a/app",
+    existsSync: exists("/home/a/app/backend/web_app.py"),
+  });
+  assert.deepEqual(choice, { root: "/home/a/app", source: "config", rejected: null });
+});

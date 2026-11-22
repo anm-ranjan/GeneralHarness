@@ -1,7 +1,24 @@
 "use strict";
 
+const fs = require("node:fs");
+const path = require("node:path");
 const packageJson = require("./package.json");
 const { sanitizeProductName } = require("./product-name.cjs");
+const { readBackendRepoSetting } = require("./backend-repo.cjs");
+
+// The package no longer carries agent_config.yaml (it asks for its settings on
+// first launch), but a build machine that runs its app from a checkout via
+// desktop.backend_repo keeps doing so: only that one value is baked in.
+// MYHARNESS_PORTABLE_BUILD=1 leaves it out, for installers meant for other
+// machines (and for trying first-run setup on this one).
+const backendRepo = (() => {
+  if (process.env.MYHARNESS_PORTABLE_BUILD === "1") return "";
+  try {
+    return readBackendRepoSetting(fs.readFileSync(path.join(__dirname, "..", "backend", "agent", "agent_config.yaml"), "utf-8"));
+  } catch {
+    return "";
+  }
+})();
 
 const rawProductName = String(process.env.MYHARNESS_PRODUCT_NAME || "MyHarness").trim();
 const productName = sanitizeProductName(rawProductName);
@@ -21,6 +38,11 @@ module.exports = {
   // productName is already filesystem-safe, so the artifact name needs no
   // second, differently-spelled sanitization pass.
   artifactName: `${productName}-\${version}-\${os}-\${arch}.\${ext}`,
+  extraMetadata: {
+    ...(packageJson.build.extraMetadata || {}),
+    myharnessBackendRepo: backendRepo,
+    myharnessProductSlug: slug,
+  },
   mac: {
     ...packageJson.build.mac,
     extendInfo: {

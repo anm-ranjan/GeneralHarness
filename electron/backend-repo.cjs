@@ -3,9 +3,10 @@
 // Which folder the desktop shell runs the backend from.
 //
 // A packaged app carries its own copy of the backend, skills, config and
-// Python environment, which goes stale and sits in a root-owned location. If
-// desktop.backend_repo (or MYHARNESS_BACKEND_REPO) names a checkout, the shell
-// runs that checkout's backend, config, skills, data and UI instead. Anything
+// Python environment, which goes stale and sits in a root-owned location. The
+// desktop setup installs a user-owned copy (install-location.cjs), and
+// desktop.backend_repo (or MYHARNESS_BACKEND_REPO) can name a checkout; the
+// shell then runs that folder's backend, config, skills, data and UI. Anything
 // unusable falls back to the bundled copy, so a typo never leaves the app
 // without a backend.
 
@@ -30,15 +31,19 @@ function readBackendRepoSetting(yamlText) {
 }
 
 /**
- * Pick the folder to run the backend from.
- * Returns { root, source: "env" | "config" | "bundled", rejected }, where
- * `rejected` explains why a configured folder was not used (or is null).
+ * Pick the folder to run the backend from, in order: MYHARNESS_BACKEND_REPO,
+ * the folder the desktop setup installed into (`installRoot`), then
+ * desktop.backend_repo (baked in at build time as `repoSetting`, or read from
+ * a bundled YAML), then the bundled copy.
+ * Returns { root, source: "env" | "install" | "config" | "bundled", rejected },
+ * where `rejected` explains why a configured folder was not used (or is null).
  */
-function chooseRepoRoot({ bundledRoot, envValue = "", yamlText = "", existsSync = fs.existsSync }) {
+function chooseRepoRoot({ bundledRoot, envValue = "", installRoot = "", repoSetting = "", yamlText = "", existsSync = fs.existsSync }) {
   const fromEnv = String(envValue || "").trim();
-  const configured = fromEnv || readBackendRepoSetting(yamlText);
+  const fromInstall = String(installRoot || "").trim();
+  const configured = fromEnv || fromInstall || String(repoSetting || "").trim() || readBackendRepoSetting(yamlText);
   if (!configured) return { root: bundledRoot, source: "bundled", rejected: null };
-  const source = fromEnv ? "env" : "config";
+  const source = fromEnv ? "env" : fromInstall ? "install" : "config";
   if (!path.isAbsolute(configured)) {
     return { root: bundledRoot, source: "bundled", rejected: `${configured} is not an absolute path` };
   }
