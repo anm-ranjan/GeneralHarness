@@ -58,6 +58,8 @@ function writeInstallPointer(file, pointer) {
  * Identifies the app build that is running, so an install made by an older
  * build is refreshed. The version alone is not enough: local rebuilds keep
  * it, so the packaged archive's size and modification time are included.
+ * Inside Electron pass original-fs's statSync: Electron's patched fs reports
+ * app.asar as a directory, so its size reads as 0.
  */
 function buildFingerprint({ version, appPath, statSync = fs.statSync }) {
   try {

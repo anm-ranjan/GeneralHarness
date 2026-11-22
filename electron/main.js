@@ -26,7 +26,7 @@ const productSlug = require("./package.json").myharnessProductSlug || "myharness
 const installPointerFile = pointerPath(userDataDir, productSlug);
 const installPointer = usesInstall ? readInstallPointer(installPointerFile) : null;
 const buildId = app.isPackaged
-  ? buildFingerprint({ version: app.getVersion(), appPath: app.getAppPath() })
+  ? buildFingerprint({ version: app.getVersion(), appPath: app.getAppPath(), statSync: require("original-fs").statSync })
   : `${app.getVersion()}-dev`;
 // It may instead run the backend, config, skills and UI of a user-owned
 // checkout (desktop.backend_repo) rather than its own bundled copy.
