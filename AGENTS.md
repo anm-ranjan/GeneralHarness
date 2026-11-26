@@ -253,8 +253,20 @@ if the user should be asked about it.
   progress indicators for idle sessions.
 - **Thinking traces** are stripped from context and shown as collapsible blocks
   only in verbose mode. Plain-text thinking streamed as `reasoning_content` or
-  `reasoning` is collected under a private `_reasoning_text` key for display
-  only and never sent back to the model.
+  `reasoning` is collected under a private `_reasoning_text` key for display;
+  by default it is never sent back to the model. `reasoning_replay` (`mode`,
+  per-model `models:` overrides by exact ID or `prefix*`: `off` |
+  `strip_always` | `keep` | `strip_on_compact`; the thread's own model when it
+  picked one) keeps a private `_reasoning_replay` copy that
+  `history_tokens.wire_messages` sends as `reasoning_content` (counted as
+  context input), drops after the turn (`strip_always`) or strips from retained
+  messages at compaction (`strip_on_compact`); it never reaches the summary
+  request, and messages with `reasoning_details` are left alone. Native Settings
+  → Agent loop replaces `mode` at runtime (`utils.REASONING_REPLAY_MODE`,
+  stored in `data/native_settings.json`); the setup window writes it to YAML.
+  Tool-call arguments that are not a JSON object are never run: the model gets
+  an `ERROR` tool result to retry, and a repeat in the same turn is shown to
+  the user as an error.
 - **Context accounting** (`backend/agent/history_tokens.py`): native context
   usage is the gateway's own `prompt_tokens` from the latest response (a private
   `_usage_anchor` on the last sent message) plus a local estimate of what

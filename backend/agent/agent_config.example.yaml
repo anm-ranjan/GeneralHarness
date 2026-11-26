@@ -20,6 +20,26 @@ native_caching:
   # only on direct Alibaba or exclusively Alibaba-pinned OpenRouter routes.
   explicit_models: []
 
+# Whether the model's own plain-text reasoning (streamed reasoning_content /
+# reasoning, or <think> text) is sent back as reasoning_content in later
+# requests. Native provider only. OpenRouter reasoning_details are always sent
+# back and are not affected. Replayed reasoning counts toward the context.
+#   off              display only, never sent back (default)
+#   strip_always     sent back within the current turn (between tool calls),
+#                    dropped once the turn finishes
+#   keep             sent back in every later turn until compaction
+#                    summarizes those turns away
+#   strip_on_compact like keep, but compaction also strips it from the
+#                    messages it retains
+# Settings -> Native Settings -> Agent loop can replace mode on one host.
+# Quote "off": YAML reads a bare off as false (also treated as off).
+reasoning_replay:
+  mode: "off"
+  # Exact model IDs, or prefixes ending in *, that override mode.
+  models: {}
+    # my-thinking-model: strip_always
+    # inkling-*: strip_on_compact
+
 models:
   default: qwen/qwen3-coder-next
   read:    qwen/qwen3-coder-next

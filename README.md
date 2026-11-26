@@ -426,6 +426,14 @@ The native provider also has per-session thinking levels (`low`, `medium`, `high
 set from the model menu or with `/thinking`. They are sent as OpenRouter's unified
 `reasoning.effort` (to OpenRouter endpoints only); a session starts at `high`
 (`agent.native_reasoning_effort`; blank sends nothing and leaves each model on its own default).
+Whether a thinking model's own plain-text reasoning (`reasoning_content`,
+`reasoning` or `<think>` text) is sent back to it is `reasoning_replay.mode`:
+`off` (shown only, the default), `strip_always` (within one task, between tool
+calls), `keep` (until compaction) or `strip_on_compact` (like `keep`, and
+compaction also clears it from the messages it keeps). `reasoning_replay.models`
+overrides it per model ID or `prefix*`. Settings → Native Settings → Agent loop
+changes the mode on one host from the next request on; OpenRouter
+`reasoning_details` are passed back either way.
 The CLI providers need no key when the CLI is already logged in:
 
 ```bash

@@ -5,7 +5,8 @@ syncs), applied over agent_config.yaml at startup and on every save. One
 model replaces the configured default, read, write and summary models. The
 ``agent`` key holds agent-loop limits (iterations, nudges, sub-agents) that
 replace their agent_config.yaml values; it is kept apart from the model, so
-resetting one leaves the other alone.
+resetting one leaves the other alone. ``reasoning_replay`` there replaces
+reasoning_replay.mode; the YAML's per-model ``models:`` entries still win.
 
 The context window follows the model and providers in effect: on OpenRouter
 it comes from the providers' listed windows, otherwise (or when OpenRouter
@@ -44,7 +45,10 @@ AGENT_FIELDS = {
     "max_concurrent_subagents": ("MAX_CONCURRENT_SUBAGENTS", int, 1, 16),
     "max_total_subagents": ("MAX_TOTAL_SUBAGENTS", int, 1, 200),
     "max_subagent_depth": ("MAX_SUBAGENT_DEPTH", int, 1, 5),
+    "reasoning_replay": ("REASONING_REPLAY_MODE", str, None, None),
 }
+# Allowed values of the str fields.
+AGENT_CHOICES = {"reasoning_replay": utils.REASONING_REPLAY_MODES}
 _AGENT_DEFAULTS = {key: getattr(utils, attr) for key, (attr, _kind, _lo, _hi) in AGENT_FIELDS.items()}
 # History is compacted once it fills this share of the context window, which
 # leaves room for the reply and tool results. The configured
@@ -111,6 +115,11 @@ def normalize_agent(values) -> dict:
         if kind is bool:
             if not isinstance(value, bool):
                 raise AgentSettingError(f"{key} must be true or false")
+            result[key] = value
+            continue
+        if kind is str:
+            if value not in AGENT_CHOICES[key]:
+                raise AgentSettingError(f"{key} must be one of {', '.join(AGENT_CHOICES[key])}")
             result[key] = value
             continue
         if isinstance(value, bool) or not isinstance(value, (int, float)) or int(value) != value:
@@ -244,6 +253,9 @@ def current_agent() -> dict:
         "defaults": dict(_AGENT_DEFAULTS),
         "overridden": sorted(saved),
         "limits": {key: {"min": lo, "max": hi} for key, (_a, kind, lo, hi) in AGENT_FIELDS.items() if kind is int},
+        "choices": {key: list(values) for key, values in AGENT_CHOICES.items()},
+        # Models with their own reasoning_replay entry in agent_config.yaml.
+        "replay_model_overrides": sorted(str(key) for key in utils.reasoning_replay_overrides()),
     }
 
 

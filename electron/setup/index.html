@@ -131,6 +131,15 @@
           <label class="field">Timeout (seconds) <input id="native-timeout" type="number" min="10" max="86400"></label>
           <label class="field">Maximum agent iterations <input id="native-iterations" type="number" min="1" max="10000"></label>
         </div>
+        <label class="field">Send the model's reasoning back to it (thinking models)
+          <select id="native-reasoning-replay">
+            <option value="off">Off: show it only (default)</option>
+            <option value="strip_always">Within a task: keep it between tool calls</option>
+            <option value="keep">Always: keep it in later tasks too</option>
+            <option value="strip_on_compact">Until compaction: keep it, clear it when compacting</option>
+          </select>
+        </label>
+        <p id="native-reasoning-replay-hint" class="hint"></p>
       </div>
     </section>
 

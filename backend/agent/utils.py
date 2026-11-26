@@ -164,6 +164,46 @@ API_KEY = os.environ.get("MYHARNESS_API_KEY", "").strip() or CONFIG_API_KEY
 NATIVE_API_TIMEOUT = config_int(CONFIG, ["api", "timeout_seconds"], 120)
 API_PROVIDER = nested_get(CONFIG, ["api", "provider"], None)
 NATIVE_CACHING = nested_get(CONFIG, ["native_caching"], {})
+# Whether a model's plain-text reasoning is sent back as reasoning_content.
+# off: display only (default). strip_always: within the current turn only.
+# keep: every turn until compaction summarizes it away. strip_on_compact: like
+# keep, but compaction also strips it from the messages it retains.
+REASONING_REPLAY_MODES = ("off", "strip_always", "keep", "strip_on_compact")
+REASONING_REPLAY = nested_get(CONFIG, ["reasoning_replay"], {}) or {}
+
+
+def replay_mode_value(value) -> str:
+    """A configured mode as one of REASONING_REPLAY_MODES; unknown means off."""
+    # YAML 1.1 reads a bare `off` as False.
+    if value is False or value is None:
+        return "off"
+    value = str(value).strip().lower()
+    return value if value in REASONING_REPLAY_MODES else "off"
+
+
+# The mode for models without a per-model entry. Native Settings replaces it
+# at runtime (native_settings.AGENT_FIELDS); it is read on every request.
+REASONING_REPLAY_MODE = replay_mode_value(nested_get(CONFIG, ["reasoning_replay", "mode"], "off"))
+
+
+def reasoning_replay_overrides() -> dict:
+    config = REASONING_REPLAY if isinstance(REASONING_REPLAY, dict) else {}
+    models = config.get("models")
+    return models if isinstance(models, dict) else {}
+
+
+def reasoning_replay_mode(model: str | None) -> str:
+    """Replay mode for a model: exact `models:` entry, then the longest
+    `prefix*` entry, then REASONING_REPLAY_MODE. Unknown values mean off."""
+    overrides = reasoning_replay_overrides()
+    name = str(model or "")
+    if name in overrides:
+        return replay_mode_value(overrides[name])
+    prefixes = [key for key in overrides if isinstance(key, str) and key.endswith("*")
+                and name.startswith(key[:-1])]
+    if prefixes:
+        return replay_mode_value(overrides[max(prefixes, key=len)])
+    return replay_mode_value(REASONING_REPLAY_MODE)
 # Token-level SSE streaming for assistant output (UIs that support deltas).
 # Providers that reject stream=True fall back to a plain request per call.
 API_STREAMING = str(nested_get(CONFIG, ["api", "streaming"], "true")).lower() in ("true", "1", "yes")

@@ -59,13 +59,35 @@ def count_value(value):
     return count
 
 
-def wire_messages(messages):
-    """Local recovery/provenance fields are never provider API parameters."""
-    return [{k: v for k, v in msg.items() if k != "steering" and not k.startswith("_")}
-            for msg in messages]
-
-
 REASONING_KEYS = ("reasoning_details", "reasoning", "reasoning_content")
+# Private copy of the model's plain-text reasoning, kept only when
+# reasoning_replay is on for the model that produced it. It is sent as
+# reasoning_content and, unlike reasoning_details, counted as input.
+REASONING_REPLAY_KEY = "_reasoning_replay"
+
+
+def wire_messages(messages, replay_reasoning: bool = False):
+    """Local recovery/provenance fields are never provider API parameters.
+
+    replay_reasoning turns stored replay reasoning into reasoning_content on
+    assistant messages, unless the message already carries provider reasoning.
+    """
+    wire = []
+    for msg in messages:
+        out = {k: v for k, v in msg.items() if k != "steering" and not k.startswith("_")}
+        replay = msg.get(REASONING_REPLAY_KEY)
+        if (replay_reasoning and isinstance(replay, str) and msg.get("role") == "assistant"
+                and not any(key in out for key in REASONING_KEYS)):
+            out["reasoning_content"] = replay
+        wire.append(out)
+    return wire
+
+
+def replay_tokens(message) -> int:
+    replay = message.get(REASONING_REPLAY_KEY) if isinstance(message, dict) else None
+    return count_text(replay) if isinstance(replay, str) and replay else 0
+
+
 # Fallback when an image's size cannot be read (remote URL, unknown format).
 DEFAULT_IMAGE_TOKENS = 1600
 _IMAGE_MAX_EDGE = 1568
@@ -174,7 +196,8 @@ def count_message(message) -> int:
 
 
 def estimate_messages(messages):
-    return max(1, sum(count_message(msg) for msg in wire_messages(messages)))
+    return max(1, sum(count_message(msg) for msg in wire_messages(messages))
+               + sum(replay_tokens(msg) for msg in messages))
 
 
 def count_tools(tools) -> int:
@@ -256,6 +279,8 @@ def input_categories(messages, tools=None):
                         skill_ids.add(call.get("id"))
                 except (ValueError, TypeError, AttributeError):
                     pass
+    for raw in messages:
+        counts["assistant_text"] += replay_tokens(raw)
     for msg in wire_messages(messages):
         role = msg.get("role")
         category = {"system": "instructions", "developer": "instructions", "user": "user_text",

@@ -578,7 +578,8 @@ def call_api(
     max_tokens = output_token_budget(messages, tools, max_tokens)
     payload = {
         "model": selected_model,
-        "messages": history_tokens.wire_messages(messages),
+        "messages": history_tokens.wire_messages(
+            messages, replay_reasoning=utils.reasoning_replay_mode(selected_model) != "off"),
         "max_tokens": max_tokens,
         "temperature": 0.3,
     }
@@ -823,6 +824,20 @@ def strip_image_blocks_for_summary(messages: list) -> list:
     return cleaned
 
 
+def _without_replay(message):
+    """Copy of a message without its private replay reasoning."""
+    if isinstance(message, dict) and history_tokens.REASONING_REPLAY_KEY in message:
+        return {k: v for k, v in message.items() if k != history_tokens.REASONING_REPLAY_KEY}
+    return message
+
+
+def _replay_models(ui=None) -> set:
+    """Models whose replay mode applies to this history: the thread's own
+    model if it picked one, otherwise the configured read and write models."""
+    thread_model = _thread_model(ui)
+    return {thread_model} if thread_model else {utils.READ_MODEL, utils.WRITE_MODEL}
+
+
 def summarize_history(existing_memory: list, old_history: list, ui=None) -> str:
     summary_prompt = [
         {
@@ -840,7 +855,8 @@ def summarize_history(existing_memory: list, old_history: list, ui=None) -> str:
         {
             "role": "user",
             "content": json.dumps(
-                {"existing_memory": existing_memory, "history_to_compact": strip_image_blocks_for_summary(old_history)},
+                {"existing_memory": existing_memory,
+                 "history_to_compact": [_without_replay(m) for m in strip_image_blocks_for_summary(old_history)]},
                 ensure_ascii=False,
             ),
         },
@@ -1195,6 +1211,10 @@ def compact_history(messages: list, ui=None, deterministic: bool = False,
         old_history = strip_image_blocks_for_summary(old_history)
 
     retained_skills = utils.retained_skill_instructions(messages, recent_history)
+    if "strip_on_compact" in {utils.reasoning_replay_mode(model) for model in _replay_models(ui)}:
+        # Pay the cache miss once: retained messages lose their reasoning too.
+        recent_history = [_without_replay(message) for message in recent_history]
+
     def compose(summary):
         return [system_message, {"role": "system", "content": f"{utils.MEMORY_SUMMARY_MARKER}\n{summary}"},
                 *retained_skills, *recent_history]
@@ -2182,6 +2202,23 @@ def _tool_status_line(func_name: str, func_args: dict) -> str:
 TURN_START_KEY = "_turn_start"
 
 
+def parse_tool_arguments(raw) -> tuple[dict, str | None]:
+    """Return (arguments, error). Empty arguments mean a call without any."""
+    if isinstance(raw, dict):
+        return raw, None
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return {}, None
+    if not isinstance(raw, str):
+        return {}, f"expected a JSON string, got {type(raw).__name__}"
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return {}, f"{exc.msg} at character {exc.pos}"
+    if not isinstance(value, dict):
+        return {}, f"expected a JSON object, got {type(value).__name__}"
+    return value, None
+
+
 def rollback_turn(messages: list, fallback_index: int) -> None:
     """Delete the in-progress turn, even if the guard compacted earlier turns."""
     for index in range(len(messages) - 1, -1, -1):
@@ -2318,6 +2355,8 @@ def run_agent(
     checkpoint_injected = False
     interrupted = False
     failed = False
+    strip_replay_after_turn = False
+    malformed_tool_calls = 0
 
     def inject_steering(close_if_empty=False):
         texts = steering_reader(close_if_empty=close_if_empty) if steering_reader else []
@@ -2423,16 +2462,30 @@ def run_agent(
         turn_model = turn_model or result.get("model", utils.MODEL)
         # Thinking can arrive outside the content: streamed reasoning text is
         # collected under a private key, a plain response may carry
-        # reasoning_content. Neither is model context; both are display-only.
+        # reasoning_content. Both are shown; reasoning_replay decides whether
+        # they go back to the model.
         think_parts = [assistant_msg.pop(REASONING_TEXT_KEY, "") or ""]
-        if not think_parts[0] and isinstance(assistant_msg.get("reasoning_content"), str):
-            think_parts[0] = assistant_msg["reasoning_content"]
+        if not think_parts[0]:
+            for key in ("reasoning_content", "reasoning"):
+                if isinstance(assistant_msg.get(key), str) and assistant_msg[key]:
+                    think_parts[0] = assistant_msg[key]
+                    break
         if isinstance(assistant_msg.get("content"), str):
             think_match = _THINK_RE.search(assistant_msg["content"])
             if think_match:
                 think_parts.append(think_match.group(1))
                 assistant_msg["content"] = _THINK_RE.sub("", assistant_msg["content"]).strip()
         think_text = "\n\n".join(part.strip() for part in think_parts if part and part.strip())
+        if api_caller is None and not assistant_msg.get("reasoning_details"):
+            # reasoning_replay: keep a private copy (an empty string too, which
+            # some thinking APIs require) to send back as reasoning_content.
+            # Provider reasoning_details (OpenRouter) are echoed as they are.
+            replay_mode = utils.reasoning_replay_mode(choose_model_for_tools(active_tools, _thread_model(ui)))
+            if replay_mode != "off":
+                assistant_msg.pop("reasoning_content", None)
+                assistant_msg.pop("reasoning", None)
+                assistant_msg[history_tokens.REASONING_REPLAY_KEY] = think_text
+                strip_replay_after_turn = strip_replay_after_turn or replay_mode == "strip_always"
         if think_text and verbose_tools:
             if ui:
                 ui.show_thinking(think_text)
@@ -2468,10 +2521,25 @@ def run_agent(
                     turn_messages.append(tool_msg)
                     continue
                 func_name = tool_call["function"]["name"]
-                try:
-                    func_args = json.loads(tool_call["function"]["arguments"])
-                except (json.JSONDecodeError, TypeError):
-                    func_args = {}
+                func_args, args_error = parse_tool_arguments(tool_call["function"].get("arguments"))
+                if args_error:
+                    # Never run a tool with guessed (empty) arguments: tell the
+                    # model what was wrong so it can retry once, and tell the
+                    # user if it keeps happening.
+                    malformed_tool_calls += 1
+                    tool_msg = {"role": "tool", "tool_call_id": tool_call["id"], "content": (
+                        f"ERROR: the arguments for {func_name} were not valid JSON ({args_error}). "
+                        "The tool was not run. Call it again with a single JSON object that matches its schema.")}
+                    messages.append(tool_msg)
+                    turn_messages.append(tool_msg)
+                    notice = f"Malformed tool call: {func_name} arguments were not valid JSON ({args_error})"
+                    if ui and malformed_tool_calls > 1:
+                        ui.show_error(notice)
+                    elif ui:
+                        ui.show_status(notice + "; asking the model to retry")
+                    else:
+                        ui_print(notice, style="yellow")
+                    continue
 
                 if func_name in ("file_write", "file_replace", "apply_patch"):
                     sig_parts = [func_name, func_args.get("file_path", "")]
@@ -2843,6 +2911,11 @@ def run_agent(
     else:
         utils.compress_turn_tool_results(messages, turn_start_index)
         user_msg.pop(TURN_START_KEY, None)
+        if strip_replay_after_turn:
+            # strip_always: the finished turn's reasoning is not sent again.
+            for message in messages[turn_start_index:]:
+                if isinstance(message, dict):
+                    message.pop(history_tokens.REASONING_REPLAY_KEY, None)
     return messages
 
 

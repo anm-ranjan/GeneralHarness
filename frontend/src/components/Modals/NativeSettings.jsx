@@ -3,6 +3,7 @@ import { api, isAbandonedRequest } from '../../api'
 import { useApp } from '../../context/AppContext'
 import ProviderLogo from '../ProviderLogo'
 import { modelFromInput, perMillion, rankEndpoints, visibleEndpoints, TOP_PROVIDERS } from '../../nativeModel'
+import { REPLAY_OPTIONS, replayHint, replayModeName } from '../../reasoningReplay'
 
 // 400000 -> "400k", 1048576 -> "1.05M": context windows read in round units.
 function tokensLabel(count) {
@@ -28,7 +29,13 @@ const AGENT_FIELDS = [
     help: 'Child agents one turn may start altogether.' },
   { key: 'max_subagent_depth', label: 'Sub-agent depth', unit: 'levels', needsMulti: true,
     help: 'How deeply child agents may start their own children.' },
+  { key: 'reasoning_replay', label: 'Reasoning replay', choice: true, wide: true,
+    help: "Whether a thinking model sees its own earlier reasoning again." },
 ]
+
+function choiceLabel(field, value) {
+  return field.key === 'reasoning_replay' ? replayModeName(value) : value
+}
 
 function speedLabel(endpoint) {
   return typeof endpoint.throughput === 'number' ? `${Math.round(endpoint.throughput)}` : '—'
@@ -50,7 +57,7 @@ function AgentSettings({ agent, onSaved }) {
 
   const changed = AGENT_FIELDS.some(f => draft[f.key] !== agent.values[f.key])
   const invalid = AGENT_FIELDS.find(f => {
-    if (f.bool) return false
+    if (f.bool || f.choice) return false
     const value = draft[f.key]
     const limit = agent.limits[f.key]
     return !Number.isInteger(value) || value < limit.min || value > limit.max
@@ -84,13 +91,29 @@ function AgentSettings({ agent, onSaved }) {
           const disabled = busy || (field.needsMulti && !draft.multi_agent_enabled)
           const limit = agent.limits[field.key]
           return (
-            <label key={field.key} className={`block ${disabled && !busy ? 'opacity-50' : ''}`} title={field.help}>
+            <label key={field.key} className={`block ${field.wide ? 'sm:col-span-2' : ''} ${disabled && !busy ? 'opacity-50' : ''}`} title={field.help}>
               <span className="flex items-baseline gap-1.5 text-[12.5px] font-medium text-text-bright">
                 {field.label}
-                {overridden && <span className="text-[11px] font-normal text-faint">config: {field.bool ? (fallback ? 'on' : 'off') : fallback}</span>}
+                {overridden && <span className="text-[11px] font-normal text-faint">config: {field.bool ? (fallback ? 'on' : 'off') : field.choice ? choiceLabel(field, fallback) : fallback}</span>}
               </span>
               <span className="block text-[11.5px] text-muted mb-1 leading-snug">{field.help}</span>
-              {field.bool ? (
+              {field.choice ? (
+                <>
+                  <select
+                    value={value ?? ''}
+                    disabled={disabled}
+                    onChange={e => setDraft({ ...draft, [field.key]: e.target.value })}
+                    className={selectClass}
+                  >
+                    {REPLAY_OPTIONS.filter(o => (agent.choices?.[field.key] || []).includes(o.value)).map(o => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                  <span className="block text-[11.5px] text-muted mt-1 leading-snug">
+                    {replayHint(value, agent.replay_model_overrides || [])}
+                  </span>
+                </>
+              ) : field.bool ? (
                 <span className="flex items-center gap-2 text-[12.5px] text-text-default">
                   <input
                     type="checkbox"
@@ -155,6 +178,7 @@ function AgentSettings({ agent, onSaved }) {
   )
 }
 
+const selectClass = 'w-full bg-surface border border-line rounded px-3 py-1.5 text-[12.5px] text-text-default outline-none focus:border-line-hover'
 const inputClass = 'w-full bg-surface border border-line rounded px-3 py-1.5 font-mono text-[12.5px] text-text-default placeholder:text-faint outline-none focus:border-line-hover'
 
 export default function NativeSettings() {

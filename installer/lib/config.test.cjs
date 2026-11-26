@@ -72,6 +72,41 @@ test("buildConfig reports keys the template lacks instead of failing", () => {
   assert.ok(!missing.includes("api.enabled"));
 });
 
+test("reasoning replay reads YAML false as off and is written quoted", () => {
+  assert.equal(answersFromConfig({}).native.reasoningReplay, "off");
+  assert.equal(answersFromConfig({ reasoning_replay: { mode: false } }).native.reasoningReplay, "off");
+  assert.equal(answersFromConfig({ reasoning_replay: { mode: "bogus" } }).native.reasoningReplay, "off");
+  const read = answersFromConfig({ reasoning_replay: { mode: "KEEP", models: { "inkling-*": "keep", "glm-5.2": "off" } } });
+  assert.equal(read.native.reasoningReplay, "keep");
+  assert.deepEqual(read.native.reasoningReplayOverrides, ["glm-5.2", "inkling-*"]);
+
+  const answers = { ...answersFromConfig({}), frontends: { desktop: true } };
+  answers.native.reasoningReplay = "strip_always";
+  const text = buildConfig(answers, TEMPLATE);
+  assert.match(text, /reasoning_replay:\n  mode: "strip_always"\n/);
+  answers.native.reasoningReplay = "off";
+  assert.match(buildConfig(answers, text), /reasoning_replay:\n  mode: "off"\n/);
+  assert.match(text, /# Quote "off"/); // template comments survive
+});
+
+test("reasoning replay keeps per-model entries and is added to older configs", () => {
+  const answers = { ...answersFromConfig({}), frontends: { desktop: true } };
+  answers.native.reasoningReplay = "keep";
+  const withModels = TEMPLATE.replace("  models: {}\n    # my-thinking-model", "  models:\n    glm-5.2: keep\n    # my-thinking-model");
+  assert.match(buildConfig(answers, withModels), /reasoning_replay:\n  mode: "keep"\n  # Exact[^\n]*\n  models:\n    glm-5.2: keep\n/);
+
+  const missing = [];
+  answers.native.reasoningReplay = "strip_on_compact";
+  const old = buildConfig(answers, "api:\n  base_url: https://gateway.example/v1\n", { onMissing: (k) => missing.push(k.join(".")) });
+  assert.ok(!missing.some((k) => k.startsWith("reasoning_replay")));
+  assert.match(old, /\nreasoning_replay:\n  mode: "strip_on_compact"\n/);
+  assert.equal(readScalarValue(old, ["reasoning_replay", "mode"]), "strip_on_compact");
+
+  // An unknown mode leaves the file alone.
+  answers.native.reasoningReplay = "bogus";
+  assert.doesNotMatch(buildConfig(answers, "api:\n  base_url: x\n"), /reasoning_replay/);
+});
+
 test("Python 3.10 or newer is required", () => {
   assert.equal(supportedPythonVersion("3.10.0"), true);
   assert.equal(supportedPythonVersion("3.13"), true);

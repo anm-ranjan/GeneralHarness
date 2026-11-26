@@ -233,12 +233,39 @@ class ConfigEditor {
     ]);
   }
 
+  /** Append a top-level section (its full lines) when the file has none. */
+  ensureSection(key, sectionLines) {
+    if (findKey(this.lines, [key])) return false;
+    while (this.lines.length && this.lines[this.lines.length - 1].trim() === "") this.lines.pop();
+    this.lines.push("", ...sectionLines, "");
+    return true;
+  }
+
   toString() {
     return this.lines.join("\n");
   }
 }
 
 /** Apply the answers to the template text and return the finished YAML. */
+const REASONING_REPLAY_MODES = ["off", "strip_always", "keep", "strip_on_compact"];
+// Added to configs written before reasoning_replay existed.
+const REASONING_REPLAY_SECTION = [
+  "# Whether the model's own plain-text reasoning is sent back to it as",
+  "# reasoning_content (native provider only): off | strip_always | keep |",
+  "# strip_on_compact. See agent_config.example.yaml. Quote \"off\".",
+  "reasoning_replay:",
+  "  mode: \"off\"",
+  "  # Exact model IDs, or prefixes ending in *, that override mode.",
+  "  models: {}",
+];
+
+/** Same reading as utils.replay_mode_value: YAML's bare off is false. */
+function replayMode(value) {
+  if (value === false || value === null || value === undefined) return "off";
+  const mode = String(value).trim().toLowerCase();
+  return REASONING_REPLAY_MODES.includes(mode) ? mode : "off";
+}
+
 function buildConfig(answers, templateText, { onMissing } = {}) {
   const editor = new ConfigEditor(templateText, { onMissing });
   const codex = typeof answers.codex === "boolean" ? { enabled: answers.codex } : answers.codex;
@@ -250,6 +277,12 @@ function buildConfig(answers, templateText, { onMissing } = {}) {
   editor.set(["api", "timeout_seconds"], answers.native.timeout ?? 120);
   for (const role of ["default", "read", "write", "summary"]) {
     editor.set(["models", role], answers.native.model);
+  }
+  if (REASONING_REPLAY_MODES.includes(answers.native.reasoningReplay)) {
+    // Quoted (yamlScalar), so "off" is not read back as YAML false. The
+    // per-model reasoning_replay.models entries are left as they are.
+    editor.ensureSection("reasoning_replay", REASONING_REPLAY_SECTION);
+    editor.set(["reasoning_replay", "mode"], answers.native.reasoningReplay);
   }
 
   editor.set(["permissions", "approval_mode"], answers.server.approvalMode);
@@ -340,6 +373,12 @@ function answersFromConfig(config) {
       model: str(get("models", "default"), "openai/gpt-5.2"),
       timeout: num(get("api", "timeout_seconds"), 120),
       maxIterations: num(get("agent", "max_iterations"), 20),
+      reasoningReplay: replayMode(get("reasoning_replay", "mode")),
+      // Edited in the YAML only; setup just names them.
+      reasoningReplayOverrides: Object.keys(
+        get("reasoning_replay", "models") && typeof get("reasoning_replay", "models") === "object"
+          ? get("reasoning_replay", "models") : {},
+      ).sort(),
     },
     codex: {
       enabled: bool(get("codex_app_server", "enabled"), false),

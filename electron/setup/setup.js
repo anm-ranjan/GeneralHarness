@@ -193,6 +193,23 @@ async function install() {
 
 // ── loading and filling the answers ──────────────────────────────────────
 
+// What each reasoning_replay mode does (agent_config.yaml reasoning_replay.mode;
+// the same texts as frontend/src/reasoningReplay.js).
+const REPLAY_HINTS = {
+  off: "The model's thinking is shown in the transcript but never sent back to it. Uses the least context; each step of a task starts its reasoning afresh.",
+  strip_always: "Between tool calls of one task the model sees its own earlier reasoning, so it does not re-plan every step. Uses more context during long tasks; dropped when the task ends. The one to try first with a thinking model.",
+  keep: "The model also sees its reasoning from earlier tasks, until compaction summarizes them. Some hosted thinking APIs require this. Fills the context fastest.",
+  strip_on_compact: "Like Always, but each compaction also clears the reasoning from the messages it keeps, so the context is rebuilt once. Suits local llama-server models with prompt caching.",
+};
+
+function showReplayHint() {
+  const overrides = state.replayOverrides || [];
+  const note = " Only affects models that return their reasoning as text; OpenRouter passes its own reasoning back either way."
+    + (overrides.length ? ` Per-model settings in agent_config.yaml take precedence for: ${overrides.join(", ")}.` : "")
+    + " Settings → Native Settings can change it later without a restart.";
+  $("native-reasoning-replay-hint").textContent = (REPLAY_HINTS[$("native-reasoning-replay").value] || "") + note;
+}
+
 async function loadAnswers() {
   const result = await api.read();
   if (!result.ok) {
@@ -226,6 +243,9 @@ function fill(a) {
   $("native-model").value = a.native.model;
   $("native-timeout").value = a.native.timeout;
   $("native-iterations").value = a.native.maxIterations;
+  $("native-reasoning-replay").value = a.native.reasoningReplay || "off";
+  state.replayOverrides = a.native.reasoningReplayOverrides || [];
+  showReplayHint();
   $("native-badge").textContent = state.credentials.native ? "key stored" : "no key";
   $("native-badge").className = `badge ${state.credentials.native ? "ok" : ""}`;
   $("native-key").placeholder = state.credentials.native ? "••••••• (stored; blank keeps it)" : "";
@@ -316,6 +336,7 @@ function collect() {
       model: $("native-model").value.trim() || "openai/gpt-5.2",
       timeout: num("native-timeout", 120),
       maxIterations: num("native-iterations", 20),
+      reasoningReplay: $("native-reasoning-replay").value,
     },
     audio: {
       enabled: $("audio-enabled").checked,
@@ -644,6 +665,7 @@ function renderSummary() {
     ["App name", a.app.appName],
     ["Providers", providers.length ? providers.join(", ") : "none yet: threads cannot run until one is enabled"],
     ["Native model", `${a.native.model} at ${a.native.baseUrl}`],
+    ["Reasoning replay", $("native-reasoning-replay").selectedOptions[0].textContent],
     ["Voice dictation", a.audio.enabled ? a.audio.processor : "off"],
     ["Workspaces", a.server.allowedPaths.join("\n")],
     ["Approval mode", a.server.approvalMode],
@@ -739,6 +761,7 @@ function wire() {
     part("recheck").addEventListener("click", () => refreshCli(id));
   }
   $("claude-permission").addEventListener("change", updatePermissionNote);
+  $("native-reasoning-replay").addEventListener("change", showReplayHint);
   $("agy-accept").addEventListener("change", renderAgy);
   $("agy-install").addEventListener("click", () => agyAction("install"));
   $("agy-login").addEventListener("click", () => agyAction("login"));
