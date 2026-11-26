@@ -312,7 +312,14 @@ def get_api_key() -> str:
     )
 
 
+# A local server chosen in Native Settings (native_settings.py): it needs no
+# key, and the stored Native key is never sent to it.
+NATIVE_LOCAL_ENDPOINT = False
+
+
 def native_enabled() -> bool:
+    if NATIVE_LOCAL_ENDPOINT:
+        return True
     key = get_api_key()
     stored_key = _stored_credential(credential_store.NATIVE_API_KEY)
     # Saving a Native key from Settings is itself an enable action, including
@@ -322,11 +329,10 @@ def native_enabled() -> bool:
 
 
 def api_headers() -> dict[str, str]:
-    return {
-        "Authorization": f"Bearer {get_api_key()}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if not NATIVE_LOCAL_ENDPOINT:
+        headers["Authorization"] = f"Bearer {get_api_key()}"
+    return headers
 
 
 # Snapshot retained for compatibility and startup validation; live requests

@@ -267,6 +267,14 @@ if the user should be asked about it.
   Tool-call arguments that are not a JSON object are never run: the model gets
   an `ERROR` tool result to retry, and a repeat in the same turn is shown to
   the user as an error.
+- **Native endpoint** (`backend/native_settings.py`): Native Settings stores
+  `endpoint: config` (api.base_url from YAML, OpenRouter or another hosted API)
+  or `endpoint: local` with a `base_url` (llama-server and other local servers).
+  Local saves are checked against `<base_url>/models` (id or alias), set
+  `utils.BASE_URL` and `utils.NATIVE_LOCAL_ENDPOINT` (no key needed; no
+  Authorization header, so the stored key never leaves for a local server),
+  and take the context window from the server's `meta.n_ctx`. Reset restores
+  the configured endpoint.
 - **Context accounting** (`backend/agent/history_tokens.py`): native context
   usage is the gateway's own `prompt_tokens` from the latest response (a private
   `_usage_anchor` on the last sent message) plus a local estimate of what

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 import native_settings
@@ -30,8 +32,11 @@ def get_usage_accounts(refresh: bool = False):
 
 
 class NativeSettingsRequest(BaseModel):
-    model: str = Field(min_length=1, max_length=200)
+    model: str = Field(min_length=1, max_length=500)
     providers: list[str] | str = Field(default_factory=list)
+    # "config": api.base_url from agent_config.yaml; "local": base_url below.
+    endpoint: Literal["config", "local"] = "config"
+    base_url: str = Field(default="", max_length=500)
 
 
 def _native_payload(model_info: dict | None = None) -> dict:
@@ -55,9 +60,17 @@ def get_native_settings(details: bool = False):
 @router.put("/api/native/settings")
 def update_native_settings(req: NativeSettingsRequest):
     model = req.model.strip()
-    providers = native_settings.normalize_providers(req.providers)
     model_info = None
-    if native_settings.current()["openrouter"]:
+    if req.endpoint == "local":
+        try:
+            base_url = native_settings.normalize_base_url(req.base_url)
+            native_settings.check_local(model, base_url)
+        except native_settings.EndpointError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        native_settings.save(model, [], endpoint="local", base_url=base_url)
+        return _native_saved()
+    providers = native_settings.normalize_providers(req.providers)
+    if native_settings.config_is_openrouter():
         try:
             model_info = openrouter_catalog.model_endpoints(model)
         except openrouter_catalog.CatalogError as exc:
@@ -79,6 +92,10 @@ def update_native_settings(req: NativeSettingsRequest):
         if not providers and not any(endpoint["tools"] for endpoint in model_info["endpoints"]):
             raise HTTPException(status_code=400, detail=f"No provider serves {model} with tool calling")
     native_settings.save(model, providers)
+    return _native_saved(model_info)
+
+
+def _native_saved(model_info: dict | None = None) -> dict:
     payload = _native_payload(model_info)
     web_app._manager.notify_global({
         "type": "native_settings", "model": payload["model"], "providers": payload["providers"],

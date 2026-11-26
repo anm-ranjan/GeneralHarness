@@ -186,6 +186,8 @@ export default function NativeSettings() {
   const [settings, setSettings] = useState(null)
   const [model, setModel] = useState('')
   const [providers, setProviders] = useState('')
+  const [endpoint, setEndpoint] = useState('config')
+  const [baseUrl, setBaseUrl] = useState('')
   const [info, setInfo] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -196,6 +198,8 @@ export default function NativeSettings() {
     setSettings(payload)
     setModel(payload.model || '')
     setProviders((payload.providers || []).join(', '))
+    setEndpoint(payload.endpoint || 'config')
+    if (payload.base_url) setBaseUrl(payload.base_url)
     setInfo(payload.model_info || null)
   }
 
@@ -217,9 +221,14 @@ export default function NativeSettings() {
     setError('')
     setNotice('')
     try {
-      const payload = await api('PUT', '/api/native/settings', { model: modelFromInput(model), providers })
+      const local = endpoint === 'local'
+      const payload = await api('PUT', '/api/native/settings', local
+        ? { model: model.trim(), endpoint, base_url: baseUrl }
+        : { model: modelFromInput(model), providers, endpoint })
       adopt(payload)
-      setNotice('Saved. New native requests use this model; threads that picked their own model keep it.')
+      setNotice(local
+        ? 'Saved. New native requests go to the local server, without an API key; threads that picked their own model keep it.'
+        : 'Saved. New native requests use this model; threads that picked their own model keep it.')
     } catch (err) {
       if (!isAbandonedRequest(err)) setError(err.detail || 'Could not save native settings.')
     } finally {
@@ -233,7 +242,7 @@ export default function NativeSettings() {
     setNotice('')
     try {
       adopt(await api('DELETE', '/api/native/settings'))
-      setNotice('Back to the model in agent_config.yaml.')
+      setNotice('Back to the endpoint and model in agent_config.yaml.')
     } catch (err) {
       if (!isAbandonedRequest(err)) setError(err.detail || 'Could not reset native settings.')
     } finally {
@@ -246,6 +255,7 @@ export default function NativeSettings() {
     if (!current.includes(tag)) setProviders([...current, tag].join(', '))
   }
 
+  const local = endpoint === 'local'
   const chosen = providers.split(',').map(p => p.trim()).filter(Boolean)
   const ranked = info ? rankEndpoints(info.endpoints) : []
   const shown = visibleEndpoints(ranked, chosen, showAll)
@@ -255,15 +265,43 @@ export default function NativeSettings() {
     <div className="space-y-5 max-w-2xl">
       <div className="space-y-3">
         <label className="block">
+          <span className="block text-[13px] font-bold text-text-bright">Endpoint</span>
+          <span className="block text-[12px] text-muted mb-1.5">
+            {local
+              ? 'An OpenAI-compatible server on this machine or network, such as llama-server. No API key is sent to it.'
+              : 'The api.base_url in agent_config.yaml: OpenRouter, or another hosted OpenAI-compatible API.'}
+          </span>
+          <select
+            value={endpoint}
+            onChange={e => { setEndpoint(e.target.value); setError(''); setNotice('') }}
+            disabled={busy}
+            className={selectClass}
+          >
+            <option value="config">OpenRouter / other (agent_config.yaml)</option>
+            <option value="local">Local server (llama-server and others)</option>
+          </select>
+        </label>
+        <label className="block">
           <span className="block text-[13px] font-bold text-text-bright">Model</span>
           <span className="block text-[12px] text-muted mb-1.5">
-            The OpenRouter model id, exactly as on its page, for example <code className="font-mono">openai/gpt-6.1-terra</code>. A model page URL works too.
+            {local
+              ? <>The model id the server lists at <code className="font-mono">/v1/models</code>: its <code className="font-mono">--alias</code>, or the GGUF path or name it was started with.</>
+              : <>The OpenRouter model id, exactly as on its page, for example <code className="font-mono">openai/gpt-6.1-terra</code>. A model page URL works too.</>}
           </span>
           <div className="flex items-center gap-2">
             <ProviderLogo provider="native" model={modelFromInput(model)} />
-            <input value={model} onChange={e => setModel(e.target.value)} placeholder="author/model" className={inputClass} spellCheck={false} />
+            <input value={model} onChange={e => setModel(e.target.value)} placeholder={local ? 'inkling-2-mini' : 'author/model'} className={inputClass} spellCheck={false} />
           </div>
         </label>
+        {local ? (
+          <label className="block">
+            <span className="block text-[13px] font-bold text-text-bright">Base URL</span>
+            <span className="block text-[12px] text-muted mb-1.5">
+              Where the server answers, ending before <code className="font-mono">/chat/completions</code>. From the machine running this backend: use <code className="font-mono">127.0.0.1</code> when the server runs here too.
+            </span>
+            <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="http://127.0.0.1:8081/v1" className={inputClass} spellCheck={false} />
+          </label>
+        ) : (
         <label className="block">
           <span className="block text-[13px] font-bold text-text-bright">Provider</span>
           <span className="block text-[12px] text-muted mb-1.5">
@@ -272,13 +310,14 @@ export default function NativeSettings() {
           </span>
           <input value={providers} onChange={e => setProviders(e.target.value)} placeholder="Any provider" className={inputClass} spellCheck={false} />
         </label>
-        {settings && !settings.openrouter && (
+        )}
+        {settings && !local && settings.config_openrouter === false && (
           <p className="text-[12px] text-warn">The native API is not OpenRouter, so the model is not checked and the provider is ignored.</p>
         )}
         <div className="flex items-center gap-2">
           <button
             onClick={save}
-            disabled={busy || !model.trim()}
+            disabled={busy || !model.trim() || (local && !baseUrl.trim())}
             className="px-3 py-1 text-[12px] font-medium text-accent border border-accent/30 rounded hover:bg-accent-soft transition-colors disabled:opacity-40"
           >
             {busy ? 'Checking…' : 'Check and save'}
@@ -294,13 +333,16 @@ export default function NativeSettings() {
             </button>
           )}
           <span className="text-[12px] text-faint">
-            {settings ? (settings.source === 'settings' ? 'Set here, on this host' : 'From agent_config.yaml') : ''}
+            {settings ? (settings.source === 'settings'
+              ? (settings.endpoint === 'local' ? `Local server ${settings.base_url}, set on this host` : 'Set here, on this host')
+              : 'From agent_config.yaml') : ''}
           </span>
         </div>
         {settings?.context_window > 0 && (
           <p className="text-[12px] text-muted" title={settings.context_detail}>
             Context window: <span className="text-text-default">{tokensLabel(settings.context_window)} tokens</span>
-            {settings.context_source === 'openrouter' ? `, from ${settings.context_detail}` : ', from agent_config.yaml'}.
+            {settings.context_source === 'openrouter' || settings.context_source === 'local'
+              ? `, from ${settings.context_detail}` : ', from agent_config.yaml'}.
             {' '}Compacts history at {tokensLabel(settings.compact_threshold)}.
           </p>
         )}
@@ -308,7 +350,7 @@ export default function NativeSettings() {
         {notice && <p className="text-[12px] text-ok" role="status">{notice}</p>}
       </div>
 
-      {info && (
+      {info && !local && (
         <div>
           <h4 className="text-[13px] font-bold text-text-bright">{info.name}</h4>
           <p className="text-[12px] text-muted mb-2">

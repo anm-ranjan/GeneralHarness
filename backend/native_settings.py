@@ -8,9 +8,15 @@ replace their agent_config.yaml values; it is kept apart from the model, so
 resetting one leaves the other alone. ``reasoning_replay`` there replaces
 reasoning_replay.mode; the YAML's per-model ``models:`` entries still win.
 
+The endpoint is either the configured api.base_url ("config", OpenRouter or
+another hosted API) or a local OpenAI-compatible server ("local", for example
+llama-server) given by its base URL. A local endpoint gets no API key: the
+stored Native key is never sent to it, and Native needs none.
+
 The context window follows the model and providers in effect: on OpenRouter
-it comes from the providers' listed windows, otherwise (or when OpenRouter
-cannot be reached) from memory.context_limit_tokens in agent_config.yaml.
+it comes from the providers' listed windows, on a local server from the n_ctx
+its /models lists, otherwise (or when the lookup fails) from
+memory.context_limit_tokens in agent_config.yaml.
 """
 from __future__ import annotations
 
@@ -18,6 +24,10 @@ import json
 import os
 import threading
 from pathlib import Path
+
+from urllib.parse import urlparse
+
+import requests
 
 import openrouter_catalog
 import utils
@@ -32,7 +42,12 @@ _CONFIG_DEFAULTS = {
     "API_PROVIDER": utils.API_PROVIDER,
     "CONTEXT_LIMIT_TOKENS": utils.CONTEXT_LIMIT_TOKENS,
     "COMPACT_THRESHOLD_TOKENS": utils.COMPACT_THRESHOLD_TOKENS,
+    "BASE_URL": utils.BASE_URL,
 }
+ENDPOINTS = ("config", "local")
+_LOCAL_TIMEOUT = 5
+# Whether BASE_URL currently holds a local endpoint set here.
+_endpoint_state = {"local": False}
 # Agent-loop settings: key -> (utils attribute, kind, minimum, maximum).
 # Each is read from utils when it is used, so a save applies to the next turn.
 # For the two nudges 0 turns them off; 0 images per request sends none.
@@ -92,11 +107,63 @@ def _write_file(data: dict) -> None:
     os.replace(temporary, path)
 
 
+class EndpointError(ValueError):
+    pass
+
+
+def normalize_base_url(value) -> str:
+    """``http://host:8081/v1/`` or a pasted ``.../chat/completions`` URL -> base URL."""
+    text = str(value or "").strip().rstrip("/")
+    if text.endswith("/chat/completions"):
+        text = text[: -len("/chat/completions")].rstrip("/")
+    parsed = urlparse(text)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise EndpointError("Enter the server's base URL, for example http://127.0.0.1:8081/v1")
+    return text
+
+
 def load() -> dict:
     data = _read_file()
     if not isinstance(data.get("model"), str) or not data["model"].strip():
         return {}
+    if data.get("endpoint") == "local":
+        try:
+            base_url = normalize_base_url(data.get("base_url"))
+        except EndpointError:
+            return {}  # a hand-edited bad URL: back to the configuration
+        return {"model": data["model"].strip(), "providers": [], "endpoint": "local", "base_url": base_url}
     return {"model": data["model"].strip(), "providers": normalize_providers(data.get("providers"))}
+
+
+def _local_model_entry(models: dict, model: str):
+    entries = [entry for entry in (models.get("data") or []) if isinstance(entry, dict)]
+    for entry in entries:
+        if model == entry.get("id") or model in (entry.get("aliases") or []):
+            return entry
+    return None
+
+
+def local_models(base_url: str) -> dict:
+    """GET <base_url>/models of a local server; raises EndpointError when unreachable."""
+    try:
+        response = requests.get(f"{base_url}/models", timeout=_LOCAL_TIMEOUT)
+        response.raise_for_status()
+        data = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise EndpointError(f"No OpenAI-compatible server answered at {base_url}/models ({exc})") from exc
+    if not isinstance(data, dict):
+        raise EndpointError(f"{base_url}/models did not return a model list")
+    return data
+
+
+def check_local(model: str, base_url: str) -> dict:
+    """The server's entry for model; raises EndpointError naming what it serves."""
+    models = local_models(base_url)
+    entry = _local_model_entry(models, model)
+    if entry is None:
+        served = [str(e.get("id")) for e in models.get("data") or [] if isinstance(e, dict) and e.get("id")]
+        raise EndpointError(f"{base_url} does not serve '{model}'. It serves: {', '.join(served) or 'nothing'}")
+    return entry
 
 
 class AgentSettingError(ValueError):
@@ -148,6 +215,7 @@ def _apply_agent(overrides: dict) -> None:
 
 
 def _apply(settings: dict) -> None:
+    local = settings.get("endpoint") == "local"
     if settings:
         model = settings["model"]
         utils.MODEL = utils.READ_MODEL = utils.WRITE_MODEL = utils.SUMMARY_MODEL = model
@@ -155,7 +223,14 @@ def _apply(settings: dict) -> None:
         utils.API_PROVIDER = providers or None
     else:
         for name, value in _CONFIG_DEFAULTS.items():
-            setattr(utils, name, value)
+            if name != "BASE_URL":
+                setattr(utils, name, value)
+    if local:
+        utils.BASE_URL = settings["base_url"]
+    elif _endpoint_state["local"]:
+        utils.BASE_URL = _CONFIG_DEFAULTS["BASE_URL"]
+    _endpoint_state["local"] = local
+    utils.NATIVE_LOCAL_ENDPOINT = local
 
 
 def _is_openrouter() -> bool:
@@ -171,9 +246,27 @@ def _set_context(window: int | None, source: str, detail: str) -> None:
     _context.update(source=source, detail=detail)
 
 
+def _resolve_local_context(model: str, base_url: str) -> None:
+    try:
+        entry = _local_model_entry(local_models(base_url), model)
+    except EndpointError as exc:
+        _set_context(None, "config", f"agent_config.yaml (the local server could not be asked: {exc})")
+        return
+    if utils.MODEL != model or utils.BASE_URL != base_url:
+        return
+    n_ctx = ((entry or {}).get("meta") or {}).get("n_ctx")
+    if isinstance(n_ctx, int) and n_ctx > 0:
+        _set_context(n_ctx, "local", f"{base_url} (n_ctx {n_ctx})")
+    else:
+        _set_context(None, "config", "agent_config.yaml (the local server reports no n_ctx for it)")
+
+
 def resolve_context_window() -> None:
     """Set the context limit (and cap the compaction point) for the model in effect."""
     model = utils.MODEL
+    if _endpoint_state["local"]:
+        _resolve_local_context(model, utils.BASE_URL)
+        return
     provider = utils.API_PROVIDER
     providers = normalize_providers(provider if isinstance(provider, (list, tuple)) else [provider] if provider else [])
     if not _is_openrouter():
@@ -205,10 +298,16 @@ def apply_saved() -> dict:
         return settings
 
 
-def save(model: str, providers: list[str]) -> dict:
-    settings = {"model": model.strip(), "providers": normalize_providers(providers)}
+def save(model: str, providers: list[str], endpoint: str = "config", base_url: str = "") -> dict:
+    if endpoint == "local":
+        settings = {"model": model.strip(), "providers": [], "endpoint": "local",
+                    "base_url": normalize_base_url(base_url)}
+    else:
+        settings = {"model": model.strip(), "providers": normalize_providers(providers)}
     with _lock:
         data = _read_file()
+        for key in ("endpoint", "base_url"):
+            data.pop(key, None)
         data.update(settings)
         _write_file(data)
         _apply(settings)
@@ -216,11 +315,17 @@ def save(model: str, providers: list[str]) -> dict:
     return settings
 
 
+def config_is_openrouter() -> bool:
+    """Whether agent_config.yaml's own api.base_url is OpenRouter."""
+    return utils.build_openrouter_provider_preferences(
+        base_url=_CONFIG_DEFAULTS["BASE_URL"], configured_provider=["x"]) is not None
+
+
 def clear() -> None:
     with _lock:
         data = _read_file()
-        data.pop("model", None)
-        data.pop("providers", None)
+        for key in ("model", "providers", "endpoint", "base_url"):
+            data.pop(key, None)
         _write_file(data)
         _apply({})
     resolve_context_window()
@@ -263,9 +368,14 @@ def current() -> dict:
     """Effective native model and providers, and where they come from."""
     saved = load()
     provider = utils.API_PROVIDER
+    local = saved.get("endpoint") == "local"
     return {
         "model": utils.MODEL,
-        "providers": normalize_providers(provider if isinstance(provider, (list, tuple)) else [provider] if provider else []),
+        "providers": [] if local else normalize_providers(
+            provider if isinstance(provider, (list, tuple)) else [provider] if provider else []),
+        "endpoint": "local" if local else "config",
+        "base_url": saved.get("base_url", "") if local else "",
+        "config_openrouter": config_is_openrouter(),
         "source": "settings" if saved else "config",
         "config_model": _CONFIG_DEFAULTS["MODEL"],
         "openrouter": _is_openrouter(),

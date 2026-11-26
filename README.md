@@ -422,6 +422,12 @@ second store under its own application-data directory.
 
 The native provider needs `api.base_url` and a Native key in this host's encrypted
 credential file. `MYHARNESS_API_KEY` remains a higher-priority environment override.
+Settings → Native Settings → Endpoint can instead point Native at a local
+OpenAI-compatible server such as llama-server: choose *Local server*, enter the
+model id its `/v1/models` lists (the `--alias` or GGUF name) and its base URL
+(for example `http://127.0.0.1:8081/v1`). It is checked against the server, needs
+no key (the stored key is never sent there), takes the context window from the
+server's `n_ctx`, and is kept per host in `data/native_settings.json`.
 The native provider also has per-session thinking levels (`low`, `medium`, `high`),
 set from the model menu or with `/thinking`. They are sent as OpenRouter's unified
 `reasoning.effort` (to OpenRouter endpoints only); a session starts at `high`
