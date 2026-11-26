@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from pathlib import Path
 
@@ -170,6 +171,66 @@ class AgentSettingError(ValueError):
     pass
 
 
+_VARIABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+REASONING_MAP_KEYS = ("variable", "low", "medium", "high")
+
+
+def normalize_reasoning_map(values) -> dict:
+    """Validated reasoning map (all four keys); raises AgentSettingError."""
+    if not isinstance(values, dict):
+        raise AgentSettingError("The reasoning map must be an object")
+    unknown = sorted(set(values) - set(REASONING_MAP_KEYS))
+    if unknown:
+        raise AgentSettingError(f"Unknown reasoning map key '{unknown[0]}'")
+    result = {}
+    for key in REASONING_MAP_KEYS:
+        value = values.get(key, utils.REASONING_MAP_DEFAULT[key])
+        if not isinstance(value, str):
+            raise AgentSettingError(f"{key} must be text")
+        value = value.strip()
+        if len(value) > 64:
+            raise AgentSettingError(f"{key} must be at most 64 characters")
+        result[key] = value
+    if not _VARIABLE_RE.match(result["variable"]):
+        raise AgentSettingError("The template variable must be a name such as reasoning_effort")
+    return result
+
+
+def load_reasoning_map() -> dict:
+    """The saved map, or the Inkling 2 defaults (also for a hand-edited bad entry)."""
+    saved = _read_file().get("reasoning_map")
+    try:
+        return normalize_reasoning_map(saved) if isinstance(saved, dict) else dict(utils.REASONING_MAP_DEFAULT)
+    except AgentSettingError:
+        return dict(utils.REASONING_MAP_DEFAULT)
+
+
+def save_reasoning_map(values: dict) -> dict:
+    """Replace the map; the defaults are not stored, so reset follows them."""
+    mapping = normalize_reasoning_map(values)
+    with _lock:
+        data = _read_file()
+        if mapping == utils.REASONING_MAP_DEFAULT:
+            data.pop("reasoning_map", None)
+        else:
+            data["reasoning_map"] = mapping
+        _write_file(data)
+        utils.LOCAL_REASONING_MAP = mapping
+    return current_reasoning_map()
+
+
+def clear_reasoning_map() -> dict:
+    return save_reasoning_map(dict(utils.REASONING_MAP_DEFAULT))
+
+
+def current_reasoning_map() -> dict:
+    return {
+        "values": dict(utils.LOCAL_REASONING_MAP),
+        "defaults": dict(utils.REASONING_MAP_DEFAULT),
+        "custom": utils.LOCAL_REASONING_MAP != utils.REASONING_MAP_DEFAULT,
+    }
+
+
 def normalize_agent(values) -> dict:
     """Validated agent-loop overrides; raises AgentSettingError on a bad value."""
     if not isinstance(values, dict):
@@ -295,6 +356,7 @@ def apply_saved() -> dict:
         settings = load()
         _apply(settings)
         _apply_agent(load_agent())
+        utils.LOCAL_REASONING_MAP = load_reasoning_map()
         return settings
 
 
@@ -384,4 +446,5 @@ def current() -> dict:
         "context_source": _context["source"],
         "context_detail": _context["detail"],
         "agent": current_agent(),
+        "reasoning_map": current_reasoning_map(),
     }

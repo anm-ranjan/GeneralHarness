@@ -141,5 +141,71 @@ class LocalEndpointTests(unittest.TestCase):
         self.assertFalse(utils.NATIVE_LOCAL_ENDPOINT)
 
 
+class ReasoningMapTests(unittest.TestCase):
+    """Native Settings -> Reasoning map: thinking level -> chat-template variable."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        agent_attrs = [attr for attr, *_ in native_settings.AGENT_FIELDS.values()]
+        names = ["DATA_DIR", "LOCAL_REASONING_MAP", "NATIVE_LOCAL_ENDPOINT", "BASE_URL", *agent_attrs]
+        self.saved = {name: getattr(utils, name) for name in names}
+        self.saved_state = dict(native_settings._endpoint_state)
+        utils.DATA_DIR = self.tmp.name
+        utils.LOCAL_REASONING_MAP = dict(utils.REASONING_MAP_DEFAULT)
+
+    def tearDown(self):
+        for name, value in self.saved.items():
+            setattr(utils, name, value)
+        native_settings._endpoint_state.update(self.saved_state)
+        self.tmp.cleanup()
+
+    def test_defaults_are_inkling_2_and_only_reach_a_local_endpoint(self):
+        self.assertEqual(utils.REASONING_MAP_DEFAULT,
+                         {"variable": "reasoning_effort", "low": "low", "medium": "medium", "high": "high"})
+        utils.NATIVE_LOCAL_ENDPOINT = True
+        self.assertEqual(utils.build_local_reasoning_kwargs("medium"), {"reasoning_effort": "medium"})
+        utils.NATIVE_LOCAL_ENDPOINT = False
+        self.assertIsNone(utils.build_local_reasoning_kwargs("medium"))
+
+    def test_on_off_map_numbers_and_empty_values(self):
+        utils.NATIVE_LOCAL_ENDPOINT = True
+        native_settings.save_reasoning_map({"variable": "enable_thinking", "low": "false", "medium": "true", "high": ""})
+        self.assertEqual(utils.build_local_reasoning_kwargs("low"), {"enable_thinking": False})
+        self.assertEqual(utils.build_local_reasoning_kwargs("medium"), {"enable_thinking": True})
+        self.assertIsNone(utils.build_local_reasoning_kwargs("high"))  # empty: template default
+        native_settings.save_reasoning_map({"variable": "reasoning_effort", "low": "0.2", "medium": "none", "high": "nan"})
+        self.assertEqual(utils.build_local_reasoning_kwargs("low"), {"reasoning_effort": 0.2})
+        self.assertEqual(utils.build_local_reasoning_kwargs("medium"), {"reasoning_effort": "none"})
+        self.assertEqual(utils.build_local_reasoning_kwargs("high"), {"reasoning_effort": "nan"})  # never a NaN number
+        # The map never touches OpenRouter.
+        utils.NATIVE_LOCAL_ENDPOINT = False
+        utils.BASE_URL = "https://openrouter.ai/api/v1"
+        self.assertIsNone(utils.build_local_reasoning_kwargs("low"))
+        self.assertEqual(utils.build_openrouter_reasoning("low"), {"effort": "low"})
+
+    def test_saved_map_survives_a_restart_and_reset_drops_it(self):
+        path = Path(self.tmp.name) / "native_settings.json"
+        payload = usage_routes.update_native_reasoning_map(usage_routes.NativeReasoningMapRequest(
+            values={"variable": "thinking", "low": "false", "medium": "true", "high": "true"}))
+        self.assertTrue(payload["custom"])
+        self.assertEqual(json.loads(path.read_text())["reasoning_map"]["variable"], "thinking")
+        utils.LOCAL_REASONING_MAP = dict(utils.REASONING_MAP_DEFAULT)
+        native_settings.apply_saved()
+        self.assertEqual(utils.LOCAL_REASONING_MAP["variable"], "thinking")
+        self.assertEqual(native_settings.current()["reasoning_map"]["values"]["variable"], "thinking")
+        payload = usage_routes.reset_native_reasoning_map()
+        self.assertFalse(payload["custom"])
+        self.assertEqual(utils.LOCAL_REASONING_MAP, utils.REASONING_MAP_DEFAULT)
+        self.assertFalse(path.exists())  # defaults are not stored
+
+    def test_bad_maps_are_rejected_and_bad_files_fall_back(self):
+        for values in ({"variable": "1abc"}, {"variable": "a-b"}, {"variable": ""}, {"low": 1},
+                       {"extra": "x"}, {"low": "x" * 65}):
+            with self.assertRaises(HTTPException):
+                usage_routes.update_native_reasoning_map(usage_routes.NativeReasoningMapRequest(values=values))
+        (Path(self.tmp.name) / "native_settings.json").write_text('{"reasoning_map": {"variable": "bad name"}}')
+        self.assertEqual(native_settings.load_reasoning_map(), utils.REASONING_MAP_DEFAULT)
+
+
 if __name__ == "__main__":
     unittest.main()

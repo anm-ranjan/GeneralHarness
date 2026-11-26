@@ -7,6 +7,7 @@ import html
 import http.client
 import ipaddress
 import json
+import math
 import os
 import re
 import socket
@@ -366,19 +367,49 @@ def build_openrouter_reasoning(effort, base_url: str | None = None) -> dict | No
     return {"effort": level}
 
 
+# Reasoning map: which chat-template variable a thinking level sets on a local
+# server, and to what. The defaults suit Inkling 2, whose template turns
+# low/medium/high into effort 0.2/0.7/0.9. Native Settings replaces it at
+# runtime (native_settings.save_reasoning_map). An empty value sends nothing.
+REASONING_MAP_DEFAULT = {"variable": "reasoning_effort", "low": "low", "medium": "medium", "high": "high"}
+LOCAL_REASONING_MAP = dict(REASONING_MAP_DEFAULT)
+
+
+def template_value(text: str):
+    """A map value as the template should see it: true/false, a number, or text."""
+    value = str(text).strip()
+    if value.lower() in ("true", "false"):
+        return value.lower() == "true"
+    for kind in (int, float):
+        try:
+            number = kind(value)
+        except ValueError:
+            continue
+        if math.isfinite(number):  # "nan"/"inf" stay text; JSON has no such numbers
+            return number
+    return value
+
+
 def build_local_reasoning_kwargs(effort) -> dict | None:
     """``chat_template_kwargs`` for a thinking level on a local server, or None.
 
-    Only for the local endpoint chosen in Native Settings (llama-server and
-    the like read it as the chat template's reasoning_effort variable). The
-    configured endpoint, OpenRouter included, never receives it: OpenRouter
-    gets build_openrouter_reasoning instead. Unset or unknown levels send
-    nothing, so the template keeps its own default.
+    Only for the local endpoint chosen in Native Settings; the variable and
+    values come from LOCAL_REASONING_MAP. The configured endpoint, OpenRouter
+    included, never receives it: OpenRouter gets build_openrouter_reasoning
+    instead. Unset or unknown levels, and empty map values, send nothing, so
+    the template keeps its own default.
     """
     if not NATIVE_LOCAL_ENDPOINT:
         return None
     level = str(effort or "").strip().lower()
-    return {"reasoning_effort": level} if level in NATIVE_REASONING_EFFORTS else None
+    if level not in NATIVE_REASONING_EFFORTS:
+        return None
+    mapping = LOCAL_REASONING_MAP if isinstance(LOCAL_REASONING_MAP, dict) else REASONING_MAP_DEFAULT
+    variable = str(mapping.get("variable") or "").strip()
+    raw = str(mapping.get(level) or "").strip()
+    if not variable or not raw:
+        return None
+    return {variable: template_value(raw)}
 
 
 def question_tool_rule(tool: str, batching: str = "") -> str:

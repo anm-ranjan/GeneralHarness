@@ -4,6 +4,7 @@ import { useApp } from '../../context/AppContext'
 import ProviderLogo from '../ProviderLogo'
 import { modelFromInput, perMillion, rankEndpoints, visibleEndpoints, TOP_PROVIDERS } from '../../nativeModel'
 import { REPLAY_OPTIONS, replayHint, replayModeName } from '../../reasoningReplay'
+import { MAP_LEVELS, VARIABLE_RE, mapPreview } from '../../reasoningMap'
 
 // 400000 -> "400k", 1048576 -> "1.05M": context windows read in round units.
 function tokensLabel(count) {
@@ -171,6 +172,104 @@ function AgentSettings({ agent, onSaved }) {
       </div>
       {invalid && changed && (
         <p className="text-[12px] text-warn">{invalid.label} must be a whole number from {agent.limits[invalid.key].min} to {agent.limits[invalid.key].max}.</p>
+      )}
+      {error && <p className="text-[12px] text-danger" role="alert">{error}</p>}
+      {notice && <p className="text-[12px] text-ok" role="status">{notice}</p>}
+    </div>
+  )
+}
+
+// Local endpoint only: which chat-template variable each thinking level sets.
+function ReasoningMapSettings({ map, onSaved }) {
+  const [draft, setDraft] = useState(map.values)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  useEffect(() => { setDraft(map.values) }, [map])
+
+  const keys = ['variable', ...MAP_LEVELS]
+  const changed = keys.some(k => (draft[k] ?? '') !== (map.values[k] ?? ''))
+  const badVariable = !VARIABLE_RE.test(String(draft.variable ?? '').trim())
+
+  async function send(method, body) {
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      onSaved(await api(method, '/api/native/reasoning-map', body))
+      setNotice(method === 'DELETE' ? 'Back to the Inkling 2 defaults.' : 'Saved. Applies from the next request.')
+    } catch (err) {
+      if (!isAbandonedRequest(err)) setError(err.detail || 'Could not save the reasoning map.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3 border-t border-line pt-5">
+      <div>
+        <h4 className="text-[13px] font-bold text-text-bright">Reasoning map</h4>
+        <p className="text-[12px] text-muted leading-snug">
+          What the thinking level (low, medium, high; <code className="font-mono">/thinking</code> and the model menu) sends to the local server, as a chat-template variable.
+          The defaults suit Inkling 2, whose template turns low, medium and high into effort 0.2, 0.7 and 0.9 (it also accepts <code className="font-mono">none</code> or a number from 0 to 0.99).
+          For a template with an on/off switch, such as Qwen3, use <code className="font-mono">enable_thinking</code> with <code className="font-mono">false</code>, <code className="font-mono">true</code>, <code className="font-mono">true</code>.
+          <code className="font-mono"> true</code>/<code className="font-mono">false</code> and numbers are sent as such; an empty value sends nothing, so the template keeps its default.
+          Changing the level in a thread makes its next request re-read the whole thread once.
+        </p>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3">
+        {keys.map(key => (
+          <label key={key} className="block">
+            <span className="flex items-baseline gap-1.5 text-[12.5px] font-medium text-text-bright">
+              {key === 'variable' ? 'Template variable' : key[0].toUpperCase() + key.slice(1)}
+              {(draft[key] ?? '') !== map.defaults[key] && (
+                <span className="text-[11px] font-normal text-faint">Inkling 2: {map.defaults[key]}</span>
+              )}
+            </span>
+            <input
+              value={draft[key] ?? ''}
+              onChange={e => setDraft({ ...draft, [key]: e.target.value })}
+              disabled={busy}
+              placeholder={key === 'variable' ? 'reasoning_effort' : 'empty: send nothing'}
+              spellCheck={false}
+              className={`${inputClass} mt-1`}
+            />
+          </label>
+        ))}
+      </div>
+      <div className="text-[11.5px] text-muted font-mono leading-snug">
+        {mapPreview(draft).map(line => <div key={line}>{line}</div>)}
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => send('PUT', { values: draft })}
+          disabled={busy || !changed || badVariable}
+          className="px-3 py-1 text-[12px] font-medium text-accent border border-accent/30 rounded hover:bg-accent-soft transition-colors disabled:opacity-40"
+        >
+          {busy ? 'Saving…' : 'Save reasoning map'}
+        </button>
+        {map.custom && (
+          <button
+            onClick={() => send('DELETE')}
+            disabled={busy}
+            className="px-3 py-1 text-[12px] text-muted border border-line rounded hover:text-text-bright hover:border-line-hover transition-colors disabled:opacity-40"
+          >
+            Reset to Inkling 2 defaults
+          </button>
+        )}
+        {changed && (
+          <button
+            onClick={() => setDraft(map.values)}
+            disabled={busy}
+            className="px-2 py-1 text-[12px] text-faint hover:text-text-bright transition-colors"
+          >
+            Discard
+          </button>
+        )}
+      </div>
+      {badVariable && changed && (
+        <p className="text-[12px] text-warn">The template variable must be a name such as reasoning_effort (letters, digits, _).</p>
       )}
       {error && <p className="text-[12px] text-danger" role="alert">{error}</p>}
       {notice && <p className="text-[12px] text-ok" role="status">{notice}</p>}
@@ -411,6 +510,13 @@ export default function NativeSettings() {
 
       {settings?.agent && (
         <AgentSettings agent={settings.agent} onSaved={agent => setSettings(prev => ({ ...prev, agent }))} />
+      )}
+
+      {settings?.endpoint === 'local' && settings.reasoning_map && (
+        <ReasoningMapSettings
+          map={settings.reasoning_map}
+          onSaved={reasoningMap => setSettings(prev => ({ ...prev, reasoning_map: reasoningMap }))}
+        />
       )}
     </div>
   )

@@ -128,3 +128,21 @@ def update_native_agent_settings(req: NativeAgentSettingsRequest):
 @router.delete("/api/native/agent-settings")
 def reset_native_agent_settings():
     return native_settings.clear_agent()
+
+
+class NativeReasoningMapRequest(BaseModel):
+    values: dict = Field(default_factory=dict)
+
+
+@router.put("/api/native/reasoning-map")
+def update_native_reasoning_map(req: NativeReasoningMapRequest):
+    """Thinking level -> chat-template variable for a local endpoint."""
+    try:
+        return native_settings.save_reasoning_map(req.values)
+    except native_settings.AgentSettingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/api/native/reasoning-map")
+def reset_native_reasoning_map():
+    return native_settings.clear_reasoning_map()

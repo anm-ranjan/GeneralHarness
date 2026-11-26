@@ -434,7 +434,11 @@ set from the model menu or with `/thinking`. They are sent as OpenRouter's unifi
 (`agent.native_reasoning_effort`; blank sends nothing and leaves each model on its own default).
 On a local endpoint (Native Settings → Endpoint → Local server) the same level is
 sent as `chat_template_kwargs.reasoning_effort` instead, which llama-server passes
-to the chat template; OpenRouter never receives that field. The level sits near
+to the chat template; OpenRouter never receives that field. The variable and the
+value per level are set under Native Settings → Reasoning map, shown only for a
+local endpoint; the defaults suit Inkling 2 (`reasoning_effort` = `low` /
+`medium` / `high`), and an on/off template such as Qwen3 can use
+`enable_thinking` = `false` / `true` / `true`. The level sits near
 the start of the prompt, so changing it mid-thread makes the next request
 re-read the whole thread once.
 Whether a thinking model's own plain-text reasoning (`reasoning_content`,

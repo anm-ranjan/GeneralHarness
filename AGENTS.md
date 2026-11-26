@@ -276,7 +276,12 @@ if the user should be asked about it.
   and take the context window from the server's `meta.n_ctx`. Reset restores
   the configured endpoint. The thinking level goes to a local endpoint as
   `chat_template_kwargs.reasoning_effort` (`utils.build_local_reasoning_kwargs`);
-  OpenRouter keeps `reasoning.effort` and never gets `chat_template_kwargs`.
+  OpenRouter keeps `reasoning.effort` and never gets `chat_template_kwargs`. The variable and per-level
+  values are `utils.LOCAL_REASONING_MAP` (Inkling 2 defaults in
+  `REASONING_MAP_DEFAULT`; `true`/`false`/numbers sent as such, empty sends
+  nothing), set from Native Settings → Reasoning map (local endpoint only;
+  `/api/native/reasoning-map`, stored in `native_settings.json` only when it
+  differs from the defaults).
 - **Context accounting** (`backend/agent/history_tokens.py`): native context
   usage is the gateway's own `prompt_tokens` from the latest response (a private
   `_usage_anchor` on the last sent message) plus a local estimate of what
