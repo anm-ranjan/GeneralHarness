@@ -19,6 +19,8 @@ args = sys.argv[1:]
 NO_AUTH = "--no-auth" in args
 NO_RESUME = "--no-resume" in args  # advertise load only
 RESUME_FAILS = "--resume-fails" in args  # resume errors, load works
+NO_AUTO = "--no-auto" in args  # refuse mode=auto, like agy without a terminal sandbox
+HIDE_AUTO = "--hide-auto" in args  # list the modes, leaving auto out
 LOG = args[args.index("--log") + 1] if "--log" in args else ""
 write_lock = threading.Lock()
 sessions: dict[str, dict] = {}
@@ -54,7 +56,8 @@ def options(state):
     return [
         {"id": "model", "currentValue": state["model"], "options": []},
         {"id": "thought_level", "currentValue": state["thought_level"], "options": []},
-        {"id": "mode", "currentValue": state["mode"], "options": []},
+        {"id": "mode", "currentValue": state["mode"],
+         "options": [{"value": m} for m in ("default", "accept-edits", "plan")] if HIDE_AUTO else []},
     ]
 
 
@@ -214,6 +217,9 @@ def handle(message):
                        "currentModelId": "gemini-4-neon-high"},
             "configOptions": options(sessions[session_id]),
         }})
+    elif method == "session/set_config_option" and NO_AUTO and params.get("value") == "auto":
+        send({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32603, "message":
+              "Auto mode is not available: it needs the OS terminal sandbox and may not be rolled out to you yet"}})
     elif method == "session/set_config_option":
         state = sessions[params["sessionId"]]
         state[params["configId"]] = params["value"]

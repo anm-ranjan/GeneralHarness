@@ -50,6 +50,9 @@ FORBIDDEN_ARGS = ("--dangerously-skip-permissions",)
 DEFAULT_HIDDEN_COMMANDS = ("schedule", "swarm", "teamwork", "boost", "run-workflow")
 EFFORT_SUFFIXES = ("low", "medium", "high", "xhigh")
 APPROVAL_TO_MODE = {"always_ask": "default", "shell_only": "accept-edits", "auto_approve": "auto"}
+# What to try when the agent lacks a mode, e.g. Antigravity's Auto needs the
+# OS terminal sandbox, which Ubuntu's AppArmor blocks by default.
+MODE_FALLBACK = {"auto": "accept-edits", "accept-edits": "default"}
 _LINE_LIMIT = 64 * 1024 * 1024
 # The question tool MyHarness gives every ACP session (acp_ask_mcp.py). Agents
 # name MCP tools mcp_<server>_<tool>; this one never needs the user's approval.
@@ -830,6 +833,17 @@ def _option_values(config_options: list[dict[str, Any]]) -> dict[str, str]:
     }
 
 
+def _offered_values(config_options: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Each option's choosable values; options that list none are left out."""
+    offered = {}
+    for option in config_options or []:
+        if isinstance(option, dict) and option.get("id") and option.get("options"):
+            offered[str(option["id"])] = [
+                str(choice.get("value")) for choice in option["options"] if isinstance(choice, dict)
+            ]
+    return offered
+
+
 # ── provider ────────────────────────────────────────────────────────
 
 
@@ -921,6 +935,7 @@ class AcpProvider:
             elif reopened.get("configOptions"):
                 # What the agent really has now, so only real changes are sent.
                 state["applied"] = _option_values(reopened["configOptions"])
+                state["offered"] = _offered_values(reopened["configOptions"])
 
         try:
             if not session_id:
@@ -939,6 +954,7 @@ class AcpProvider:
                     "session_id": session_id,
                     "cwd": str(workspace_path),
                     "applied": _option_values(result.get("configOptions") or []),
+                    "offered": _offered_values(result.get("configOptions") or []),
                 }
         except AcpError as exc:
             if is_auth_error(exc):
@@ -965,18 +981,40 @@ class AcpProvider:
             "mode": APPROVAL_TO_MODE.get(approval_mode, agent.mode or "default"),
         }
         applied = dict(state.get("applied") or {})
+        offered = state.get("offered") or {}
+        unavailable = set(state.get("unavailable_modes") or [])
         for config_id, value in desired.items():
-            if not value or applied.get(config_id) == value:
-                continue
-            try:
-                result = await connection.transport.request("session/set_config_option", {
-                    "sessionId": session_id, "configId": config_id, "value": value,
-                }, timeout=60)
-                applied.update(_option_values(result.get("configOptions") or []) or {config_id: value})
-            except AcpError as exc:
-                ui.show_error(f"{agent.label} did not accept {config_id} = {value}: {exc}")
-                ui.show_agent_finished("error")
-                return
+            wanted = value
+            if config_id == "mode":
+                # Step down past modes this agent lacks here or refused before.
+                while value in MODE_FALLBACK and (
+                    value in unavailable or ("mode" in offered and value not in offered["mode"])
+                ):
+                    unavailable.add(value)
+                    value = MODE_FALLBACK[value]
+            while value and applied.get(config_id) != value:
+                try:
+                    result = await connection.transport.request("session/set_config_option", {
+                        "sessionId": session_id, "configId": config_id, "value": value,
+                    }, timeout=60)
+                    applied.update(_option_values(result.get("configOptions") or []) or {config_id: value})
+                    break
+                except AcpError as exc:
+                    if config_id == "mode" and value in MODE_FALLBACK:
+                        unavailable.add(value)
+                        value = MODE_FALLBACK[value]
+                        continue
+                    ui.show_error(f"{agent.label} did not accept {config_id} = {value}: {exc}")
+                    ui.show_agent_finished("error")
+                    return
+            if config_id == "mode" and value != wanted and state.get("mode_notice") != f"{wanted}>{value}":
+                state["mode_notice"] = f"{wanted}>{value}"
+                ui.show_status(
+                    f"{agent.label} does not offer {wanted} mode here (on Linux it needs the terminal "
+                    f"sandbox, which AppArmor may block); using {value} instead."
+                )
+        if unavailable:
+            state["unavailable_modes"] = sorted(unavailable)
         state["applied"] = applied
         meta.acp_state = state
         store.update_session(meta)

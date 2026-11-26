@@ -254,6 +254,32 @@ class ProviderRunTests(unittest.TestCase):
         self.assertEqual(len(self.received("session/new")), 1)
         self.assertEqual(len(self.received("session/set_config_option")), 2)
 
+    def test_refused_auto_mode_falls_back_to_accept_edits(self):
+        runtime, agent, meta, store = self.runtime(), self.agent("--no-auto"), make_meta(), FakeStore()
+        ui = self.run_turn(runtime, agent, meta, "hi", store=store, approval_mode="auto_approve")
+        self.assertEqual(ui.errors, [])
+        self.assertEqual(ui.finished, ["completed"])
+        self.assertEqual(meta.acp_state["applied"]["mode"], "accept-edits")
+        self.assertEqual(meta.acp_state["unavailable_modes"], ["auto"])
+        self.assertTrue(any("using accept-edits" in s for s in ui.status))
+        tried = [row["params"]["value"] for row in self.received("session/set_config_option")
+                 if row["params"]["configId"] == "mode"]
+        self.assertEqual(tried, ["auto", "accept-edits"])
+        # The next turn does not ask for auto again, nor repeat the notice.
+        ui = self.run_turn(runtime, agent, meta, "again", store=store, approval_mode="auto_approve")
+        self.assertEqual(ui.errors, [])
+        self.assertFalse(any("using accept-edits" in s for s in ui.status))
+        self.assertEqual(len(self.received("session/set_config_option")), 2)
+
+    def test_unoffered_auto_mode_is_never_sent(self):
+        runtime, meta = self.runtime(), make_meta()
+        ui = self.run_turn(runtime, self.agent("--hide-auto"), meta, "hi", approval_mode="auto_approve")
+        self.assertEqual(ui.errors, [])
+        self.assertEqual(meta.acp_state["applied"]["mode"], "accept-edits")
+        tried = [row["params"]["value"] for row in self.received("session/set_config_option")
+                 if row["params"]["configId"] == "mode"]
+        self.assertEqual(tried, ["accept-edits"])
+
     def test_approved_edit_reports_file_change(self):
         runtime, meta = self.runtime(), make_meta()
         ui = self.run_turn(runtime, self.agent(), meta, "please edit", ui=FakeUI(approve=True))
