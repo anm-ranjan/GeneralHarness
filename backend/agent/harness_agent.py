@@ -598,6 +598,12 @@ def call_api(
         reasoning = utils.build_openrouter_reasoning(reasoning_effort)
         if reasoning:
             payload["reasoning"] = reasoning
+    # A local server (Native Settings -> Endpoint) gets the same level as a
+    # chat-template variable instead; OpenRouter never receives this field.
+    local_level = _run_setting(ui, "reasoning_effort", utils.NATIVE_REASONING_DEFAULT) if model is None else reasoning_effort
+    template_kwargs = utils.build_local_reasoning_kwargs(local_level)
+    if template_kwargs:
+        payload["chat_template_kwargs"] = template_kwargs
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"

@@ -274,7 +274,9 @@ if the user should be asked about it.
   `utils.BASE_URL` and `utils.NATIVE_LOCAL_ENDPOINT` (no key needed; no
   Authorization header, so the stored key never leaves for a local server),
   and take the context window from the server's `meta.n_ctx`. Reset restores
-  the configured endpoint.
+  the configured endpoint. The thinking level goes to a local endpoint as
+  `chat_template_kwargs.reasoning_effort` (`utils.build_local_reasoning_kwargs`);
+  OpenRouter keeps `reasoning.effort` and never gets `chat_template_kwargs`.
 - **Context accounting** (`backend/agent/history_tokens.py`): native context
   usage is the gateway's own `prompt_tokens` from the latest response (a private
   `_usage_anchor` on the last sent message) plus a local estimate of what

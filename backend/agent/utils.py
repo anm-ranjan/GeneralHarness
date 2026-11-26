@@ -366,6 +366,21 @@ def build_openrouter_reasoning(effort, base_url: str | None = None) -> dict | No
     return {"effort": level}
 
 
+def build_local_reasoning_kwargs(effort) -> dict | None:
+    """``chat_template_kwargs`` for a thinking level on a local server, or None.
+
+    Only for the local endpoint chosen in Native Settings (llama-server and
+    the like read it as the chat template's reasoning_effort variable). The
+    configured endpoint, OpenRouter included, never receives it: OpenRouter
+    gets build_openrouter_reasoning instead. Unset or unknown levels send
+    nothing, so the template keeps its own default.
+    """
+    if not NATIVE_LOCAL_ENDPOINT:
+        return None
+    level = str(effort or "").strip().lower()
+    return {"reasoning_effort": level} if level in NATIVE_REASONING_EFFORTS else None
+
+
 def question_tool_rule(tool: str, batching: str = "") -> str:
     """Instruction to ask questions through the provider's question tool.
 

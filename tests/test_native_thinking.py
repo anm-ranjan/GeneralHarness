@@ -130,5 +130,61 @@ class SettingsEndpointTests(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 400)
 
 
+class LocalEndpointThinkingTests(unittest.TestCase):
+    """The thinking level reaches a local server as chat_template_kwargs, and
+    only a local server: OpenRouter payloads stay exactly as before."""
+
+    LOCAL = "http://127.0.0.1:8081/v1"
+
+    def _payload(self, ui, base_url, local, model=None, reasoning_effort=None):
+        captured = {}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            captured.update(json)
+            raise RuntimeError("stop after capturing the payload")
+
+        import requests
+        with mock.patch.object(utils, "BASE_URL", base_url), \
+                mock.patch.object(utils, "NATIVE_LOCAL_ENDPOINT", local), \
+                mock.patch.object(utils, "API_STREAMING", False), \
+                mock.patch.object(agent.requests, "post", side_effect=fake_post), \
+                mock.patch.object(agent, "_set_api_failure"):
+            try:
+                agent.call_api([{"role": "user", "content": "hi"}], ui=ui, model=model,
+                               reasoning_effort=reasoning_effort)
+            except (RuntimeError, requests.exceptions.RequestException):
+                pass
+        return captured
+
+    def test_local_endpoint_gets_the_level_as_a_template_variable(self):
+        for level in ("low", "medium", "high"):
+            payload = self._payload(_Ui({"reasoning_effort": level}), self.LOCAL, True)
+            self.assertEqual(payload["chat_template_kwargs"], {"reasoning_effort": level})
+            self.assertNotIn("reasoning", payload)
+        # Without a session level the configured default applies, as on OpenRouter.
+        payload = self._payload(_Ui({}), self.LOCAL, True)
+        self.assertEqual(payload["chat_template_kwargs"], {"reasoning_effort": utils.NATIVE_REASONING_DEFAULT})
+
+    def test_openrouter_payload_is_unchanged(self):
+        for level in ("low", "medium", "high"):
+            payload = self._payload(_Ui({"reasoning_effort": level}), OPENROUTER, False)
+            self.assertEqual(payload["reasoning"], {"effort": level})
+            self.assertNotIn("chat_template_kwargs", payload)
+
+    def test_other_configured_endpoints_get_neither_field(self):
+        payload = self._payload(_Ui({"reasoning_effort": "low"}), "https://example.com/v1", False)
+        self.assertNotIn("chat_template_kwargs", payload)
+        self.assertNotIn("reasoning", payload)
+
+    def test_unknown_or_unset_levels_send_nothing_locally(self):
+        for level in ("xhigh", "bogus", ""):
+            payload = self._payload(_Ui({"reasoning_effort": level}), self.LOCAL, True)
+            self.assertNotIn("chat_template_kwargs", payload)
+        # Calls that pick a model (history compaction) follow their own level only.
+        self.assertNotIn("chat_template_kwargs", self._payload(None, self.LOCAL, True, model="m"))
+        payload = self._payload(None, self.LOCAL, True, model="m", reasoning_effort="low")
+        self.assertEqual(payload["chat_template_kwargs"], {"reasoning_effort": "low"})
+
+
 if __name__ == "__main__":
     unittest.main()

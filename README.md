@@ -432,6 +432,11 @@ The native provider also has per-session thinking levels (`low`, `medium`, `high
 set from the model menu or with `/thinking`. They are sent as OpenRouter's unified
 `reasoning.effort` (to OpenRouter endpoints only); a session starts at `high`
 (`agent.native_reasoning_effort`; blank sends nothing and leaves each model on its own default).
+On a local endpoint (Native Settings → Endpoint → Local server) the same level is
+sent as `chat_template_kwargs.reasoning_effort` instead, which llama-server passes
+to the chat template; OpenRouter never receives that field. The level sits near
+the start of the prompt, so changing it mid-thread makes the next request
+re-read the whole thread once.
 Whether a thinking model's own plain-text reasoning (`reasoning_content`,
 `reasoning` or `<think>` text) is sent back to it is `reasoning_replay.mode`:
 `off` (shown only, the default), `strip_always` (within one task, between tool
