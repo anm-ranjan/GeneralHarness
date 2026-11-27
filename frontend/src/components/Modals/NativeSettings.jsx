@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, isAbandonedRequest } from '../../api'
 import { useApp } from '../../context/AppContext'
 import ProviderLogo from '../ProviderLogo'
 import { modelFromInput, perMillion, rankEndpoints, visibleEndpoints, TOP_PROVIDERS } from '../../nativeModel'
 import { REPLAY_OPTIONS, replayHint, replayModeName } from '../../reasoningReplay'
 import { MAP_LEVELS, VARIABLE_RE, mapPreview } from '../../reasoningMap'
+import {
+  checkMessage, checkRequest, launchRequest, scriptsQuery, serverForm, serverSummary,
+} from '../../modelServer'
 
 // 400000 -> "400k", 1048576 -> "1.05M": context windows read in round units.
 function tokensLabel(count) {
@@ -277,6 +280,206 @@ function ReasoningMapSettings({ map, onSaved }) {
   )
 }
 
+// After Launch server, ask the endpoint until it answers (loading a model takes a while).
+const READY_POLL_MS = 3000
+const READY_TIMEOUT_MS = 5 * 60 * 1000
+
+function Message({ value }) {
+  if (!value) return null
+  return value.error
+    ? <p className="text-[12px] text-danger whitespace-pre-wrap" role="alert">{value.error}</p>
+    : <p className="text-[12px] text-ok whitespace-pre-wrap" role="status">{value.ok}</p>
+}
+
+// Local endpoint only: start and stop a llama-server on a Linux machine of the
+// network over SSH (backend/model_server.py).
+function ModelServerSettings({ initial, baseUrl, model, onEndpointCheck }) {
+  const [form, setForm] = useState(serverForm(initial))
+  const [server, setServer] = useState(initial)
+  const [scripts, setScripts] = useState(null)
+  const [busy, setBusy] = useState('')
+  const [msg, setMsg] = useState(null)
+  const waitRef = useRef(0)
+
+  useEffect(() => () => { waitRef.current += 1 }, [])
+  useEffect(() => {
+    // Ask the model server whether what was started from here still runs.
+    if (initial?.launched) api('GET', '/api/native/server').then(setServer).catch(() => {})
+  }, [])
+
+  const isDefault = !server?.script_saved && form.script === server?.default_script
+  const edit = patch => { setForm(prev => ({ ...prev, ...patch })); setMsg(null) }
+
+  async function waitUntilReady() {
+    const { body } = checkRequest(baseUrl, model)
+    if (!body) return
+    const token = ++waitRef.current
+    const started = Date.now()
+    while (waitRef.current === token && Date.now() - started < READY_TIMEOUT_MS) {
+      const seconds = Math.round((Date.now() - started) / 1000)
+      setMsg({ ok: `Started. Waiting for ${body.base_url} to answer… (${seconds} s)` })
+      try {
+        const result = await api('POST', '/api/native/settings/check', body)
+        if (waitRef.current !== token) return
+        if (result.ok || result.model_listed === false) {
+          setMsg({ ok: 'Server started.' })
+          onEndpointCheck(checkMessage(result))
+          return
+        }
+      } catch { /* keep waiting */ }
+      await new Promise(resolve => setTimeout(resolve, READY_POLL_MS))
+    }
+    if (waitRef.current === token) {
+      setMsg({ error: 'Started, but the endpoint did not answer within 5 minutes. See the log below or use Refresh.' })
+      api('GET', '/api/native/server').then(setServer).catch(() => {})
+    }
+  }
+
+  async function action(part, method, path, body, done) {
+    setBusy(part)
+    waitRef.current += 1
+    setMsg(null)
+    try {
+      const next = await api(method, path, body)
+      setServer(next)
+      if (next.error) setMsg({ error: next.error })
+      else if (done) setMsg({ ok: done })
+      return next
+    } catch (err) {
+      if (!isAbandonedRequest(err)) setMsg({ error: err.detail || err.message })
+      return null
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function launch() {
+    const { body, error } = launchRequest(form, baseUrl)
+    if (error) { setMsg({ error }); return }
+    if (await action('launch', 'POST', '/api/native/server/launch', body, 'Started.')) waitUntilReady()
+  }
+
+  async function findScripts() {
+    setBusy('scripts')
+    setMsg(null)
+    try {
+      const result = await api('GET', `/api/native/server/scripts?${scriptsQuery(form, baseUrl, server?.default_dir)}`)
+      setScripts(result)
+      if (result.scripts.length === 1) edit({ script: result.scripts[0] })
+    } catch (err) {
+      if (!isAbandonedRequest(err)) setMsg({ error: err.detail || err.message })
+    } finally {
+      setBusy('')
+    }
+  }
+
+  return (
+    <div className="space-y-3 border-t border-line pt-5">
+      <div>
+        <h4 className="text-[13px] font-bold text-text-bright">LAN model server</h4>
+        <p className="text-[12px] text-muted leading-snug">
+          Starts llama-server on a Linux machine of this network: the app runs the launch script there over SSH and can stop what it started.
+          The SSH host is the one in the base URL above unless you give a login.
+        </p>
+      </div>
+      <label className="block">
+        <span className="flex items-baseline gap-1.5 text-[12.5px] font-medium text-text-bright">
+          Launch script
+          {isDefault && <span className="text-[11px] font-normal text-accent">default</span>}
+        </span>
+        <span className="block text-[11.5px] text-muted mb-1 leading-snug">
+          The path of a <code className="font-mono">.sh</code> file on the model server that starts <code className="font-mono">llama-server</code> (scripts live in <code className="font-mono">{server?.default_dir || '/archive/models'}</code>).
+          It runs with bash from its folder; output goes to <code className="font-mono">~/.cache/myharness/llama-server.log</code> there.
+        </span>
+        <div className="flex items-center gap-2">
+          <input
+            value={form.script}
+            onChange={e => edit({ script: e.target.value })}
+            disabled={!!busy}
+            spellCheck={false}
+            placeholder={server?.default_script || '/archive/models/run-inkling.sh'}
+            className={`${inputClass} ${isDefault ? 'border-accent/60 bg-accent-soft' : ''}`}
+          />
+          <button
+            onClick={findScripts}
+            disabled={!!busy}
+            className="shrink-0 px-3 py-1 text-[12px] text-muted border border-line rounded hover:text-text-bright hover:border-line-hover transition-colors disabled:opacity-40"
+            title="List the .sh files in this script's folder on the model server"
+          >
+            {busy === 'scripts' ? 'Looking…' : 'Find scripts'}
+          </button>
+        </div>
+        {scripts && (
+          <span className="flex flex-wrap items-center gap-1.5 mt-1.5 text-[11.5px] text-muted">
+            {scripts.scripts.length ? `In ${scripts.folder} on ${scripts.login}:` : `No .sh files in ${scripts.folder} on ${scripts.login}.`}
+            {scripts.scripts.map(path => (
+              <button
+                key={path}
+                onClick={() => edit({ script: path })}
+                className={`font-mono px-1.5 py-0.5 border rounded hover:text-accent ${form.script === path ? 'text-accent border-accent/40' : 'text-text-default border-line'}`}
+              >
+                {path.slice(path.lastIndexOf('/') + 1)}
+              </button>
+            ))}
+          </span>
+        )}
+      </label>
+      <label className="block">
+        <span className="block text-[12.5px] font-medium text-text-bright">SSH login</span>
+        <span className="block text-[11.5px] text-muted mb-1 leading-snug">
+          user@host of the model server. Empty: {server?.default_login || 'your user name at the base URL host'}. Uses your SSH agent, ~/.ssh keys and ~/.ssh/config; it never asks for a password.
+        </span>
+        <input
+          value={form.login}
+          onChange={e => edit({ login: e.target.value })}
+          disabled={!!busy}
+          spellCheck={false}
+          placeholder={server?.default_login || 'user@host'}
+          className={`${inputClass} sm:w-80`}
+        />
+      </label>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          onClick={launch}
+          disabled={!!busy || !form.script.trim()}
+          className="px-3 py-1 text-[12px] font-medium text-accent border border-accent/30 rounded hover:bg-accent-soft transition-colors disabled:opacity-40"
+        >
+          {busy === 'launch' ? 'Starting…' : 'Launch server'}
+        </button>
+        {server?.launched && (
+          <>
+            <button
+              onClick={() => action('stop', 'POST', '/api/native/server/stop', undefined, 'Server stopped.')}
+              disabled={!!busy}
+              className="px-3 py-1 text-[12px] text-muted border border-line rounded hover:text-text-bright hover:border-line-hover transition-colors disabled:opacity-40"
+            >
+              {busy === 'stop' ? 'Stopping…' : 'Stop server'}
+            </button>
+            <button
+              onClick={() => action('status', 'GET', '/api/native/server')}
+              disabled={!!busy}
+              className="px-2 py-1 text-[12px] text-faint hover:text-text-bright transition-colors disabled:opacity-40"
+            >
+              {busy === 'status' ? 'Asking…' : 'Refresh'}
+            </button>
+          </>
+        )}
+        <span className="text-[12px] text-faint">{serverSummary(server)}</span>
+      </div>
+      {server?.processes?.length > 0 && (
+        <pre className="text-[11px] font-mono text-text-default bg-surface border border-line rounded p-2 overflow-x-auto whitespace-pre">{server.processes.join('\n')}</pre>
+      )}
+      <Message value={msg} />
+      {server?.log_tail && (
+        <details className="text-[12px] text-muted">
+          <summary className="cursor-pointer">Server log ({server.log})</summary>
+          <pre className="mt-1 max-h-48 overflow-auto text-[11px] font-mono text-text-default bg-surface border border-line rounded p-2 whitespace-pre-wrap break-all">{server.log_tail}</pre>
+        </details>
+      )}
+    </div>
+  )
+}
+
 const selectClass = 'w-full bg-surface border border-line rounded px-3 py-1.5 text-[12.5px] text-text-default outline-none focus:border-line-hover'
 const inputClass = 'w-full bg-surface border border-line rounded px-3 py-1.5 font-mono text-[12.5px] text-text-default placeholder:text-faint outline-none focus:border-line-hover'
 
@@ -292,6 +495,7 @@ export default function NativeSettings() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [showAll, setShowAll] = useState(false)
+  const [checked, setChecked] = useState(null)
 
   function adopt(payload) {
     setSettings(payload)
@@ -335,6 +539,22 @@ export default function NativeSettings() {
     }
   }
 
+  async function checkEndpoint() {
+    const { body, error: invalid } = checkRequest(baseUrl, model)
+    setError('')
+    setNotice('')
+    if (invalid) { setChecked({ error: invalid }); return }
+    setBusy(true)
+    setChecked(null)
+    try {
+      setChecked(checkMessage(await api('POST', '/api/native/settings/check', body)))
+    } catch (err) {
+      if (!isAbandonedRequest(err)) setChecked({ error: err.detail || 'Could not check the endpoint.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function reset() {
     setBusy(true)
     setError('')
@@ -372,7 +592,7 @@ export default function NativeSettings() {
           </span>
           <select
             value={endpoint}
-            onChange={e => { setEndpoint(e.target.value); setError(''); setNotice('') }}
+            onChange={e => { setEndpoint(e.target.value); setError(''); setNotice(''); setChecked(null) }}
             disabled={busy}
             className={selectClass}
           >
@@ -421,6 +641,16 @@ export default function NativeSettings() {
           >
             {busy ? 'Checking…' : 'Check and save'}
           </button>
+          {local && (
+            <button
+              onClick={checkEndpoint}
+              disabled={busy || !baseUrl.trim()}
+              className="px-3 py-1 text-[12px] text-muted border border-line rounded hover:text-text-bright hover:border-line-hover transition-colors disabled:opacity-40"
+              title="Ask the server for its models without saving anything"
+            >
+              Check endpoint
+            </button>
+          )}
           {settings?.source === 'settings' && (
             <button
               onClick={reset}
@@ -447,7 +677,18 @@ export default function NativeSettings() {
         )}
         {error && <p className="text-[12px] text-danger" role="alert">{error}</p>}
         {notice && <p className="text-[12px] text-ok" role="status">{notice}</p>}
+        {local && <Message value={checked} />}
       </div>
+
+      {local && settings?.server && (
+        <ModelServerSettings
+          key={state.activeHostId || 'local'}
+          initial={settings.server}
+          baseUrl={baseUrl}
+          model={model}
+          onEndpointCheck={setChecked}
+        />
+      )}
 
       {info && !local && (
         <div>

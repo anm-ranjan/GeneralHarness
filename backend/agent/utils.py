@@ -1049,6 +1049,10 @@ def is_protected_path(path: str) -> bool:
             return True
     if is_app_code_path(path):
         return True
+    # Native Settings (data/native_settings.json) holds the LAN model server's
+    # launch script, which the app runs on another machine.
+    if name == "native_settings.json" and _path_key(path) == _path_key(os.path.join(DATA_DIR, name)):
+        return True
     return any(_path_within(path, root) for root in PROTECTED_PATHS)
 
 

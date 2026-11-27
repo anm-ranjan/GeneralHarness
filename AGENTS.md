@@ -282,6 +282,25 @@ if the user should be asked about it.
   nothing), set from Native Settings → Reasoning map (local endpoint only;
   `/api/native/reasoning-map`, stored in `native_settings.json` only when it
   differs from the defaults).
+- **Check endpoint / LAN model server** (`backend/model_server.py`, Native
+  Settings, local endpoint only): "Check endpoint" (`POST
+  /api/native/settings/check`, `native_settings.probe_local`) asks
+  `<base_url>/models` without saving; HTTP 503 is reported as still loading.
+  The launcher takes only an absolute `.sh` path on the model machine (default
+  `model_server.DEFAULT_SCRIPT` in `DEFAULT_SCRIPT_DIR` `/archive/models`; never
+  a command line) and runs it as `bash -l <path>` from its folder over the
+  system `ssh` in batch mode (login `user@host[:port]`, empty = local user at
+  the base URL host; a loopback base URL on Linux/macOS runs it here) in its own
+  `setsid` session, output in `~/.cache/myharness/llama-server.log`. Launch is
+  refused while something already answers at the base URL. The launch
+  (`launched`: login, process group, boot id) is saved in
+  `native_settings.json` so Stop (SIGTERM, SIGKILL after 5 s, that process group
+  only) works after a restart; a record from before a reboot is dropped
+  without killing. "Find scripts" lists `*.sh` in the folder (skipping `._*`).
+  Routes: `GET /api/native/server`, `GET /api/native/server/scripts`, `POST
+  /api/native/server/launch`, `POST /api/native/server/stop`.
+  `data/native_settings.json` is a protected path (`utils.is_protected_path`),
+  so agent tools cannot change the saved launch script.
 - **Context accounting** (`backend/agent/history_tokens.py`): native context
   usage is the gateway's own `prompt_tokens` from the latest response (a private
   `_usage_anchor` on the last sent message) plus a local estimate of what

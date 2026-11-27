@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+import model_server
 import native_settings
 import openrouter_catalog
 import usage_ledger
@@ -146,3 +147,54 @@ def update_native_reasoning_map(req: NativeReasoningMapRequest):
 @router.delete("/api/native/reasoning-map")
 def reset_native_reasoning_map():
     return native_settings.clear_reasoning_map()
+
+
+class NativeEndpointCheckRequest(BaseModel):
+    base_url: str = Field(min_length=1, max_length=500)
+    model: str = Field(default="", max_length=500)
+
+
+@router.post("/api/native/settings/check")
+def check_native_endpoint(req: NativeEndpointCheckRequest):
+    """"Check endpoint": does a local server answer and list the model? Saves nothing."""
+    try:
+        return native_settings.probe_local(req.base_url, req.model)
+    except native_settings.EndpointError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class ModelServerLaunchRequest(BaseModel):
+    script: str = Field(min_length=1, max_length=1000)
+    login: str = Field(default="", max_length=300)
+    base_url: str = Field(default="", max_length=500)
+
+
+@router.get("/api/native/server")
+def get_model_server():
+    """Whether the LAN model server started from Settings still runs, with its log tail."""
+    return model_server.status()
+
+
+@router.get("/api/native/server/scripts")
+def list_model_server_scripts(folder: str = "", login: str = "", base_url: str = ""):
+    """The .sh files in a folder of the model server, for the launch-script picker."""
+    try:
+        return model_server.list_scripts({"folder": folder, "login": login, "base_url": base_url})
+    except model_server.ServerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/api/native/server/launch")
+def launch_model_server(req: ModelServerLaunchRequest):
+    try:
+        return model_server.launch(req.model_dump())
+    except model_server.ServerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/api/native/server/stop")
+def stop_model_server():
+    try:
+        return model_server.stop()
+    except model_server.ServerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

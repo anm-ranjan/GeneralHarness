@@ -428,6 +428,15 @@ model id its `/v1/models` lists (the `--alias` or GGUF name) and its base URL
 (for example `http://127.0.0.1:8081/v1`). It is checked against the server, needs
 no key (the stored key is never sent there), takes the context window from the
 server's `n_ctx`, and is kept per host in `data/native_settings.json`.
+"Check endpoint" asks the server for its models without saving. For a
+llama-server on a Linux machine of the network, **LAN model server** takes the
+path of a start script there (default `/archive/models/run-inkling.sh`; "Find
+scripts" lists the `.sh` files in its folder). "Launch server" runs it over SSH
+(`ssh` in batch mode, logging in as `user@host`, empty: your user name at the
+base URL host, with your SSH agent, `~/.ssh` keys and `~/.ssh/config`), logs to
+`~/.cache/myharness/llama-server.log` on that machine, and waits until the
+endpoint answers. "Stop server" stops what was started from here (its whole
+process group), also after an app restart.
 The native provider also has per-session thinking levels (`low`, `medium`, `high`),
 set from the model menu or with `/thinking`. They are sent as OpenRouter's unified
 `reasoning.effort` (to OpenRouter endpoints only); a session starts at `high`

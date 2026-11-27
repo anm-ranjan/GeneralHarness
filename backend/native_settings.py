@@ -17,6 +17,10 @@ The context window follows the model and providers in effect: on OpenRouter
 it comes from the providers' listed windows, on a local server from the n_ctx
 its /models lists, otherwise (or when the lookup fails) from
 memory.context_limit_tokens in agent_config.yaml.
+
+``server`` and ``launched`` belong to model_server.py (the LAN llama-server
+launcher); probe_local() is "Check endpoint" and saves nothing. The file is a
+protected path, so agent tools cannot change the saved launch script.
 """
 from __future__ import annotations
 
@@ -24,6 +28,7 @@ import json
 import os
 import re
 import threading
+import time
 from pathlib import Path
 
 from urllib.parse import urlparse
@@ -148,6 +153,8 @@ def local_models(base_url: str) -> dict:
     """GET <base_url>/models of a local server; raises EndpointError when unreachable."""
     try:
         response = requests.get(f"{base_url}/models", timeout=_LOCAL_TIMEOUT)
+        if response.status_code == 503:  # llama-server while it loads the model
+            raise EndpointError(f"{base_url} is up but not ready yet (HTTP 503, usually still loading the model)")
         response.raise_for_status()
         data = response.json()
     except (requests.RequestException, ValueError) as exc:
@@ -165,6 +172,33 @@ def check_local(model: str, base_url: str) -> dict:
         served = [str(e.get("id")) for e in models.get("data") or [] if isinstance(e, dict) and e.get("id")]
         raise EndpointError(f"{base_url} does not serve '{model}'. It serves: {', '.join(served) or 'nothing'}")
     return entry
+
+
+def probe_local(base_url, model: str = "") -> dict:
+    """"Check endpoint": does a local server answer, and does it list the model?
+    Saves nothing. Raises EndpointError only for a malformed base URL."""
+    base_url = normalize_base_url(base_url)
+    model = str(model or "").strip()
+    started = time.perf_counter()
+    try:
+        models = local_models(base_url)
+    except EndpointError as exc:
+        return {"ok": False, "base_url": base_url, "message": str(exc),
+                "ms": int((time.perf_counter() - started) * 1000)}
+    ms = int((time.perf_counter() - started) * 1000)
+    served = [str(e.get("id")) for e in models.get("data") or [] if isinstance(e, dict) and e.get("id")]
+    entry = _local_model_entry(models, model) if model else None
+    n_ctx = ((entry or {}).get("meta") or {}).get("n_ctx")
+    window = n_ctx if isinstance(n_ctx, int) and n_ctx > 0 else None
+    if not model:
+        message = f"Responding in {ms} ms."
+    elif entry is not None:
+        message = f"Responding in {ms} ms and serves {model}" + (f" ({window:,} tokens)." if window else ".")
+    else:
+        message = f"Responding in {ms} ms, but it does not serve '{model}'."
+    return {"ok": entry is not None or not model, "base_url": base_url, "message": message, "ms": ms,
+            "models": served[:50], "model_listed": (entry is not None) if model else None,
+            "context_window": window}
 
 
 class AgentSettingError(ValueError):
@@ -447,4 +481,10 @@ def current() -> dict:
         "context_detail": _context["detail"],
         "agent": current_agent(),
         "reasoning_map": current_reasoning_map(),
+        "server": _server_status(),
     }
+
+
+def _server_status() -> dict:
+    import model_server  # imports this module; loaded late to avoid a cycle
+    return model_server.saved_status()
