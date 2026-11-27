@@ -10,6 +10,7 @@ api:
   # to these providers and try list entries in order. Ignored for other hosts.
   # provider: together
   # provider: [together, deepinfra, fireworks]
+  provider: inceptron/fp8
 
 # Provider-side prompt caching for native requests (separate from tool caching).
 native_caching:
@@ -41,10 +42,10 @@ reasoning_replay:
     # inkling-*: strip_on_compact
 
 models:
-  default: qwen/qwen3-coder-next
-  read:    qwen/qwen3-coder-next
-  write:   qwen/qwen3-coder-next
-  summary: qwen/qwen3-coder-next
+  default: z-ai/glm-5.3-flash
+  read:    z-ai/glm-5.3-flash
+  write:   z-ai/glm-5.3-flash
+  summary: z-ai/glm-5.3-flash
 
 permissions:
   # always_ask: ask before file_write, file_replace, apply_patch, and shell_run

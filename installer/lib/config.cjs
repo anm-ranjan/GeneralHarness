@@ -370,7 +370,7 @@ function answersFromConfig(config) {
     },
     native: {
       baseUrl: str(get("api", "base_url"), "https://openrouter.ai/api/v1"),
-      model: str(get("models", "default"), "openai/gpt-5.2"),
+      model: str(get("models", "default"), "z-ai/glm-5.3-flash"),
       timeout: num(get("api", "timeout_seconds"), 120),
       maxIterations: num(get("agent", "max_iterations"), 20),
       reasoningReplay: replayMode(get("reasoning_replay", "mode")),

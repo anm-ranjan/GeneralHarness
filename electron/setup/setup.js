@@ -333,7 +333,7 @@ function collect() {
     native: {
       enabled: state.credentials.native || Boolean($("native-key").value.trim()),
       baseUrl: $("native-url").value.trim() || "https://openrouter.ai/api/v1",
-      model: $("native-model").value.trim() || "openai/gpt-5.2",
+      model: $("native-model").value.trim() || "z-ai/glm-5.3-flash",
       timeout: num("native-timeout", 120),
       maxIterations: num("native-iterations", 20),
       reasoningReplay: $("native-reasoning-replay").value,

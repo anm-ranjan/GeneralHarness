@@ -493,7 +493,7 @@ async function stepNativeProvider(credentials = {}) {
     ok('Native API credentials are configured for this host.');
   }
   const baseUrl = (await text('API base URL', 'https://openrouter.ai/api/v1')) || 'https://openrouter.ai/api/v1';
-  const model = (await text('Default model id', 'openai/gpt-5.2')) || 'openai/gpt-5.2';
+  const model = (await text('Default model id', 'z-ai/glm-5.3-flash')) || 'z-ai/glm-5.3-flash';
   const timeout = await integer('Native API timeout in seconds', 120, 10, 86400);
   const maxIterations = await integer('Native maximum agent iterations', 20, 1, 10000);
   return { enabled, baseUrl, apiKey: '', model, timeout, maxIterations };

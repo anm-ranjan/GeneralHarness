@@ -283,6 +283,8 @@ test('minimal run emits exactly the answered values', () => {
   assert.equal(readKey(out, 'api.enabled'), false);
   assert.equal(readKey(out, 'api.api_key'), '');
   assert.equal(readKey(out, 'models.default'), 'qwen/qwen3-coder-next');
+  // The template's OpenRouter provider default is kept.
+  assert.equal(readKey(out, 'api.provider'), 'inceptron/fp8');
   assert.equal(readKey(out, 'permissions.approval_mode'), 'always_ask');
   assert.deepEqual(readKey(out, 'permissions.allowed_paths'), ['/tmp/only-workspace']);
   assert.equal(readKey(out, 'server.host'), '127.0.0.1');
